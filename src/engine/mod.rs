@@ -264,6 +264,11 @@ fn apply_command(
             if playing {
                 st.seq.play(now);
             }
+            // A new set may carry different lane routes (port/channel). Flag the loop to
+            // re-plan ports and re-spawn the watcher so notes route to the correct device.
+            // Without this, SetBrowserLoad / RecoveryRecover would leave the old route plan
+            // active until restart.
+            st.route_dirty = true;
         }
         UiCommand::SetRoute { lane, route } => {
             // Release the lane's sounding notes BEFORE the route changes, so the
@@ -1771,5 +1776,29 @@ mod tests {
         );
         let bpm = tempo_event.unwrap();
         assert!((bpm - 120.0).abs() < 2.0, "expected bpm ≈ 120, got {bpm}");
+    }
+
+    /// SetSet must mark `route_dirty` so the engine loop re-plans ports / re-spawns the
+    /// watcher for the new set's routes (custom lane routes would mis-route without this).
+    #[test]
+    fn set_set_marks_route_dirty() {
+        let mut st = EngineState::new(default_set());
+        assert!(!st.route_dirty, "route_dirty should start false");
+
+        let other = default_set();
+        let mut events: Vec<EngineEvent> = Vec::new();
+        apply_command(
+            &mut st,
+            UiCommand::SetSet(other),
+            0,
+            &mut FakeLink::default(),
+            &mut RecordingSink::default(),
+            &mut events,
+        );
+
+        assert!(
+            st.route_dirty,
+            "SetSet must set route_dirty so the loop re-plans routes"
+        );
     }
 }
