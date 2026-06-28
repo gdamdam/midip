@@ -96,8 +96,9 @@ impl LinkClock for FakeLink {
         self.peers
     }
     fn request_start(&mut self, micros: u64, _quantum: f64) {
-        // The fake "starts" immediately; record the request so tests can assert it.
-        self.beat = 0.0;
+        // Record the request so tests can assert it. Do NOT reset beat — the
+        // real Link session handles bar-alignment externally; the fake keeps
+        // whatever beat was set so position tests remain independent.
         self.started_at = Some(micros);
     }
 }
