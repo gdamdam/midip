@@ -163,20 +163,29 @@ impl LinkClock for AbletonLink {
         self.link.commit_app_session_state(&self.session_state);
     }
 
-    /// Beat position at `micros` (the engine's monotonic clock).
-    /// We pass `micros as i64` directly to the Link `SessionState` so the
-    /// caller can use `link.clock_micros()` as its time source, which is the
-    /// expected usage pattern.
-    fn beat_at(&self, micros: u64, quantum: f64) -> f64 {
+    /// Beat position using Link's own session clock.
+    ///
+    /// Fix #2 — Link clock epoch: the engine passes a `micros` value from its
+    /// own `Instant`-based clock, which has a DIFFERENT epoch than Link's
+    /// internal session clock. Using the engine's micros directly would yield
+    /// a wrong (typically huge) beat number. We ignore `micros` and instead
+    /// call `self.link.clock_micros()` so the query is always in Link's own
+    /// timeline. `FakeLink` keeps using the passed `micros` (ignored there too,
+    /// but for determinism reasons) — the trait signature is unchanged.
+    fn beat_at(&self, _micros: u64, quantum: f64) -> f64 {
         let mut ss = SessionState::new();
         self.link.capture_app_session_state(&mut ss);
-        ss.beat_at_time(micros as i64, quantum)
+        // Use Link's own clock so epoch matches the session timeline.
+        let link_now = self.link.clock_micros();
+        ss.beat_at_time(link_now, quantum)
     }
 
-    fn phase_at(&self, micros: u64, quantum: f64) -> f64 {
+    fn phase_at(&self, _micros: u64, quantum: f64) -> f64 {
         let mut ss = SessionState::new();
         self.link.capture_app_session_state(&mut ss);
-        ss.phase_at_time(micros as i64, quantum)
+        // Use Link's own clock so epoch matches the session timeline.
+        let link_now = self.link.clock_micros();
+        ss.phase_at_time(link_now, quantum)
     }
 
     fn num_peers(&self) -> u64 {
