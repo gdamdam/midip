@@ -4,7 +4,7 @@ use anyhow::{anyhow, Context};
 use serde::{Deserialize, Serialize};
 
 use crate::devices::profiles::profile_by_id;
-use crate::pattern::model::{Lane, Pattern, Set};
+use crate::pattern::model::{Lane, LaneRoute, Pattern, Set};
 use crate::persist;
 
 /// The current on-disk schema version. Increment when the format changes.
@@ -19,6 +19,9 @@ struct LaneDto {
     solo: bool,
     transpose: i8,
     octave: i8,
+    /// Explicit routing override. Absent in old files → serde default `None`.
+    #[serde(default)]
+    route: Option<LaneRoute>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -42,6 +45,7 @@ impl From<&Lane> for LaneDto {
             solo: lane.solo,
             transpose: lane.transpose,
             octave: lane.octave,
+            route: lane.route.clone(),
         }
     }
 }
@@ -167,6 +171,7 @@ pub fn load_set_with_report(path: &Path) -> anyhow::Result<(Set, Vec<String>)> {
             solo: l.solo,
             transpose: l.transpose,
             octave: l.octave,
+            route: l.route,
         });
     }
     let mut set = Set {
@@ -727,6 +732,83 @@ mod tests {
             !notes.is_empty(),
             "repair notes must be non-empty for out-of-range bpm"
         );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // ── Task 5: LaneRoute serde + old-file backward compat ───────────────────
+
+    #[test]
+    fn lane_route_serde_roundtrips() {
+        use crate::pattern::model::{LaneRoute, PortRef};
+        let dir = unique_dir("t5-route-roundtrip");
+        let mut set = Set::default_set(default_profiles());
+        set.name = "route test".to_string();
+        // Assign an explicit route to lane 0
+        set.lanes[0].route = Some(LaneRoute {
+            port: PortRef {
+                stable_key: "MY-PORT".to_string(),
+                name: "My Port".to_string(),
+            },
+            channel: 3,
+            clock_out: false,
+        });
+
+        let path = save_set(&dir, &mut set).unwrap();
+        let loaded = load_set(&path).unwrap();
+        assert_eq!(
+            loaded.lanes[0].route, set.lanes[0].route,
+            "explicit route must survive save/load round-trip"
+        );
+        // Lanes without explicit route stay None
+        assert!(
+            loaded.lanes[1].route.is_none(),
+            "lane with no explicit route must load as None"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn old_set_json_without_route_loads_as_none() {
+        use crate::pattern::model::LaneKind;
+        let dir = unique_dir("t5-old-no-route");
+        let profile_id = default_profiles()[0].id;
+        // Construct a JSON that has NO "route" key in the lane (old format)
+        let old_json = format!(
+            r#"{{
+                "name": "legacy no-route",
+                "bpm": 120.0,
+                "swing": 0.5,
+                "lanes": [{{
+                    "profile_id": "{profile_id}",
+                    "pattern": {{
+                        "name": "beat",
+                        "desc": "",
+                        "length": 1,
+                        "data": {{"Drums": [[]]}}
+                    }},
+                    "mute": false,
+                    "solo": false,
+                    "transpose": 0,
+                    "octave": 0
+                }}]
+            }}"#
+        );
+        let path = dir.join("legacy.json");
+        std::fs::write(&path, &old_json).unwrap();
+
+        let loaded = load_set(&path).unwrap();
+        assert!(
+            loaded.lanes[0].route.is_none(),
+            "old JSON without route key must load with route=None"
+        );
+        // effective_route must still derive from profile
+        let r = loaded.lanes[0].effective_route();
+        assert_eq!(r.channel, default_profiles()[0].channel);
+        assert_eq!(r.port.stable_key, default_profiles()[0].port_match);
+        assert!(r.clock_out);
+        assert_eq!(loaded.lanes[0].pattern.kind(), LaneKind::Drums);
 
         std::fs::remove_dir_all(&dir).ok();
     }

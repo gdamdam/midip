@@ -60,6 +60,23 @@ pub enum LaneKind {
     Melodic,
 }
 
+/// A stable reference to a MIDI output port, by key and human-readable name.
+/// Matching at runtime uses `stable_key` first, falls back to `name`.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct PortRef {
+    pub stable_key: String,
+    pub name: String,
+}
+
+/// Per-lane MIDI routing: which port, channel, and whether to send MIDI Clock.
+/// `None` on `Lane::route` means "derive from profile" via `Lane::effective_route`.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct LaneRoute {
+    pub port: PortRef,
+    pub channel: u8,
+    pub clock_out: bool,
+}
+
 impl Pattern {
     /// An empty drum pattern named "init" with `length` empty steps.
     pub fn empty_drums(length: usize) -> Pattern {
@@ -110,6 +127,26 @@ pub struct Lane {
     pub solo: bool,
     pub transpose: i8, // semitones (melodic)
     pub octave: i8,    // octaves (melodic)
+    /// Explicit routing override. `None` = derive from profile via `effective_route()`.
+    pub route: Option<LaneRoute>,
+}
+
+impl Lane {
+    /// The MIDI route to use for this lane.
+    /// Returns the explicit `route` if set; otherwise derives from the device profile.
+    pub fn effective_route(&self) -> LaneRoute {
+        if let Some(r) = &self.route {
+            return r.clone();
+        }
+        LaneRoute {
+            port: PortRef {
+                stable_key: self.profile.port_match.to_string(),
+                name: self.profile.port_match.to_string(),
+            },
+            channel: self.profile.channel,
+            clock_out: true,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -146,6 +183,7 @@ impl Set {
                     solo: false,
                     transpose: 0,
                     octave: 0,
+                    route: None,
                 }
             })
             .collect();
@@ -298,6 +336,51 @@ mod tests {
             serde_json::from_str(r#"{"semi":0,"vel":1.0,"slide":false,"len":0.5}"#).unwrap();
         assert_eq!(note.prob, 1.0);
         assert_eq!(note.ratchet, 1);
+    }
+
+    // ── Task 5: LaneRoute / effective_route ──────────────────────────────────
+
+    #[test]
+    fn effective_route_defaults_from_profile_when_none() {
+        let profiles = crate::devices::profiles::default_profiles();
+        let lane = Lane {
+            profile: profiles[0], // T8_DRUMS: port_match="T-8", channel=9
+            pattern: Pattern::empty_drums(4),
+            mute: false,
+            solo: false,
+            transpose: 0,
+            octave: 0,
+            route: None,
+        };
+        let r = lane.effective_route();
+        assert_eq!(r.channel, profiles[0].channel);
+        assert_eq!(r.port.stable_key, profiles[0].port_match);
+        assert_eq!(r.port.name, profiles[0].port_match);
+        assert!(r.clock_out, "default clock_out must be true");
+    }
+
+    #[test]
+    fn explicit_route_overrides_profile() {
+        let profiles = crate::devices::profiles::default_profiles();
+        let explicit = LaneRoute {
+            port: PortRef {
+                stable_key: "X".to_string(),
+                name: "X".to_string(),
+            },
+            channel: 5,
+            clock_out: false,
+        };
+        let lane = Lane {
+            profile: profiles[0],
+            pattern: Pattern::empty_drums(4),
+            mute: false,
+            solo: false,
+            transpose: 0,
+            octave: 0,
+            route: Some(explicit.clone()),
+        };
+        let r = lane.effective_route();
+        assert_eq!(r, explicit);
     }
 
     #[test]

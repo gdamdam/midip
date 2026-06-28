@@ -83,6 +83,7 @@ fn three_lane_set() -> Set {
             solo: false,
             transpose: 0,
             octave: 0,
+            route: None,
         },
         Lane {
             profile: profs[1],
@@ -91,6 +92,7 @@ fn three_lane_set() -> Set {
             solo: false,
             transpose: 0,
             octave: 0,
+            route: None,
         },
         Lane {
             profile: profs[2],
@@ -99,6 +101,7 @@ fn three_lane_set() -> Set {
             solo: false,
             transpose: 0,
             octave: 0,
+            route: None,
         },
     ];
     Set {

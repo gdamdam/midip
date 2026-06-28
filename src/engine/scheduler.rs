@@ -865,6 +865,7 @@ mod sequencer_tests {
             solo: false,
             transpose: 0,
             octave: 0,
+            route: None,
         }
     }
 
@@ -883,6 +884,7 @@ mod sequencer_tests {
             solo: false,
             transpose: 0,
             octave: 0,
+            route: None,
         }
     }
 
@@ -1197,6 +1199,7 @@ mod sequencer_tests {
             solo: false,
             transpose: 0,
             octave: 0,
+            route: None,
         }
     }
 
@@ -1350,6 +1353,7 @@ mod sequencer_tests {
             solo: false,
             transpose: 0,
             octave: 0,
+            route: None,
         }
     }
 
@@ -1413,6 +1417,7 @@ mod sequencer_tests {
             solo: false,
             transpose: 0,
             octave: 0,
+            route: None,
         };
         let run_once = |seed: u64| -> Vec<u64> {
             let mut seq = Sequencer::new(set_with(vec![lane.clone()]));
@@ -1602,6 +1607,7 @@ mod sequencer_tests {
             solo: false,
             transpose: 0,
             octave: 0,
+            route: None,
         }
     }
 
@@ -1789,6 +1795,7 @@ mod sequencer_tests {
             solo: false,
             transpose: 0,
             octave: 0,
+            route: None,
         }
     }
 
@@ -1933,6 +1940,7 @@ mod sequencer_tests {
             solo: false,
             transpose: 0,
             octave: 0,
+            route: None,
         }
     }
 
