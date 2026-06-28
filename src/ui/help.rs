@@ -63,7 +63,17 @@ pub fn render_help(f: &mut Frame, area: Rect) {
         row("[ctrl+z] / [u]  undo   [ctrl+y]  redo"),
         row("[m]            mute lane   [S]  solo lane"),
         row("[l]            library   [o]  open set   [s]  save"),
+        row("[w]            route editor (port / channel / clock-out per lane)"),
         row("[?]            help   [q]  quit (twice while playing)"),
+        blank(),
+        // ── Route editor ──────────────────────────────────────────────
+        header("Route Editor  [w] to open"),
+        row("[↑ ↓]          select lane"),
+        row("[← →]          move between fields (Port / Channel / Clock-out)"),
+        row("[c / C]        cycle port forward / backward  (+ / − through available ports)"),
+        row("[[ / ]]        channel −1 / +1  (display: 1-based, range 1-16)"),
+        row("[z]            toggle MIDI clock output on/off for the lane"),
+        row("[esc]          close route editor"),
     ];
     // Clear behind the overlay so it sits on top of the editor.
     f.render_widget(Clear, area);
@@ -123,7 +133,7 @@ mod tests {
     #[test]
     fn help_lists_all_groups() {
         // Must be wide/tall enough to show all grouped content.
-        let whole = render_help_to_string(110, 40);
+        let whole = render_help_to_string(110, 55);
         // Transport group
         assert!(
             whole.contains("Transport"),
@@ -147,5 +157,27 @@ mod tests {
         assert!(whole.contains("Global"), "expected Global group header");
         assert!(whole.contains("undo"), "expected undo in Global group");
         assert!(whole.contains("open"), "expected open in Global group");
+        // Route editor group
+        assert!(
+            whole.contains("Route Editor"),
+            "expected Route Editor group header"
+        );
+        assert!(
+            whole.contains("clock"),
+            "expected clock hint in Route Editor group"
+        );
+    }
+
+    #[test]
+    fn help_shows_route_editor_key_and_controls() {
+        let whole = render_help_to_string(110, 55);
+        assert!(
+            whole.contains("[w]"),
+            "expected [w] route editor key; got: {whole:?}"
+        );
+        assert!(
+            whole.contains("route editor"),
+            "expected 'route editor' description; got: {whole:?}"
+        );
     }
 }

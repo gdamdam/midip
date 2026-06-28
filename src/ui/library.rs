@@ -357,6 +357,7 @@ mod tests {
                 }];
                 16
             ]),
+            id: crate::persist::Id::nil(),
         };
         drums.insert("techno".to_string(), vec![pat]);
         Library {
@@ -392,6 +393,7 @@ mod tests {
             desc: "8th-note root pulse".to_string(),
             length: 3,
             data: PatternData::Melodic(steps),
+            id: crate::persist::Id::nil(),
         };
         synth.insert("techno".to_string(), vec![pat]);
         Library {
@@ -553,6 +555,7 @@ mod tests {
                 }];
                 16
             ]),
+            id: crate::persist::Id::nil(),
         };
         drums.insert("techno".to_string(), vec![pat]);
         let library = Library {
@@ -587,6 +590,7 @@ mod tests {
                 desc: String::new(),
                 length: 16,
                 data: PD::Drums(vec![Vec::new(); 16]),
+                id: crate::persist::Id::nil(),
             },
         });
 

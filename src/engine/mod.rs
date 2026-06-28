@@ -8,10 +8,9 @@ pub mod clock;
 pub mod scheduler;
 pub mod transport;
 
-use crate::devices::profiles::DeviceProfile;
 use crate::link::LinkClock;
 use crate::midi::ports::{connect, list_output_ports, match_port, MidiSink, NullSink};
-use crate::pattern::model::{Lane, Pattern, Set};
+use crate::pattern::model::{Lane, LaneRoute, Pattern, Set};
 use clock::ClockGen;
 use scheduler::Sequencer;
 use transport::{TempoSource, Transport};
@@ -49,6 +48,14 @@ pub enum UiCommand {
         octave: i8,
     },
     SetSet(Set),
+    /// Change a single lane's MIDI route at runtime (`None` = derive from profile).
+    /// Releases the lane's sounding notes first, updates the route, then asks the real
+    /// engine loop (via `route_dirty`) to re-plan ports / re-spawn the watcher if the
+    /// distinct destination port set changed.
+    SetRoute {
+        lane: usize,
+        route: Option<LaneRoute>,
+    },
     /// All-notes-off / all-sound-off live recovery; does not stop transport.
     Panic,
     Quit,
@@ -108,6 +115,11 @@ struct EngineState {
     last_step: Option<usize>,
     bar: u32,
     tick_count: u64,
+    /// Set by `SetRoute` to ask the real `spawn_engine` loop to recompute the route
+    /// plan (channel→port / clock / lane→port) and, if the distinct port set changed,
+    /// re-spawn the device watcher. `apply_command` cannot touch the loop's
+    /// port_sinks/watcher, so it flags here and the loop reacts. Ignored headless.
+    route_dirty: bool,
 }
 
 impl EngineState {
@@ -125,6 +137,7 @@ impl EngineState {
             last_step: None,
             bar: 0,
             tick_count: 0,
+            route_dirty: false,
         }
     }
 }
@@ -251,6 +264,20 @@ fn apply_command(
             if playing {
                 st.seq.play(now);
             }
+            // A new set may carry different lane routes (port/channel). Flag the loop to
+            // re-plan ports and re-spawn the watcher so notes route to the correct device.
+            // Without this, SetBrowserLoad / RecoveryRecover would leave the old route plan
+            // active until restart.
+            st.route_dirty = true;
+        }
+        UiCommand::SetRoute { lane, route } => {
+            // Release the lane's sounding notes BEFORE the route changes, so the
+            // NoteOffs go out on the OLD channel (route_channel still reflects it).
+            st.seq.release_lanes(&[lane], now, sink);
+            st.seq.set_lane_route(lane, route);
+            // The real loop owns port_sinks + the watcher; flag it to re-plan. The
+            // headless driver ignores this (no ports).
+            st.route_dirty = true;
         }
         UiCommand::Panic => {
             // All-notes-off / all-sound-off on every lane channel. Does NOT touch the
@@ -409,32 +436,100 @@ struct PortSink {
     port_name: String,
 }
 
-/// Distinct-port plan derived purely from profiles — NO hardware access.
+/// Route-targeted output plan, derived purely from the lanes' `effective_route()` — NO
+/// hardware access. Replaces the old profile-only `map_lanes_to_ports`/broadcast model.
 ///
-/// Returns `(distinct, lane_to_port)` where `distinct[i]` is the i-th distinct `port_match`
-/// substring in first-seen order, and `lane_to_port[lane]` is the index into `distinct` for
-/// that lane. Lanes sharing a `port_match` map to the SAME port index — this is the dedup
-/// that guarantees one connection per physical port. Mirrors the old `unique_ports`.
-fn map_lanes_to_ports(profiles: &[DeviceProfile; 3]) -> (Vec<&'static str>, [usize; 3]) {
-    let mut distinct: Vec<&'static str> = Vec::new();
-    let mut lane_to_port = [0usize; 3];
-    for (lane, p) in profiles.iter().enumerate() {
-        let idx = match distinct.iter().position(|m| *m == p.port_match) {
+/// - `ports[i]` is the i-th distinct destination port (deduped by `PortRef.stable_key`,
+///   falling back to `name`), in first-seen lane order.
+/// - `channel_to_port[ch]` is the port index that MIDI channel `ch` (0..=15) routes to,
+///   or `None` if no lane uses that channel.
+/// - `clock_ports` lists the distinct port indices whose route has `clock_out` — MIDI
+///   Clock is sent once to each (deduped: a shared port appears once even with two lanes).
+/// - `lane_to_port[lane]` is the port index a lane delivers to (lanes sharing a port
+///   collapse to the SAME index — one connection per physical port, no double-clock).
+struct RoutePlan {
+    ports: Vec<crate::pattern::model::PortRef>,
+    channel_to_port: [Option<usize>; 16],
+    clock_ports: Vec<usize>,
+    lane_to_port: Vec<usize>,
+}
+
+/// The dedup key for a `PortRef`: prefer `stable_key`, fall back to `name` when empty.
+fn port_key(port: &crate::pattern::model::PortRef) -> &str {
+    if port.stable_key.is_empty() {
+        &port.name
+    } else {
+        &port.stable_key
+    }
+}
+
+/// Build the route plan from each lane's `effective_route()`. Pure; UNIT-TESTED.
+///
+/// Dedups ports by `port_key`; maps `channel_to_port[route.channel] = port_idx`; adds the
+/// port to `clock_ports` (deduped) when `route.clock_out`; records `lane_to_port[lane]`.
+fn build_route_plan(lanes: &[Lane]) -> RoutePlan {
+    let mut ports: Vec<crate::pattern::model::PortRef> = Vec::new();
+    let mut channel_to_port = [None; 16];
+    let mut clock_ports: Vec<usize> = Vec::new();
+    let mut lane_to_port: Vec<usize> = Vec::with_capacity(lanes.len());
+
+    for lane in lanes {
+        let route = lane.effective_route();
+        let key = port_key(&route.port).to_string();
+        let port_idx = match ports.iter().position(|p| port_key(p) == key) {
             Some(i) => i,
             None => {
-                distinct.push(p.port_match);
-                distinct.len() - 1
+                ports.push(route.port.clone());
+                ports.len() - 1
             }
         };
-        lane_to_port[lane] = idx;
+        lane_to_port.push(port_idx);
+        if let Some(slot) = channel_to_port.get_mut(route.channel as usize) {
+            *slot = Some(port_idx);
+        }
+        if route.clock_out && !clock_ports.contains(&port_idx) {
+            clock_ports.push(port_idx);
+        }
     }
-    (distinct, lane_to_port)
+
+    RoutePlan {
+        ports,
+        channel_to_port,
+        clock_ports,
+        lane_to_port,
+    }
+}
+
+/// Port indices a single message targets (route-targeted, NOT broadcast). Pure; UNIT-TESTED.
+///
+/// - `NoteOn`/`NoteOff`/`ControlChange{channel}` → `channel_to_port[channel]` as a 0-or-1
+///   element vec (empty when the channel is unmapped → the message drops silently).
+/// - `Clock` → every clock-out port.
+/// - Any other variant (Start/Stop/Continue) → empty.
+fn route_targets(
+    msg: &crate::midi::message::MidiMessage,
+    channel_to_port: &[Option<usize>; 16],
+    clock_ports: &[usize],
+) -> Vec<usize> {
+    use crate::midi::message::MidiMessage;
+    match msg {
+        MidiMessage::NoteOn { channel, .. }
+        | MidiMessage::NoteOff { channel, .. }
+        | MidiMessage::ControlChange { channel, .. } => channel_to_port
+            .get(*channel as usize)
+            .copied()
+            .flatten()
+            .into_iter()
+            .collect(),
+        MidiMessage::Clock => clock_ports.to_vec(),
+        _ => Vec::new(),
+    }
 }
 
 /// All lanes that resolve to the given port index, in lane order. Used to release the
 /// correct notes when a port connects/disconnects/fails (lanes sharing a port move
 /// together — the registry tracks per-lane ownership). Pure; UNIT-TESTED.
-fn lanes_of(lane_to_port: &[usize; 3], port_idx: usize) -> Vec<usize> {
+fn lanes_of(lane_to_port: &[usize], port_idx: usize) -> Vec<usize> {
     lane_to_port
         .iter()
         .enumerate()
@@ -495,7 +590,7 @@ const WATCHER_SCAN_MS: u64 = 250;
 /// structurally impossible. The first scan runs immediately (no initial sleep) so startup
 /// connects within ~one iteration.
 fn run_port_watcher(
-    port_matches: Vec<&'static str>,
+    port_matches: Vec<String>,
     updates: crossbeam_channel::Sender<PortUpdate>,
     requests: crossbeam_channel::Receiver<PortRequest>,
 ) {
@@ -532,8 +627,8 @@ fn run_port_watcher(
         for action in plan_port_actions(&present, &connected) {
             match action {
                 PortAction::Connect(idx) => {
-                    if let Ok(sink) = connect(port_matches[idx]) {
-                        let name = port_display_name(&available, port_matches[idx]);
+                    if let Ok(sink) = connect(&port_matches[idx]) {
+                        let name = port_display_name(&available, &port_matches[idx]);
                         if updates
                             .send(PortUpdate::Connected {
                                 idx,
@@ -572,7 +667,7 @@ fn port_display_name(available: &[String], port_match: &str) -> String {
 /// Emit a `DeviceStatus` for every lane, derived from its mapped port's current state.
 /// Both lanes sharing a port report the SAME connected/port — consistent with the single
 /// underlying connection.
-fn emit_lane_status(ports: &[PortSink], lane_to_port: &[usize; 3], events: &mut Vec<EngineEvent>) {
+fn emit_lane_status(ports: &[PortSink], lane_to_port: &[usize], events: &mut Vec<EngineEvent>) {
     for (lane, &port_idx) in lane_to_port.iter().enumerate() {
         let ps = &ports[port_idx];
         events.push(EngineEvent::DeviceStatus {
@@ -583,35 +678,63 @@ fn emit_lane_status(ports: &[PortSink], lane_to_port: &[usize; 3], events: &mut 
     }
 }
 
+/// Spawn a fresh device-watcher thread for the given distinct port keys, returning its
+/// join handle plus the channels the engine talks to it over. The watcher OWNS all port
+/// enumeration/connection; the engine only installs the ready-made sinks it streams back.
+/// Used at startup and again whenever a `SetRoute` changes the distinct port set (the old
+/// watcher is told to `Quit` and joined, a new one spawned for the new keys).
+fn spawn_watcher(
+    keys: Vec<String>,
+) -> (
+    std::thread::JoinHandle<()>,
+    crossbeam_channel::Receiver<PortUpdate>,
+    crossbeam_channel::Sender<PortRequest>,
+) {
+    let (update_tx, update_rx) = crossbeam_channel::unbounded::<PortUpdate>();
+    let (request_tx, request_rx) = crossbeam_channel::unbounded::<PortRequest>();
+    let handle = std::thread::spawn(move || run_port_watcher(keys, update_tx, request_rx));
+    (handle, update_rx, request_tx)
+}
+
 /// Spawn the real engine on its own thread, driven by a monotonic clock. NOT unit-tested
 /// (non-deterministic timing); shares `step_engine` with the headless driver.
 ///
-/// Takes `profiles` instead of pre-built sinks. All `PortSink`s start as `NullSink`/
-/// disconnected — a dedicated device-watcher thread (the ONLY caller of
-/// `list_output_ports()`/`connect()`) owns the entire connection lifecycle and hands the
-/// engine ready-made sinks over a channel. The timing loop never enumerates or connects:
-/// it only installs delivered sinks, releases notes on loss/route-change (P1), and detects
-/// health failures (asking the watcher to reconnect). One connection per distinct physical
-/// port (shared-port lanes collapse — no double-clock).
-pub fn spawn_engine(
-    set: Set,
-    mut link: Box<dyn LinkClock>,
-    profiles: [DeviceProfile; 3],
-) -> EngineHandle {
+/// All `PortSink`s start as `NullSink`/disconnected — a dedicated device-watcher thread
+/// (the ONLY caller of `list_output_ports()`/`connect()`) owns the entire connection
+/// lifecycle and hands the engine ready-made sinks over a channel. The timing loop never
+/// enumerates or connects: it only installs delivered sinks, releases notes on
+/// loss/route-change (P1), and detects health failures (asking the watcher to reconnect).
+/// One connection per distinct destination port (shared-port lanes collapse — no
+/// double-clock). The destination ports come from the set's per-lane routes
+/// (`Lane::effective_route`), so no device-profile array is needed — the plan is
+/// derived entirely from `set.lanes`.
+pub fn spawn_engine(set: Set, mut link: Box<dyn LinkClock>) -> EngineHandle {
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded::<UiCommand>();
     let (evt_tx, evt_rx) = crossbeam_channel::unbounded::<EngineEvent>();
 
     let join = std::thread::spawn(move || {
+        // Route plan from the initial set's lanes (route-driven, NOT profile-only). Built
+        // before `set` is moved into EngineState::new. The plan is RE-derived at runtime
+        // when a `SetRoute` flags `route_dirty` (see the re-plan block in the loop), so
+        // these are `mut`. The watcher connects each distinct port by its key/name — for
+        // profile-derived routes the key == the old `port_match`, so default behavior is
+        // unchanged.
+        let plan = build_route_plan(&set.lanes);
+        let mut channel_to_port = plan.channel_to_port;
+        let mut clock_ports = plan.clock_ports;
+        let mut lane_to_port = plan.lane_to_port;
+        // Distinct port keys currently realized in `port_sinks` (parallel by index). The
+        // re-plan compares the new key set against this to decide whether to re-spawn.
+        let mut port_keys: Vec<String> =
+            plan.ports.iter().map(|p| port_key(p).to_string()).collect();
+
         let mut st = EngineState::new(set);
         let mut pending: Vec<(u64, UiCommand)> = Vec::new();
         let mut events: Vec<EngineEvent> = Vec::new();
         let start = std::time::Instant::now();
 
-        // Distinct-port plan from profiles only (no hardware access on this thread).
-        let (distinct, lane_to_port) = map_lanes_to_ports(&profiles);
-
         // Every port starts disconnected (NullSink); the watcher will connect present ports.
-        let mut port_sinks: Vec<PortSink> = distinct
+        let mut port_sinks: Vec<PortSink> = port_keys
             .iter()
             .map(|_| PortSink {
                 sink: Box::new(NullSink),
@@ -621,12 +744,10 @@ pub fn spawn_engine(
             .collect();
 
         // Spawn the device-watcher: it owns enumeration/connection and streams PortUpdates.
-        let (update_tx, update_rx) = crossbeam_channel::unbounded::<PortUpdate>();
-        let (request_tx, request_rx) = crossbeam_channel::unbounded::<PortRequest>();
-        let watcher = {
-            let port_matches = distinct.clone();
-            std::thread::spawn(move || run_port_watcher(port_matches, update_tx, request_rx))
-        };
+        // Each distinct port is matched by its stable_key (falling back to name). Re-spawned
+        // on a SetRoute that changes the distinct port set, so these handles are `mut`.
+        let (watcher, mut update_rx, mut request_tx) = spawn_watcher(port_keys.clone());
+        let mut watcher = Some(watcher);
 
         // Emit initial (all-disconnected) per-lane DeviceStatus before the first tick;
         // the watcher's first scan (immediate, no initial sleep) flips present ports shortly.
@@ -634,7 +755,9 @@ pub fn spawn_engine(
         for ev in events.drain(..) {
             if evt_tx.send(ev).is_err() {
                 let _ = request_tx.send(PortRequest::Quit);
-                let _ = watcher.join();
+                if let Some(w) = watcher.take() {
+                    let _ = w.join();
+                }
                 return;
             }
         }
@@ -667,6 +790,8 @@ pub fn spawn_engine(
                             let lanes = lanes_of(&lane_to_port, idx);
                             let mut fanout = PortFanoutSink {
                                 ports: &mut port_sinks,
+                                channel_to_port: &channel_to_port,
+                                clock_ports: &clock_ports,
                             };
                             st.seq.release_lanes(&lanes, now, &mut fanout);
                         }
@@ -679,13 +804,14 @@ pub fn spawn_engine(
                     PortUpdate::Disconnected { idx } => {
                         // P1: release this port's sounding notes BEFORE swapping to NullSink,
                         // so the NoteOffs go out the still-live connection (not into the void).
-                        // `release_lanes` selects by lane, but the fanout broadcasts the NoteOffs to
-                        // every port (deliberate, harmless: devices ignore notes on channels they
-                        // never sounded — matches the pre-existing per-port fanout model; M4 routing
-                        // will make sends port-targeted).
+                        // `release_lanes` emits NoteOffs carrying each lane's channel, so the
+                        // route-targeted fanout delivers them to exactly the right port (T6 —
+                        // no longer broadcast to every port).
                         let lanes = lanes_of(&lane_to_port, idx);
                         let mut fanout = PortFanoutSink {
                             ports: &mut port_sinks,
+                            channel_to_port: &channel_to_port,
+                            clock_ports: &clock_ports,
                         };
                         st.seq.release_lanes(&lanes, now, &mut fanout);
                         let ps = &mut port_sinks[idx];
@@ -697,9 +823,13 @@ pub fn spawn_engine(
                 }
             }
 
-            // Fan out once per PORT (a shared port gets each message — incl. clock — ONCE).
+            // Route-targeted fan-out: each channel message reaches ONLY its mapped port;
+            // Clock reaches each clock-out port ONCE (a shared port appears once — no
+            // double-clock). NO enumerate/connect here — the watcher owns connections.
             let mut fanout = PortFanoutSink {
                 ports: &mut port_sinks,
+                channel_to_port: &channel_to_port,
+                clock_ports: &clock_ports,
             };
             let quit = step_engine(
                 &mut st,
@@ -724,6 +854,8 @@ pub fn spawn_engine(
                 {
                     let mut fanout = PortFanoutSink {
                         ports: &mut port_sinks,
+                        channel_to_port: &channel_to_port,
+                        clock_ports: &clock_ports,
                     };
                     st.seq.release_lanes(&lanes, now, &mut fanout);
                 }
@@ -744,8 +876,88 @@ pub fn spawn_engine(
             if flush_events!() || quit {
                 // Engine stopping (Quit or UI gone): shut the watcher down; don't leak it.
                 let _ = request_tx.send(PortRequest::Quit);
-                let _ = watcher.join();
+                if let Some(w) = watcher.take() {
+                    let _ = w.join();
+                }
                 return;
+            }
+
+            // --- Dynamic re-plan: a `SetRoute` set `route_dirty`. Recompute the route plan
+            //     from the current lanes. If the DISTINCT port KEY set changed, release all
+            //     sounding notes (the channel→port map is about to change underneath them),
+            //     then re-spawn the watcher for the new keys and rebuild `port_sinks` —
+            //     carrying over still-present connections by key, NullSink for new keys.
+            //     NO enumerate/connect here; the watcher owns that. ---
+            if st.route_dirty {
+                st.route_dirty = false;
+                let new_plan = build_route_plan(st.seq.lanes());
+                let new_keys: Vec<String> = new_plan
+                    .ports
+                    .iter()
+                    .map(|p| port_key(p).to_string())
+                    .collect();
+
+                // Always adopt the new channel/clock/lane maps (a route change can move a
+                // channel between existing ports without changing the key SET).
+                channel_to_port = new_plan.channel_to_port;
+                clock_ports = new_plan.clock_ports;
+                lane_to_port = new_plan.lane_to_port;
+
+                if new_keys != port_keys {
+                    // Release every sounding note before the topology shifts (the old
+                    // channel→port map still routes the NoteOffs to the live connections).
+                    {
+                        let mut fanout = PortFanoutSink {
+                            ports: &mut port_sinks,
+                            channel_to_port: &channel_to_port,
+                            clock_ports: &clock_ports,
+                        };
+                        st.seq.release_all(now, &mut fanout);
+                    }
+
+                    // Carry over still-present connections by key; NullSink for new keys.
+                    let mut new_sinks: Vec<PortSink> = Vec::with_capacity(new_keys.len());
+                    for key in &new_keys {
+                        if let Some(old_idx) = port_keys.iter().position(|k| k == key) {
+                            new_sinks.push(std::mem::replace(
+                                &mut port_sinks[old_idx],
+                                PortSink {
+                                    sink: Box::new(NullSink),
+                                    connected: false,
+                                    port_name: String::new(),
+                                },
+                            ));
+                        } else {
+                            new_sinks.push(PortSink {
+                                sink: Box::new(NullSink),
+                                connected: false,
+                                port_name: String::new(),
+                            });
+                        }
+                    }
+                    port_sinks = new_sinks;
+                    port_keys = new_keys;
+
+                    // Re-spawn the watcher with the new key set: signal old → Quit + join,
+                    // then spawn fresh. (NO enumerate/connect on this thread.)
+                    let _ = request_tx.send(PortRequest::Quit);
+                    if let Some(w) = watcher.take() {
+                        let _ = w.join();
+                    }
+                    let (w, urx, rtx) = spawn_watcher(port_keys.clone());
+                    watcher = Some(w);
+                    update_rx = urx;
+                    request_tx = rtx;
+
+                    emit_lane_status(&port_sinks, &lane_to_port, &mut events);
+                    if flush_events!() {
+                        let _ = request_tx.send(PortRequest::Quit);
+                        if let Some(w) = watcher.take() {
+                            let _ = w.join();
+                        }
+                        return;
+                    }
+                }
             }
 
             // ~1 ms loop; cheap and keeps timing tight enough for 24 PPQN.
@@ -760,15 +972,22 @@ pub fn spawn_engine(
     }
 }
 
-/// Fans a single `send` out to every distinct-port sink — ONCE per physical port.
+/// Route-targeted fan-out: delivers each `send` ONLY to the port(s) its `route_targets`
+/// resolves to — a channel message goes to that channel's single mapped port; MIDI Clock
+/// goes once to each clock-out port. Unmapped channels drop silently. (Replaces the old
+/// broadcast-to-every-port model.) One delivery per physical port preserves no-double-clock.
 struct PortFanoutSink<'a> {
     ports: &'a mut Vec<PortSink>,
+    channel_to_port: &'a [Option<usize>; 16],
+    clock_ports: &'a [usize],
 }
 
 impl<'a> MidiSink for PortFanoutSink<'a> {
     fn send(&mut self, msg: crate::midi::message::MidiMessage, at_micros: u64) {
-        for ps in self.ports.iter_mut() {
-            ps.sink.send(msg.clone(), at_micros);
+        for idx in route_targets(&msg, self.channel_to_port, self.clock_ports) {
+            if let Some(ps) = self.ports.get_mut(idx) {
+                ps.sink.send(msg.clone(), at_micros);
+            }
         }
     }
 }
@@ -789,40 +1008,163 @@ mod tests {
         Set::default_set(default_profiles())
     }
 
-    /// REGRESSION (no hardware): the two T-8 lanes (drums + bass) share the "T-8" port_match
+    /// REGRESSION (no hardware): the two T-8 lanes (drums + bass) share the "T-8" port
     /// and MUST collapse to a SINGLE distinct port — one connection, so the 24 PPQN MIDI
     /// clock reaches the device ONCE (two connections doubled the T-8's tempo on real hardware).
-    /// S-1 is a distinct port. Mirrors the old `unique_ports` dedup intent.
+    /// S-1 is a distinct port. Ported from `map_lanes_to_ports` to `build_route_plan` (T6).
     #[test]
     fn shared_port_lanes_collapse_to_one_connection() {
-        let profiles = default_profiles();
-        let (distinct, lane_to_port) = map_lanes_to_ports(&profiles);
+        let set = default_set();
+        let plan = build_route_plan(&set.lanes);
 
         // Default profiles are [T8_DRUMS("T-8"), T8_BASS("T-8"), S1("S-1")].
         // Exactly TWO distinct physical ports, NOT three — the two T-8 lanes dedupe.
-        assert_eq!(distinct.len(), 2, "two T-8 lanes must collapse to one port");
-        assert_eq!(distinct, vec!["T-8", "S-1"]);
+        assert_eq!(
+            plan.ports.len(),
+            2,
+            "two T-8 lanes must collapse to one port"
+        );
+        assert_eq!(plan.ports[0].stable_key, "T-8");
+        assert_eq!(plan.ports[1].stable_key, "S-1");
 
         // Both T-8 lanes map to the SAME port index (one shared connection).
         assert_eq!(
-            lane_to_port[0], lane_to_port[1],
+            plan.lane_to_port[0], plan.lane_to_port[1],
             "T-8 drums + bass share one port"
         );
         // S-1 maps to a different port.
-        assert_ne!(lane_to_port[2], lane_to_port[0], "S-1 is a distinct port");
+        assert_ne!(
+            plan.lane_to_port[2], plan.lane_to_port[0],
+            "S-1 is a distinct port"
+        );
 
-        // The number of distinct ports == number of connections the engine will open:
-        // one per unique port_match. With two T-8 lanes that is ONE T-8 connection.
-        let t8_connections = lane_to_port
+        // One connection per distinct port: two lanes target T-8 but only ONE T-8 port exists.
+        let t8_lanes = plan
+            .lane_to_port
             .iter()
-            .filter(|&&p| distinct[p] == "T-8")
+            .filter(|&&p| plan.ports[p].stable_key == "T-8")
             .count();
-        assert_eq!(t8_connections, 2, "two lanes target T-8");
-        let t8_distinct_ports = distinct.iter().filter(|m| **m == "T-8").count();
+        assert_eq!(t8_lanes, 2, "two lanes target T-8");
+        let t8_distinct_ports = plan.ports.iter().filter(|p| p.stable_key == "T-8").count();
         assert_eq!(
             t8_distinct_ports, 1,
             "but only ONE T-8 connection is opened"
         );
+    }
+
+    /// `build_route_plan` dedups shared ports and builds channel/clock maps (T6, pure).
+    #[test]
+    fn build_route_plan_dedups_shared_port() {
+        let set = default_set();
+        let plan = build_route_plan(&set.lanes);
+
+        // Exactly two distinct ports (T-8 + S-1).
+        assert_eq!(plan.ports.len(), 2);
+
+        // Drums (ch9) and bass (ch1) both live on the T-8 port → same port index.
+        let t8 = plan.channel_to_port[9];
+        let bass = plan.channel_to_port[1];
+        let s1 = plan.channel_to_port[0];
+        assert!(t8.is_some() && bass.is_some() && s1.is_some());
+        assert_eq!(t8, bass, "ch9 and ch1 both route to the T-8 port");
+        assert_ne!(t8, s1, "S-1 (ch0) is a different port from T-8");
+
+        // Both distinct ports send clock, each appearing exactly once (deduped).
+        assert_eq!(plan.clock_ports.len(), 2, "both ports clock-out once each");
+        let mut cp = plan.clock_ports.clone();
+        cp.sort_unstable();
+        cp.dedup();
+        assert_eq!(cp.len(), 2, "clock_ports has no duplicates");
+    }
+
+    /// A lane whose route has `clock_out=false` is excluded from `clock_ports` (T6, pure).
+    #[test]
+    fn build_route_plan_respects_clock_out_false() {
+        let mut set = default_set();
+        // Give the S-1 lane an explicit route with clock disabled.
+        let mut r = set.lanes[2].effective_route();
+        r.clock_out = false;
+        set.lanes[2].route = Some(r);
+
+        let plan = build_route_plan(&set.lanes);
+        let s1_idx = plan.channel_to_port[0].expect("S-1 mapped");
+        assert!(
+            !plan.clock_ports.contains(&s1_idx),
+            "clock_out=false excludes the port from clock_ports; got {:?}",
+            plan.clock_ports
+        );
+        // T-8 (drums/bass) still clocks out.
+        let t8_idx = plan.channel_to_port[9].expect("T-8 mapped");
+        assert!(plan.clock_ports.contains(&t8_idx), "T-8 still clocks out");
+    }
+
+    /// A channel message routes to ONLY its mapped port (T6, pure).
+    #[test]
+    fn route_targets_channel_msg_goes_to_its_port_only() {
+        let mut channel_to_port = [None; 16];
+        channel_to_port[9] = Some(0);
+        channel_to_port[0] = Some(1);
+        let clock_ports = vec![0, 1];
+
+        let note = crate::midi::MidiMessage::NoteOn {
+            channel: 9,
+            note: 36,
+            vel: 100,
+        };
+        assert_eq!(
+            route_targets(&note, &channel_to_port, &clock_ports),
+            vec![0]
+        );
+
+        let off = crate::midi::MidiMessage::NoteOff {
+            channel: 0,
+            note: 60,
+        };
+        assert_eq!(route_targets(&off, &channel_to_port, &clock_ports), vec![1]);
+
+        let cc = crate::midi::MidiMessage::ControlChange {
+            channel: 9,
+            controller: 123,
+            value: 0,
+        };
+        assert_eq!(route_targets(&cc, &channel_to_port, &clock_ports), vec![0]);
+    }
+
+    /// Clock goes to every clock-out port (T6, pure).
+    #[test]
+    fn route_targets_clock_goes_to_all_clock_ports() {
+        let channel_to_port = [None; 16];
+        let clock_ports = vec![0, 1];
+        assert_eq!(
+            route_targets(
+                &crate::midi::MidiMessage::Clock,
+                &channel_to_port,
+                &clock_ports
+            ),
+            vec![0, 1]
+        );
+        // No clock ports → nothing.
+        assert!(route_targets(&crate::midi::MidiMessage::Clock, &channel_to_port, &[]).is_empty());
+    }
+
+    /// An unmapped channel (no port) drops silently — empty targets (T6, pure).
+    #[test]
+    fn route_targets_unmapped_channel_is_dropped() {
+        let channel_to_port = [None; 16]; // nothing mapped
+        let clock_ports = vec![0];
+        let note = crate::midi::MidiMessage::NoteOn {
+            channel: 5,
+            note: 60,
+            vel: 64,
+        };
+        assert!(route_targets(&note, &channel_to_port, &clock_ports).is_empty());
+        // Non-channel, non-clock realtime (Start) → empty regardless.
+        assert!(route_targets(
+            &crate::midi::MidiMessage::Start,
+            &channel_to_port,
+            &clock_ports
+        )
+        .is_empty());
     }
 
     /// effective_bpm: when link is disabled, Transport::effective_bpm(None) == manual_bpm.
@@ -878,6 +1220,7 @@ mod tests {
             desc: String::new(),
             length: 16,
             data: PatternData::Melodic(steps),
+            id: crate::persist::Id::nil(),
         };
         set.bpm = 120.0; // step_dur = 125_000 µs
 
@@ -1068,6 +1411,7 @@ mod tests {
             desc: String::new(),
             length: 16,
             data: PatternData::Drums(steps),
+            id: crate::persist::Id::nil(),
         };
 
         let mut link = FakeLink::new(); // link disabled
@@ -1114,12 +1458,20 @@ mod tests {
     /// [T-8 drums, T-8 bass, S-1]: the T-8 port owns lanes [0,1]; the S-1 port owns [2].
     #[test]
     fn lanes_of_port_groups_shared_port_lanes() {
-        let profiles = default_profiles();
-        let (distinct, lane_to_port) = map_lanes_to_ports(&profiles);
-        let t8_idx = distinct.iter().position(|m| *m == "T-8").unwrap();
-        let s1_idx = distinct.iter().position(|m| *m == "S-1").unwrap();
-        assert_eq!(lanes_of(&lane_to_port, t8_idx), vec![0, 1]);
-        assert_eq!(lanes_of(&lane_to_port, s1_idx), vec![2]);
+        let set = default_set();
+        let plan = build_route_plan(&set.lanes);
+        let t8_idx = plan
+            .ports
+            .iter()
+            .position(|p| p.stable_key == "T-8")
+            .unwrap();
+        let s1_idx = plan
+            .ports
+            .iter()
+            .position(|p| p.stable_key == "S-1")
+            .unwrap();
+        assert_eq!(lanes_of(&plan.lane_to_port, t8_idx), vec![0, 1]);
+        assert_eq!(lanes_of(&plan.lane_to_port, s1_idx), vec![2]);
     }
 
     /// Link-gated start fires at the boundary: armed at beat=-1, boundary crossed at beat=0.
@@ -1177,6 +1529,224 @@ mod tests {
         assert!(!st.armed, "armed must be cleared after boundary");
     }
 
+    // --- Task 7: route channel emission + SetRoute -------------------------
+
+    use crate::pattern::model::{LaneRoute, MelodicNote, Pattern, PatternData, PortRef};
+
+    /// A melodic note on step 0 of the given lane (full-bar length so it stays sounding).
+    fn put_long_note(set: &mut Set, lane: usize, semi: i8) {
+        let mut steps = vec![None; 16];
+        steps[0] = Some(MelodicNote {
+            semi,
+            vel: 1.0,
+            slide: false,
+            len: 4.0,
+            prob: 1.0,
+            ratchet: 1,
+        });
+        set.lanes[lane].pattern = Pattern {
+            name: "t".into(),
+            desc: String::new(),
+            length: 16,
+            data: PatternData::Melodic(steps),
+            id: crate::persist::Id::nil(),
+        };
+    }
+
+    fn route_on(channel: u8) -> LaneRoute {
+        LaneRoute {
+            port: PortRef {
+                stable_key: "S-1".to_string(),
+                name: "S-1".to_string(),
+            },
+            channel,
+            clock_out: true,
+        }
+    }
+
+    /// Important fix: a melodic lane with a route channel override emits its NoteOn on the
+    /// ROUTE channel, not the profile channel.
+    #[test]
+    fn note_emits_on_route_channel_when_overridden() {
+        use crate::midi::MidiMessage;
+        let mut set = default_set();
+        set.bpm = 120.0;
+        let profile_ch = set.lanes[2].profile.channel; // S-1 → 0
+        put_long_note(&mut set, 2, 0);
+        set.lanes[2].route = Some(route_on(5));
+
+        let mut link = FakeLink::new();
+        let mut sink = RecordingSink::new();
+        let _ = run_engine_headless(
+            set,
+            &mut link,
+            &mut sink,
+            vec![(0, UiCommand::Play)],
+            5_000,
+            500,
+        );
+
+        assert!(
+            sink.events
+                .iter()
+                .any(|(_, m)| matches!(m, MidiMessage::NoteOn { channel: 5, .. })),
+            "NoteOn must fire on the route channel 5; got {:?}",
+            sink.events
+        );
+        assert!(
+            !sink.events.iter().any(
+                |(_, m)| matches!(m, MidiMessage::NoteOn { channel, .. } if *channel == profile_ch)
+            ),
+            "no NoteOn should fire on the profile channel {profile_ch}"
+        );
+    }
+
+    /// SetRoute changes a lane's channel mid-play: subsequent NoteOns use the NEW channel,
+    /// and a NoteOff for the old channel is emitted at the switch (release before change).
+    #[test]
+    fn set_route_command_updates_lane_and_emits_on_new_channel() {
+        use crate::midi::MidiMessage;
+        let mut set = default_set();
+        set.bpm = 120.0; // step_dur 125_000 µs
+                         // Step 0: a long note (still sounding at the switch). Step 4: another
+                         // note that lands AFTER the switch (so a post-switch NoteOn exists).
+        let mut steps = vec![None; 16];
+        steps[0] = Some(MelodicNote {
+            semi: 0,
+            vel: 1.0,
+            slide: false,
+            len: 4.0,
+            prob: 1.0,
+            ratchet: 1,
+        });
+        steps[4] = Some(MelodicNote {
+            semi: 2,
+            vel: 1.0,
+            slide: false,
+            len: 1.0,
+            prob: 1.0,
+            ratchet: 1,
+        });
+        set.lanes[2].pattern = Pattern {
+            name: "t".into(),
+            desc: String::new(),
+            length: 16,
+            data: PatternData::Melodic(steps),
+            id: crate::persist::Id::nil(),
+        };
+        set.lanes[2].route = Some(route_on(3)); // start on channel 3
+
+        let mut link = FakeLink::new();
+        let mut sink = RecordingSink::new();
+        let switch_at = 50_000u64; // inside step 0's long note (still sounding) → release on switch
+        let _ = run_engine_headless(
+            set,
+            &mut link,
+            &mut sink,
+            vec![
+                (0, UiCommand::Play),
+                (
+                    switch_at,
+                    UiCommand::SetRoute {
+                        lane: 2,
+                        route: Some(route_on(8)),
+                    },
+                ),
+            ],
+            600_000,
+            500,
+        );
+
+        // A NoteOff for the old channel 3 is emitted at/after the switch (release first).
+        assert!(
+            sink.events
+                .iter()
+                .any(|(at, m)| *at >= switch_at
+                    && matches!(m, MidiMessage::NoteOff { channel: 3, .. })),
+            "SetRoute must release the old-channel note at the switch; got {:?}",
+            sink.events
+        );
+        // After the switch, NoteOns appear on the NEW channel 8.
+        assert!(
+            sink.events
+                .iter()
+                .any(|(at, m)| *at > switch_at
+                    && matches!(m, MidiMessage::NoteOn { channel: 8, .. })),
+            "after SetRoute, NoteOns must use the new channel 8; got {:?}",
+            sink.events
+        );
+        // And no NoteOn appears on channel 3 after the switch.
+        assert!(
+            !sink
+                .events
+                .iter()
+                .any(|(at, m)| *at > switch_at
+                    && matches!(m, MidiMessage::NoteOn { channel: 3, .. })),
+            "no NoteOn should fire on the old channel 3 after the switch"
+        );
+    }
+
+    /// SetRoute on a lane with a SOUNDING note emits that note's NoteOff at the switch.
+    #[test]
+    fn set_route_releases_lane_before_switch() {
+        use crate::midi::MidiMessage;
+        let mut set = default_set();
+        set.bpm = 120.0;
+        put_long_note(&mut set, 2, 0); // long note on lane 2, sounding well past the switch
+        set.lanes[2].route = Some(route_on(4));
+
+        let mut link = FakeLink::new();
+        let mut sink = RecordingSink::new();
+        let switch_at = 50_000u64; // note (len 4 steps = 500_000) is still sounding here
+        let _ = run_engine_headless(
+            set,
+            &mut link,
+            &mut sink,
+            vec![
+                (0, UiCommand::Play),
+                (
+                    switch_at,
+                    UiCommand::SetRoute {
+                        lane: 2,
+                        route: Some(route_on(9)),
+                    },
+                ),
+            ],
+            100_000,
+            500,
+        );
+
+        // NoteOff for the sounding note on the OLD channel 4, at the switch time.
+        assert!(
+            sink.events
+                .iter()
+                .any(|(at, m)| *at >= switch_at
+                    && matches!(m, MidiMessage::NoteOff { channel: 4, .. })),
+            "SetRoute must release the lane's sounding note (NoteOff ch4) at the switch; got {:?}",
+            sink.events
+        );
+    }
+
+    /// Pure: build_route_plan reflects a route change — a new channel maps to a port.
+    #[test]
+    fn build_route_plan_reflects_route_change() {
+        let mut set = default_set();
+        // Initially the S-1 lane (idx 2) is on channel 0.
+        let plan0 = build_route_plan(&set.lanes);
+        assert!(plan0.channel_to_port[0].is_some(), "ch0 mapped initially");
+        assert!(plan0.channel_to_port[6].is_none(), "ch6 unmapped initially");
+
+        // Override the S-1 lane to channel 6 on the same port.
+        set.lanes[2].route = Some(route_on(6));
+        let plan1 = build_route_plan(&set.lanes);
+        assert!(
+            plan1.channel_to_port[6].is_some(),
+            "ch6 must be mapped after the route change"
+        );
+        // Same physical port (S-1) → same number of distinct ports.
+        assert_eq!(plan0.ports.len(), plan1.ports.len());
+    }
+
     /// Tap tempo: two taps 500 ms apart → engine emits EngineEvent::Tempo{bpm≈120}.
     #[test]
     fn tap_tempo_emits_tempo_event() {
@@ -1206,5 +1776,29 @@ mod tests {
         );
         let bpm = tempo_event.unwrap();
         assert!((bpm - 120.0).abs() < 2.0, "expected bpm ≈ 120, got {bpm}");
+    }
+
+    /// SetSet must mark `route_dirty` so the engine loop re-plans ports / re-spawns the
+    /// watcher for the new set's routes (custom lane routes would mis-route without this).
+    #[test]
+    fn set_set_marks_route_dirty() {
+        let mut st = EngineState::new(default_set());
+        assert!(!st.route_dirty, "route_dirty should start false");
+
+        let other = default_set();
+        let mut events: Vec<EngineEvent> = Vec::new();
+        apply_command(
+            &mut st,
+            UiCommand::SetSet(other),
+            0,
+            &mut FakeLink::default(),
+            &mut RecordingSink::default(),
+            &mut events,
+        );
+
+        assert!(
+            st.route_dirty,
+            "SetSet must set route_dirty so the loop re-plans routes"
+        );
     }
 }

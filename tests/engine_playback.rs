@@ -30,6 +30,7 @@ fn three_lane_set() -> Set {
         desc: String::new(),
         length: 16,
         data: PatternData::Drums(drum_steps),
+        id: midip::persist::Id::nil(),
     };
 
     let mut bass_steps: Vec<MelodicStep> = vec![None; 16];
@@ -54,6 +55,7 @@ fn three_lane_set() -> Set {
         desc: String::new(),
         length: 16,
         data: PatternData::Melodic(bass_steps),
+        id: midip::persist::Id::nil(),
     };
 
     let mut synth_steps: Vec<MelodicStep> = vec![None; 16];
@@ -70,6 +72,7 @@ fn three_lane_set() -> Set {
         desc: String::new(),
         length: 16,
         data: PatternData::Melodic(synth_steps),
+        id: midip::persist::Id::nil(),
     };
 
     let lanes = vec![
@@ -80,6 +83,7 @@ fn three_lane_set() -> Set {
             solo: false,
             transpose: 0,
             octave: 0,
+            route: None,
         },
         Lane {
             profile: profs[1],
@@ -88,6 +92,7 @@ fn three_lane_set() -> Set {
             solo: false,
             transpose: 0,
             octave: 0,
+            route: None,
         },
         Lane {
             profile: profs[2],
@@ -96,6 +101,7 @@ fn three_lane_set() -> Set {
             solo: false,
             transpose: 0,
             octave: 0,
+            route: None,
         },
     ];
     Set {
@@ -103,6 +109,7 @@ fn three_lane_set() -> Set {
         bpm: 120.0,
         swing: 0.5,
         lanes,
+        id: midip::persist::Id::nil(),
     }
 }
 

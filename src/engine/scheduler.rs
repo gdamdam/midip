@@ -210,10 +210,11 @@ impl Sequencer {
                 at_micros,
             );
         }
-        // CC123 + CC120 per distinct channel in the set.
+        // CC123 + CC120 per distinct ROUTE channel in the set (the channel notes are
+        // actually emitted on), so the sweep clears the same channels that sound.
         let mut sent: Vec<u8> = Vec::new();
         for lane in &self.set.lanes {
-            let ch = lane.profile.channel;
+            let ch = lane.route_channel();
             if sent.contains(&ch) {
                 continue;
             }
@@ -364,9 +365,24 @@ impl Sequencer {
         }
     }
 
+    /// Replace a lane's MIDI route (`None` = derive from profile). No-op when out of
+    /// bounds. The caller is responsible for releasing the lane's sounding notes BEFORE
+    /// the channel changes (so NoteOffs go out on the old channel).
+    pub fn set_lane_route(&mut self, lane: usize, route: Option<crate::pattern::model::LaneRoute>) {
+        if let Some(l) = self.set.lanes.get_mut(lane) {
+            l.route = route;
+        }
+    }
+
     /// Read accessor for a lane by index (the Sequencer owns `set: Set`).
     pub fn lane(&self, idx: usize) -> Option<&Lane> {
         self.set.lanes.get(idx)
+    }
+
+    /// Read accessor for all lanes (the Sequencer owns `set: Set`). Used by the real
+    /// engine loop to recompute the route plan after a `SetRoute`.
+    pub fn lanes(&self) -> &[Lane] {
+        &self.set.lanes
     }
 
     /// Drive the internal clock to `now_micros`, emitting due events to `sink`.
@@ -510,7 +526,9 @@ impl Sequencer {
         let lane = &self.set.lanes[lane_idx];
         let count = lane.pattern.step_count().max(1);
         let local = step % count;
-        let channel = lane.profile.channel;
+        // Emit on the route channel (route override else profile) so the channel the
+        // scheduler emits on matches the channel the route plan keys on (no mis-route).
+        let channel = lane.route_channel();
         let gate_fraction = lane.profile.drum_gate_fraction;
         let hits = match &lane.pattern.data {
             PatternData::Drums(steps) => steps.get(local).cloned().unwrap_or_default(),
@@ -560,7 +578,9 @@ impl Sequencer {
         let lane = &self.set.lanes[lane_idx];
         let count = lane.pattern.step_count().max(1);
         let local = step % count;
-        let channel = lane.profile.channel;
+        // Emit on the route channel (route override else profile) so emission and the
+        // route plan agree on the channel (no mis-route / dropped notes).
+        let channel = lane.route_channel();
         let root = lane.profile.root_note;
         let transpose = lane.transpose;
         let octave = lane.octave;
@@ -859,11 +879,13 @@ mod sequencer_tests {
                 desc: String::new(),
                 length: 16,
                 data: PatternData::Drums(steps),
+                id: crate::persist::Id::nil(),
             },
             mute: false,
             solo: false,
             transpose: 0,
             octave: 0,
+            route: None,
         }
     }
 
@@ -876,11 +898,13 @@ mod sequencer_tests {
                 desc: String::new(),
                 length: len,
                 data: PatternData::Melodic(notes),
+                id: crate::persist::Id::nil(),
             },
             mute: false,
             solo: false,
             transpose: 0,
             octave: 0,
+            route: None,
         }
     }
 
@@ -890,6 +914,7 @@ mod sequencer_tests {
             bpm: 120.0,
             swing: 0.5,
             lanes,
+            id: crate::persist::Id::nil(),
         }
     }
 
@@ -1188,11 +1213,13 @@ mod sequencer_tests {
                 desc: String::new(),
                 length,
                 data: PatternData::Drums(steps),
+                id: crate::persist::Id::nil(),
             },
             mute: false,
             solo: false,
             transpose: 0,
             octave: 0,
+            route: None,
         }
     }
 
@@ -1322,6 +1349,80 @@ mod sequencer_tests {
         assert!(seq.is_playing(), "panic must leave transport playing");
     }
 
+    // --- route channel: release_all sweeps the emitted channel ----------
+
+    /// release_all/panic must send CC123/120 on the ROUTE channel (the channel notes
+    /// are emitted on), not the profile channel, when a lane has a route override.
+    #[test]
+    fn release_all_sweeps_route_channels() {
+        use crate::pattern::model::{LaneRoute, PortRef};
+        // Bass lane (profile channel 1) with a route forcing channel 7.
+        let mut lane = melodic_lane(
+            vec![Some(MelodicNote {
+                semi: 0,
+                vel: 1.0,
+                slide: false,
+                len: 4.0,
+                prob: 1.0,
+                ratchet: 1,
+            })],
+            true,
+        );
+        let profile_ch = lane.profile.channel; // 1
+        lane.route = Some(LaneRoute {
+            port: PortRef {
+                stable_key: "X".to_string(),
+                name: "X".to_string(),
+            },
+            channel: 7,
+            clock_out: true,
+        });
+        let mut seq = Sequencer::new(set_with(vec![lane]));
+        let mut sink = RecordingSink::new();
+        seq.play(0);
+        seq.tick(0, &mut sink); // NoteOn fires on channel 7
+
+        // The note must have sounded on the route channel, not the profile channel.
+        assert!(
+            sink.events
+                .iter()
+                .any(|(_, m)| matches!(m, MidiMessage::NoteOn { channel: 7, .. })),
+            "NoteOn must be on the route channel 7"
+        );
+
+        seq.panic(10_000, &mut sink);
+
+        // CC123 + CC120 on the ROUTE channel 7.
+        assert!(
+            sink.events.iter().any(|(_, m)| *m
+                == MidiMessage::ControlChange {
+                    channel: 7,
+                    controller: 123,
+                    value: 0,
+                }),
+            "expected CC123 on the route channel 7"
+        );
+        assert!(
+            sink.events.iter().any(|(_, m)| *m
+                == MidiMessage::ControlChange {
+                    channel: 7,
+                    controller: 120,
+                    value: 0,
+                }),
+            "expected CC120 on the route channel 7"
+        );
+        // And NOT on the (now unused) profile channel.
+        assert!(
+            !sink.events.iter().any(|(_, m)| *m
+                == MidiMessage::ControlChange {
+                    channel: profile_ch,
+                    controller: 123,
+                    value: 0,
+                }),
+            "must not sweep the profile channel {profile_ch} when a route overrides it"
+        );
+    }
+
     // --- (f) probability -------------------------------------------------
 
     /// A single-step drum lane with the kick hit on step 0 only, prob `p`, ratchet `r`.
@@ -1340,11 +1441,13 @@ mod sequencer_tests {
                 desc: String::new(),
                 length: 16,
                 data: PatternData::Drums(steps),
+                id: crate::persist::Id::nil(),
             },
             mute: false,
             solo: false,
             transpose: 0,
             octave: 0,
+            route: None,
         }
     }
 
@@ -1402,11 +1505,13 @@ mod sequencer_tests {
                 desc: String::new(),
                 length: 16,
                 data: PatternData::Drums(steps),
+                id: crate::persist::Id::nil(),
             },
             mute: false,
             solo: false,
             transpose: 0,
             octave: 0,
+            route: None,
         };
         let run_once = |seed: u64| -> Vec<u64> {
             let mut seq = Sequencer::new(set_with(vec![lane.clone()]));
@@ -1590,11 +1695,13 @@ mod sequencer_tests {
                 desc: String::new(),
                 length,
                 data: PatternData::Drums(steps),
+                id: crate::persist::Id::nil(),
             },
             mute: false,
             solo: false,
             transpose: 0,
             octave: 0,
+            route: None,
         }
     }
 
@@ -1776,11 +1883,13 @@ mod sequencer_tests {
                 desc: String::new(),
                 length: 4,
                 data: PatternData::Melodic(notes),
+                id: crate::persist::Id::nil(),
             },
             mute: false,
             solo: false,
             transpose: 0,
             octave: 0,
+            route: None,
         }
     }
 
@@ -1919,11 +2028,13 @@ mod sequencer_tests {
                 desc: String::new(),
                 length: 4,
                 data: PatternData::Drums(steps),
+                id: crate::persist::Id::nil(),
             },
             mute: false,
             solo: false,
             transpose: 0,
             octave: 0,
+            route: None,
         }
     }
 

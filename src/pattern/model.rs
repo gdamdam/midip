@@ -1,4 +1,5 @@
 use crate::devices::profiles::DeviceProfile;
+use crate::persist;
 
 /// serde defaults for the per-step fields absent from the vendored library data.
 fn default_prob() -> f32 {
@@ -49,12 +50,31 @@ pub struct Pattern {
     pub desc: String,
     pub length: usize, // 1..=64
     pub data: PatternData,
+    #[serde(default)]
+    pub id: persist::Id,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LaneKind {
     Drums,
     Melodic,
+}
+
+/// A stable reference to a MIDI output port, by key and human-readable name.
+/// Matching at runtime uses `stable_key` first, falls back to `name`.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct PortRef {
+    pub stable_key: String,
+    pub name: String,
+}
+
+/// Per-lane MIDI routing: which port, channel, and whether to send MIDI Clock.
+/// `None` on `Lane::route` means "derive from profile" via `Lane::effective_route`.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct LaneRoute {
+    pub port: PortRef,
+    pub channel: u8,
+    pub clock_out: bool,
 }
 
 impl Pattern {
@@ -65,6 +85,7 @@ impl Pattern {
             desc: String::new(),
             length,
             data: PatternData::Drums(vec![Vec::new(); length]),
+            id: persist::Id::nil(),
         }
     }
 
@@ -75,6 +96,14 @@ impl Pattern {
             desc: String::new(),
             length,
             data: PatternData::Melodic(vec![None; length]),
+            id: persist::Id::nil(),
+        }
+    }
+
+    /// Set `id` to a fresh minted id only when it is currently nil.
+    pub fn ensure_id(&mut self) {
+        if self.id.is_nil() {
+            self.id = persist::mint_id();
         }
     }
 
@@ -98,6 +127,36 @@ pub struct Lane {
     pub solo: bool,
     pub transpose: i8, // semitones (melodic)
     pub octave: i8,    // octaves (melodic)
+    /// Explicit routing override. `None` = derive from profile via `effective_route()`.
+    pub route: Option<LaneRoute>,
+}
+
+impl Lane {
+    /// The MIDI channel this lane emits on: the explicit route's channel when set,
+    /// else the profile channel. Allocation-free — safe for the scheduler hot path
+    /// (unlike `effective_route()`, which clones the port's `String`s).
+    pub fn route_channel(&self) -> u8 {
+        self.route
+            .as_ref()
+            .map(|r| r.channel)
+            .unwrap_or(self.profile.channel)
+    }
+
+    /// The MIDI route to use for this lane.
+    /// Returns the explicit `route` if set; otherwise derives from the device profile.
+    pub fn effective_route(&self) -> LaneRoute {
+        if let Some(r) = &self.route {
+            return r.clone();
+        }
+        LaneRoute {
+            port: PortRef {
+                stable_key: self.profile.port_match.to_string(),
+                name: self.profile.port_match.to_string(),
+            },
+            channel: self.profile.channel,
+            clock_out: true,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -106,9 +165,17 @@ pub struct Set {
     pub bpm: f64,
     pub swing: f32,
     pub lanes: Vec<Lane>,
+    pub id: persist::Id,
 }
 
 impl Set {
+    /// Set `id` to a fresh minted id only when it is currently nil.
+    pub fn ensure_id(&mut self) {
+        if self.id.is_nil() {
+            self.id = persist::mint_id();
+        }
+    }
+
     /// A fresh set: bpm 120, swing 0.5, one empty 16-step lane per profile.
     /// Drum-kind profiles get an empty drum pattern; melodic-kind get empty melodic.
     pub fn default_set(profiles: [DeviceProfile; 3]) -> Set {
@@ -126,6 +193,7 @@ impl Set {
                     solo: false,
                     transpose: 0,
                     octave: 0,
+                    route: None,
                 }
             })
             .collect();
@@ -134,6 +202,7 @@ impl Set {
             bpm: 120.0,
             swing: 0.5,
             lanes,
+            id: persist::Id::nil(),
         }
     }
 }
@@ -175,6 +244,36 @@ mod tests {
     }
 
     #[test]
+    fn ensure_id_assigns_only_when_nil() {
+        // nil → assigned non-nil
+        let mut p = Pattern::empty_drums(4);
+        assert!(p.id.is_nil());
+        p.ensure_id();
+        assert!(!p.id.is_nil());
+
+        // preset → unchanged
+        let preset = crate::persist::Id::generate(0xABCD, 42);
+        let mut p2 = Pattern::empty_drums(4);
+        p2.id = preset.clone();
+        p2.ensure_id();
+        assert_eq!(p2.id, preset);
+
+        // same for Set
+        let profiles = crate::devices::profiles::default_profiles();
+        let mut s = Set::default_set(profiles);
+        assert!(s.id.is_nil());
+        s.ensure_id();
+        assert!(!s.id.is_nil());
+
+        let preset_set = crate::persist::Id::generate(0x1234, 99);
+        let profiles2 = crate::devices::profiles::default_profiles();
+        let mut s2 = Set::default_set(profiles2);
+        s2.id = preset_set.clone();
+        s2.ensure_id();
+        assert_eq!(s2.id, preset_set);
+    }
+
+    #[test]
     fn drum_pattern_serde_round_trips() {
         let p = Pattern {
             name: "techno #03".to_string(),
@@ -197,6 +296,7 @@ mod tests {
                 ],
                 vec![],
             ]),
+            id: crate::persist::Id::nil(),
         };
         let json = serde_json::to_string(&p).unwrap();
         let back: Pattern = serde_json::from_str(&json).unwrap();
@@ -220,6 +320,7 @@ mod tests {
                 }),
                 None,
             ]),
+            id: crate::persist::Id::nil(),
         };
         let json = serde_json::to_string(&p).unwrap();
         let back: Pattern = serde_json::from_str(&json).unwrap();
@@ -245,6 +346,80 @@ mod tests {
             serde_json::from_str(r#"{"semi":0,"vel":1.0,"slide":false,"len":0.5}"#).unwrap();
         assert_eq!(note.prob, 1.0);
         assert_eq!(note.ratchet, 1);
+    }
+
+    // ── Task 5: LaneRoute / effective_route ──────────────────────────────────
+
+    #[test]
+    fn effective_route_defaults_from_profile_when_none() {
+        let profiles = crate::devices::profiles::default_profiles();
+        let lane = Lane {
+            profile: profiles[0], // T8_DRUMS: port_match="T-8", channel=9
+            pattern: Pattern::empty_drums(4),
+            mute: false,
+            solo: false,
+            transpose: 0,
+            octave: 0,
+            route: None,
+        };
+        let r = lane.effective_route();
+        assert_eq!(r.channel, profiles[0].channel);
+        assert_eq!(r.port.stable_key, profiles[0].port_match);
+        assert_eq!(r.port.name, profiles[0].port_match);
+        assert!(r.clock_out, "default clock_out must be true");
+    }
+
+    #[test]
+    fn explicit_route_overrides_profile() {
+        let profiles = crate::devices::profiles::default_profiles();
+        let explicit = LaneRoute {
+            port: PortRef {
+                stable_key: "X".to_string(),
+                name: "X".to_string(),
+            },
+            channel: 5,
+            clock_out: false,
+        };
+        let lane = Lane {
+            profile: profiles[0],
+            pattern: Pattern::empty_drums(4),
+            mute: false,
+            solo: false,
+            transpose: 0,
+            octave: 0,
+            route: Some(explicit.clone()),
+        };
+        let r = lane.effective_route();
+        assert_eq!(r, explicit);
+    }
+
+    #[test]
+    fn route_channel_uses_route_when_set_else_profile() {
+        let profiles = crate::devices::profiles::default_profiles();
+        // No route → profile channel.
+        let lane = Lane {
+            profile: profiles[0], // channel 9
+            pattern: Pattern::empty_drums(4),
+            mute: false,
+            solo: false,
+            transpose: 0,
+            octave: 0,
+            route: None,
+        };
+        assert_eq!(lane.route_channel(), profiles[0].channel);
+
+        // Explicit route → route channel, overriding the profile.
+        let mut lane2 = lane.clone();
+        lane2.route = Some(LaneRoute {
+            port: PortRef {
+                stable_key: "X".to_string(),
+                name: "X".to_string(),
+            },
+            channel: 5,
+            clock_out: true,
+        });
+        assert_eq!(lane2.route_channel(), 5);
+        assert_ne!(lane2.route_channel(), profiles[0].channel);
     }
 
     #[test]

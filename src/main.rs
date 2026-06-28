@@ -99,10 +99,20 @@ fn run(mut terminal: Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
     // or sets app.device_status directly.
     let set = Set::default_set(profiles);
     let link = Box::new(AbletonLink::new(set.bpm));
-    let engine = spawn_engine(set.clone(), link, profiles);
+    let engine = spawn_engine(set.clone(), link);
 
     let mut app = App::new(set, library);
     app.set_status(lib_status);
+
+    // Crash detection: if a recovery file exists with no clean-shutdown marker,
+    // the previous run was killed or crashed — prompt the performer to recover.
+    let dir = midip::config::data_dir();
+    if midip::pattern::store::unclean_shutdown_detected(&dir) {
+        app.mode = midip::app::Mode::RecoveryPrompt;
+    }
+    // Always remove the clean marker at startup so that if THIS run crashes,
+    // the absence of the marker will be detected on next launch.
+    midip::pattern::store::clear_clean_marker(&dir);
 
     loop {
         terminal.draw(|f| midip::ui::render(f, &app))?;
@@ -126,8 +136,17 @@ fn run(mut terminal: Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
         // Expire status toasts after ~3 s (STATUS_TTL_FRAMES × 16 ms poll timeout).
         app.tick_status();
 
+        // Debounced autosave to a separate recovery file (never overwrites deliberate saves).
+        // Best-effort: a failed autosave is silently dropped so it never disrupts the UI thread.
+        if app.tick_autosave() {
+            let _ = midip::pattern::store::save_recovery(&midip::config::data_dir(), &app.set);
+        }
+
         if app.should_quit {
             send_or_toast(&engine.tx, midip::engine::UiCommand::Quit, &mut app);
+            // Clean exit: write marker so next launch doesn't show recovery prompt.
+            let _ = midip::pattern::store::mark_clean_shutdown(&dir);
+            midip::pattern::store::clear_recovery(&dir);
             break;
         }
     }
