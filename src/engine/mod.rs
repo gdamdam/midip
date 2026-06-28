@@ -89,9 +89,6 @@ pub struct EngineHandle {
 /// Emit a `LinkStatus` event roughly this often (in ticks) to avoid flooding.
 const LINK_STATUS_EVERY: u64 = 200;
 
-/// Check for hot-plug / send-failure every this many ticks (~1 s at 1 ms/tick).
-const HOTPLUG_CHECK_EVERY: u64 = 1_000;
-
 /// Mutable engine state shared by both drivers.
 struct EngineState {
     seq: Sequencer,
@@ -389,12 +386,11 @@ pub fn run_engine_headless(
 // per physical port…" and which this port-level model preserves.
 // ---------------------------------------------------------------------------
 
-/// One connection per distinct physical port. `port_match` is the substring that
-/// identifies the port; `sink` is the single live connection (or `NullSink` when
-/// disconnected). Health + hot-plug operate at this PORT level.
+/// One connection per distinct physical port. `sink` is the single live connection (or
+/// `NullSink` when disconnected). The device-watcher thread owns the port_match → sink
+/// mapping (it holds the distinct `port_match` list itself), so the engine only carries
+/// the installed sink + its last-known state for change-detection and per-lane status.
 struct PortSink {
-    /// The port_match substring shared by every lane mapped to this port.
-    port_match: &'static str,
     /// The single sink for this port (NullSink when not connected).
     sink: Box<dyn MidiSink>,
     /// Last-known connection state (for change-detection / dedupe).
@@ -425,6 +421,134 @@ fn map_lanes_to_ports(profiles: &[DeviceProfile; 3]) -> (Vec<&'static str>, [usi
     (distinct, lane_to_port)
 }
 
+/// All lanes that resolve to the given port index, in lane order. Used to release the
+/// correct notes when a port connects/disconnects/fails (lanes sharing a port move
+/// together — the registry tracks per-lane ownership). Pure; UNIT-TESTED.
+fn lanes_of(lane_to_port: &[usize; 3], port_idx: usize) -> Vec<usize> {
+    lane_to_port
+        .iter()
+        .enumerate()
+        .filter(|(_, &p)| p == port_idx)
+        .map(|(lane, _)| lane)
+        .collect()
+}
+
+/// What the device-watcher should do for a single port this scan. Pure data — no hardware.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PortAction {
+    Connect(usize),
+    Drop(usize),
+}
+
+/// Pure connection planner (UNIT-TESTED): compares the just-enumerated presence of each
+/// port against its last-known connection state. `present && !connected` → Connect;
+/// `!present && connected` → Drop; otherwise nothing. No hardware access — the watcher
+/// thread executes the resulting actions.
+fn plan_port_actions(present: &[bool], connected: &[bool]) -> Vec<PortAction> {
+    let mut actions = Vec::new();
+    for (idx, (&p, &c)) in present.iter().zip(connected.iter()).enumerate() {
+        if p && !c {
+            actions.push(PortAction::Connect(idx));
+        } else if !p && c {
+            actions.push(PortAction::Drop(idx));
+        }
+    }
+    actions
+}
+
+/// watcher → engine. `Box<dyn MidiSink>` is `Send` (`MidiSink: Send`), so a ready-made
+/// connection can be moved across the channel — the engine only installs it.
+enum PortUpdate {
+    Connected {
+        idx: usize,
+        sink: Box<dyn MidiSink>,
+        name: String,
+    },
+    Disconnected {
+        idx: usize,
+    },
+}
+
+/// engine → watcher. `Reconnect` is sent after the engine drops an unhealthy port so the
+/// watcher rebuilds it; `Quit` (or a closed channel) tells the watcher to exit.
+enum PortRequest {
+    Reconnect(usize),
+    Quit,
+}
+
+/// Watcher scan cadence. Blocking enumeration/connection is fine here — this is a
+/// dedicated thread, never the timing loop.
+const WATCHER_SCAN_MS: u64 = 250;
+
+/// Device-watcher thread body. OWNS all port enumeration/connection (the ONLY place that
+/// calls `list_output_ports()` / `connect()` in the real engine), so a double-connect is
+/// structurally impossible. The first scan runs immediately (no initial sleep) so startup
+/// connects within ~one iteration.
+fn run_port_watcher(
+    port_matches: Vec<&'static str>,
+    updates: crossbeam_channel::Sender<PortUpdate>,
+    requests: crossbeam_channel::Receiver<PortRequest>,
+) {
+    // Local mirror of each port's connection state; only this thread mutates it.
+    let mut connected = vec![false; port_matches.len()];
+    let mut first = true;
+    loop {
+        if !first {
+            std::thread::sleep(std::time::Duration::from_millis(WATCHER_SCAN_MS));
+        }
+        first = false;
+
+        // Drain engine requests: Reconnect marks a port stale so the planner rebuilds it;
+        // Quit (or a dropped sender) ends the thread.
+        loop {
+            match requests.try_recv() {
+                Ok(PortRequest::Reconnect(idx)) => {
+                    if let Some(c) = connected.get_mut(idx) {
+                        *c = false;
+                    }
+                }
+                Ok(PortRequest::Quit) => return,
+                Err(crossbeam_channel::TryRecvError::Empty) => break,
+                Err(crossbeam_channel::TryRecvError::Disconnected) => return,
+            }
+        }
+
+        let available = list_output_ports();
+        let present: Vec<bool> = port_matches
+            .iter()
+            .map(|m| match_port(&available, m).is_some())
+            .collect();
+
+        for action in plan_port_actions(&present, &connected) {
+            match action {
+                PortAction::Connect(idx) => {
+                    if let Ok(sink) = connect(port_matches[idx]) {
+                        let name = port_display_name(&available, port_matches[idx]);
+                        if updates
+                            .send(PortUpdate::Connected {
+                                idx,
+                                sink: Box::new(sink),
+                                name,
+                            })
+                            .is_err()
+                        {
+                            return; // engine gone
+                        }
+                        connected[idx] = true;
+                    }
+                    // Connect failure: leave `connected=false`; retried next scan.
+                }
+                PortAction::Drop(idx) => {
+                    if updates.send(PortUpdate::Disconnected { idx }).is_err() {
+                        return;
+                    }
+                    connected[idx] = false;
+                }
+            }
+        }
+    }
+}
+
 /// Look up the actual port display name for a `port_match` in the available list,
 /// falling back to the `port_match` substring itself.
 fn port_display_name(available: &[String], port_match: &str) -> String {
@@ -449,93 +573,16 @@ fn emit_lane_status(ports: &[PortSink], lane_to_port: &[usize; 3], events: &mut 
     }
 }
 
-/// Build ONE sink per distinct physical port and emit one initial `DeviceStatus` per lane
-/// (derived from the shared port state). Opens at most one connection per port_match.
-fn build_port_sinks(
-    profiles: &[DeviceProfile; 3],
-    events: &mut Vec<EngineEvent>,
-) -> (Vec<PortSink>, [usize; 3]) {
-    let (distinct, lane_to_port) = map_lanes_to_ports(profiles);
-    let available = list_output_ports();
-    let mut ports: Vec<PortSink> = Vec::with_capacity(distinct.len());
-
-    for port_match in distinct {
-        let mut ps = PortSink {
-            port_match,
-            sink: Box::new(NullSink),
-            connected: false,
-            port_name: String::new(),
-        };
-        // Connect exactly once if the port is present.
-        if match_port(&available, port_match).is_some() {
-            if let Ok(midir_sink) = connect(port_match) {
-                ps.sink = Box::new(midir_sink);
-                ps.connected = true;
-                ps.port_name = port_display_name(&available, port_match);
-            }
-        }
-        ports.push(ps);
-    }
-
-    // Per-lane DeviceStatus derived from the (single) port state.
-    emit_lane_status(&ports, &lane_to_port, events);
-    (ports, lane_to_port)
-}
-
-/// Rescan health + port presence at the PORT level. Emits per-lane `DeviceStatus` only when
-/// a port's state CHANGES (so both lanes on a shared port flip together, consistently).
-///
-/// Runs in the engine thread every ~1 s (HOTPLUG_CHECK_EVERY ticks). Handles:
-/// - Send-failure: `MidiSink::health()` flips false after a failed write → port → NullSink.
-/// - Device vanished: port no longer in `list_output_ports()` → port → NullSink.
-/// - Device reappeared: port back in list for a disconnected port → reconnect ONCE.
-///
-/// Not unit-tested (touches real MIDI hardware); logic kept simple and well-commented.
-fn rescan_port_sinks(
-    ports: &mut [PortSink],
-    lane_to_port: &[usize; 3],
-    events: &mut Vec<EngineEvent>,
-) {
-    let available = list_output_ports();
-    let mut changed = false;
-
-    for ps in ports.iter_mut() {
-        let port_present = match_port(&available, ps.port_match).is_some();
-        let sink_healthy = ps.sink.health();
-
-        if ps.connected {
-            // Vanished or unhealthy → drop the single connection.
-            if !port_present || !sink_healthy {
-                ps.sink = Box::new(NullSink);
-                ps.connected = false;
-                ps.port_name.clear();
-                changed = true;
-            }
-        } else if port_present {
-            // Reappeared → reconnect exactly one connection for this port.
-            if let Ok(midir_sink) = connect(ps.port_match) {
-                ps.sink = Box::new(midir_sink);
-                ps.connected = true;
-                ps.port_name = port_display_name(&available, ps.port_match);
-                changed = true;
-            }
-        }
-    }
-
-    // Re-derive per-lane status only when something changed (dedupe).
-    if changed {
-        emit_lane_status(ports, lane_to_port, events);
-    }
-}
-
 /// Spawn the real engine on its own thread, driven by a monotonic clock. NOT unit-tested
 /// (non-deterministic timing); shares `step_engine` with the headless driver.
 ///
-/// Takes `profiles` instead of pre-built sinks so the engine thread owns the full
-/// sink lifecycle (initial connect + periodic hot-plug rescan). Builds ONE connection
-/// per distinct physical port (shared-port lanes collapse — no double-clock). Initial
-/// `DeviceStatus` events are emitted per lane (derived from port state) before the first
-/// tick so the UI receives them via `on_engine_event`.
+/// Takes `profiles` instead of pre-built sinks. All `PortSink`s start as `NullSink`/
+/// disconnected — a dedicated device-watcher thread (the ONLY caller of
+/// `list_output_ports()`/`connect()`) owns the entire connection lifecycle and hands the
+/// engine ready-made sinks over a channel. The timing loop never enumerates or connects:
+/// it only installs delivered sinks, releases notes on loss/route-change (P1), and detects
+/// health failures (asking the watcher to reconnect). One connection per distinct physical
+/// port (shared-port lanes collapse — no double-clock).
 pub fn spawn_engine(
     set: Set,
     mut link: Box<dyn LinkClock>,
@@ -550,22 +597,90 @@ pub fn spawn_engine(
         let mut events: Vec<EngineEvent> = Vec::new();
         let start = std::time::Instant::now();
 
-        // Build ONE sink per distinct port; emit initial per-lane DeviceStatus.
-        let (mut port_sinks, lane_to_port) = build_port_sinks(&profiles, &mut events);
+        // Distinct-port plan from profiles only (no hardware access on this thread).
+        let (distinct, lane_to_port) = map_lanes_to_ports(&profiles);
 
-        // Flush initial DeviceStatus events before the first step.
+        // Every port starts disconnected (NullSink); the watcher will connect present ports.
+        let mut port_sinks: Vec<PortSink> = distinct
+            .iter()
+            .map(|_| PortSink {
+                sink: Box::new(NullSink),
+                connected: false,
+                port_name: String::new(),
+            })
+            .collect();
+
+        // Spawn the device-watcher: it owns enumeration/connection and streams PortUpdates.
+        let (update_tx, update_rx) = crossbeam_channel::unbounded::<PortUpdate>();
+        let (request_tx, request_rx) = crossbeam_channel::unbounded::<PortRequest>();
+        let watcher = {
+            let port_matches = distinct.clone();
+            std::thread::spawn(move || run_port_watcher(port_matches, update_tx, request_rx))
+        };
+
+        // Emit initial (all-disconnected) per-lane DeviceStatus before the first tick;
+        // the watcher's first scan (immediate, no initial sleep) flips present ports shortly.
+        emit_lane_status(&port_sinks, &lane_to_port, &mut events);
         for ev in events.drain(..) {
             if evt_tx.send(ev).is_err() {
+                let _ = request_tx.send(PortRequest::Quit);
+                let _ = watcher.join();
                 return;
             }
+        }
+
+        // Helper: forward queued events to the UI; on a closed channel, shut the watcher
+        // down and exit. Returns true if the engine should stop.
+        macro_rules! flush_events {
+            () => {{
+                let mut closed = false;
+                for ev in events.drain(..) {
+                    if evt_tx.send(ev).is_err() {
+                        closed = true;
+                        break;
+                    }
+                }
+                closed
+            }};
         }
 
         loop {
             let now = start.elapsed().as_micros() as u64;
 
-            // Drain channel into the pending queue (timestamped at `now`).
-            while let Ok(cmd) = cmd_rx.try_recv() {
-                pending.push((now, cmd));
+            // --- Install ready-made sinks from the watcher (NON-BLOCKING; no enumerate/connect). ---
+            while let Ok(update) = update_rx.try_recv() {
+                match update {
+                    PortUpdate::Connected { idx, sink, name } => {
+                        // Route change: if this slot was already live, release its lanes'
+                        // notes before swapping so nothing hangs on the outgoing connection.
+                        if port_sinks[idx].connected {
+                            let lanes = lanes_of(&lane_to_port, idx);
+                            let mut fanout = PortFanoutSink {
+                                ports: &mut port_sinks,
+                            };
+                            st.seq.release_lanes(&lanes, now, &mut fanout);
+                        }
+                        let ps = &mut port_sinks[idx];
+                        ps.sink = sink;
+                        ps.connected = true;
+                        ps.port_name = name;
+                        emit_lane_status(&port_sinks, &lane_to_port, &mut events);
+                    }
+                    PortUpdate::Disconnected { idx } => {
+                        // P1: release this port's sounding notes BEFORE swapping to NullSink,
+                        // so the NoteOffs go out the still-live connection (not into the void).
+                        let lanes = lanes_of(&lane_to_port, idx);
+                        let mut fanout = PortFanoutSink {
+                            ports: &mut port_sinks,
+                        };
+                        st.seq.release_lanes(&lanes, now, &mut fanout);
+                        let ps = &mut port_sinks[idx];
+                        ps.sink = Box::new(NullSink);
+                        ps.connected = false;
+                        ps.port_name.clear();
+                        emit_lane_status(&port_sinks, &lane_to_port, &mut events);
+                    }
+                }
             }
 
             // Fan out once per PORT (a shared port gets each message — incl. clock — ONCE).
@@ -581,24 +696,42 @@ pub fn spawn_engine(
                 &mut events,
             );
 
-            // Forward any events to the UI; drop on disconnect.
-            for ev in events.drain(..) {
-                if evt_tx.send(ev).is_err() {
-                    return;
+            // --- Health: detect connected ports whose sink failed; release notes, drop, ask
+            //     the watcher to reconnect. Gather unhealthy indices in an immutable pass
+            //     first (borrow checker), then mutate. NO enumerate/connect here. ---
+            let unhealthy: Vec<usize> = port_sinks
+                .iter()
+                .enumerate()
+                .filter(|(_, ps)| ps.connected && !ps.sink.health())
+                .map(|(idx, _)| idx)
+                .collect();
+            for idx in unhealthy {
+                let lanes = lanes_of(&lane_to_port, idx);
+                {
+                    let mut fanout = PortFanoutSink {
+                        ports: &mut port_sinks,
+                    };
+                    st.seq.release_lanes(&lanes, now, &mut fanout);
                 }
-            }
-            if quit {
-                return;
+                let ps = &mut port_sinks[idx];
+                ps.sink = Box::new(NullSink);
+                ps.connected = false;
+                ps.port_name.clear();
+                emit_lane_status(&port_sinks, &lane_to_port, &mut events);
+                let _ = request_tx.send(PortRequest::Reconnect(idx));
             }
 
-            // Periodic hot-plug rescan: check health + port presence every ~1 s.
-            if st.tick_count.is_multiple_of(HOTPLUG_CHECK_EVERY) && st.tick_count > 0 {
-                rescan_port_sinks(&mut port_sinks, &lane_to_port, &mut events);
-                for ev in events.drain(..) {
-                    if evt_tx.send(ev).is_err() {
-                        return;
-                    }
-                }
+            // Drain command channel into the pending queue (timestamped at `now`).
+            while let Ok(cmd) = cmd_rx.try_recv() {
+                pending.push((now, cmd));
+            }
+
+            // Forward any events to the UI.
+            if flush_events!() || quit {
+                // Engine stopping (Quit or UI gone): shut the watcher down; don't leak it.
+                let _ = request_tx.send(PortRequest::Quit);
+                let _ = watcher.join();
+                return;
             }
 
             // ~1 ms loop; cheap and keeps timing tight enough for 24 PPQN.
@@ -947,6 +1080,32 @@ mod tests {
             "Started{{at_step:0}} must be emitted immediately in manual mode; got: {:?}",
             evs
         );
+    }
+
+    /// Task 5 pure planner: present&&!connected → Connect; !present&&connected → Drop; else nothing.
+    #[test]
+    fn plan_connects_present_unconnected_and_drops_absent_connected() {
+        assert_eq!(
+            plan_port_actions(&[true, false], &[false, false]),
+            vec![PortAction::Connect(0)]
+        );
+        assert_eq!(
+            plan_port_actions(&[false, true], &[true, true]),
+            vec![PortAction::Drop(0)]
+        );
+        assert!(plan_port_actions(&[true, true], &[true, true]).is_empty());
+    }
+
+    /// Task 5: lanes_of groups every lane that shares a port. Default profiles =
+    /// [T-8 drums, T-8 bass, S-1]: the T-8 port owns lanes [0,1]; the S-1 port owns [2].
+    #[test]
+    fn lanes_of_port_groups_shared_port_lanes() {
+        let profiles = default_profiles();
+        let (distinct, lane_to_port) = map_lanes_to_ports(&profiles);
+        let t8_idx = distinct.iter().position(|m| *m == "T-8").unwrap();
+        let s1_idx = distinct.iter().position(|m| *m == "S-1").unwrap();
+        assert_eq!(lanes_of(&lane_to_port, t8_idx), vec![0, 1]);
+        assert_eq!(lanes_of(&lane_to_port, s1_idx), vec![2]);
     }
 
     /// Link-gated start fires at the boundary: armed at beat=-1, boundary crossed at beat=0.
