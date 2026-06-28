@@ -410,7 +410,7 @@ fn status_string_appears_in_transport() {
     let mut app = App::new(set, empty_library());
     app.status = "library loaded".to_string();
 
-    let backend = TestBackend::new(120, 3);
+    let backend = TestBackend::new(120, 4);
     let mut term = Terminal::new(backend).unwrap();
     term.draw(|f| render_transport(f, f.area(), &app)).unwrap();
     let text: String = term.backend().buffer().content().iter().map(|c| c.symbol()).collect();
