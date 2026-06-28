@@ -203,8 +203,18 @@ fn apply_command(
             }
         }
         UiCommand::SetSet(set) => {
+            // Grab the new BPM before `set` is moved into Sequencer::new.
+            let new_bpm = set.bpm;
             let playing = st.seq.is_playing();
+            // Release every sounding note via the registry before dropping the old sequencer
+            // (P2: slide/held notes would otherwise hang on hardware).
+            st.seq.release_all(now, sink);
             st.seq = Sequencer::new(set);
+            // Sync transport so the MIDI clock and note timing agree on the new BPM (bug 2).
+            st.transport.manual_bpm = new_bpm;
+            if !st.link_enabled {
+                st.transport.source = TempoSource::Manual(new_bpm);
+            }
             if playing {
                 st.seq.play(now);
             }
@@ -659,6 +669,128 @@ mod tests {
         assert_eq!(t.effective_bpm(Some(140.0)), 140.0);
         // Falls back to manual_bpm when link value absent.
         assert_eq!(t.effective_bpm(None), 120.0);
+    }
+
+    /// P2: SetSet must release every sounding note BEFORE replacing the sequencer.
+    /// Scenario: play a set with a single long melodic note on step 0, tick far enough that
+    /// the NoteOn fires, then send SetSet. The sink must contain a NoteOff (or CC123) for
+    /// that note at the swap time — proving release_all ran before the drop.
+    #[test]
+    fn setset_releases_sounding_notes_before_swap() {
+        use crate::midi::MidiMessage;
+        use crate::pattern::model::{MelodicNote, Pattern, PatternData};
+
+        // Build a set whose lane 2 (S-1, melodic) has a single long note on step 0.
+        let mut set = default_set();
+        // 16-step melodic pattern: step 0 has a long (full-bar) note, rest silent.
+        let mut steps = vec![None; 16];
+        steps[0] = Some(MelodicNote {
+            semi: 0,
+            vel: 1.0,
+            slide: false,
+            len: 4.0, // 4 steps long — much longer than our tick window
+            prob: 1.0,
+            ratchet: 1,
+        });
+        set.lanes[2].pattern = Pattern {
+            name: "test".into(),
+            desc: String::new(),
+            length: 16,
+            data: PatternData::Melodic(steps),
+        };
+        set.bpm = 120.0; // step_dur = 125_000 µs
+
+        let other = default_set(); // second set — content irrelevant
+
+        let mut link = FakeLink::new();
+        let mut sink = RecordingSink::new();
+
+        // Play at t=0, tick past the first step (step fires at t=0), then SetSet at t=10_000.
+        // step 0 fires at origin_micros (0), so NoteOn is at t=0. The note len is 4 steps =
+        // 500_000 µs — the NoteOff would normally fire much later. SetSet at 10_000 should
+        // emit release_all which produces a NoteOff immediately (at t=10_000).
+        let _ = run_engine_headless(
+            set,
+            &mut link,
+            &mut sink,
+            vec![(0, UiCommand::Play), (10_000, UiCommand::SetSet(other))],
+            50_000,
+            1_000,
+        );
+
+        // After the SetSet there should be a NoteOff or CC123 (release_all) in the sink.
+        let has_release = sink.events.iter().any(|(at, msg)| {
+            *at >= 10_000
+                && matches!(
+                    msg,
+                    MidiMessage::NoteOff { .. }
+                        | MidiMessage::ControlChange {
+                            controller: 123,
+                            ..
+                        }
+                )
+        });
+        assert!(
+            has_release,
+            "SetSet must emit NoteOff/CC123 for sounding notes before replacing the sequencer; \
+             got events: {:?}",
+            sink.events
+        );
+    }
+
+    /// Bug 2: After SetSet the transport BPM must match the new set's BPM so that MIDI
+    /// Clock spacing reflects the NEW set's tempo, not the old one.
+    /// Approach: load initial set at 100 BPM, SetSet to 150 BPM while not playing, then
+    /// Play. Collect Clock messages and verify consecutive spacing ≈ 16_666 µs (150 BPM),
+    /// NOT 25_000 µs (100 BPM).  Window: 200_000 µs at tick 500 µs gives ≥10 clock pulses.
+    #[test]
+    fn setset_syncs_clock_bpm_to_new_set() {
+        use crate::midi::MidiMessage;
+
+        let mut set = default_set();
+        set.bpm = 100.0;
+        let mut other = default_set();
+        other.bpm = 150.0;
+
+        let mut link = FakeLink::new();
+        let mut sink = RecordingSink::new();
+
+        // SetSet at t=1_000 (while stopped), then Play at t=2_000.
+        let _ = run_engine_headless(
+            set,
+            &mut link,
+            &mut sink,
+            vec![(1_000, UiCommand::SetSet(other)), (2_000, UiCommand::Play)],
+            200_000,
+            500,
+        );
+
+        // Collect Clock timestamps after Play started (t >= 2_000).
+        let clock_times: Vec<u64> = sink
+            .events
+            .iter()
+            .filter(|(at, msg)| *at >= 2_000 && matches!(msg, MidiMessage::Clock))
+            .map(|(at, _)| *at)
+            .collect();
+
+        assert!(
+            clock_times.len() >= 2,
+            "need at least 2 Clock messages to measure spacing; got {:?}",
+            clock_times
+        );
+
+        // Expected spacing at 150 BPM = 60_000_000 / (150 * 24) = 16_666 µs.
+        // Allow ±one tick (500 µs) of quantization error.
+        let expected = 60_000_000u64 / (150 * 24);
+        let old_expected = 60_000_000u64 / (100 * 24);
+
+        // Check first consecutive pair.
+        let spacing = clock_times[1] - clock_times[0];
+        assert!(
+            spacing.abs_diff(expected) <= 1_000,
+            "Clock spacing should be ≈{expected} µs (150 BPM) but got {spacing} µs \
+             (old 100 BPM spacing would be {old_expected} µs)"
+        );
     }
 
     /// Headless engine emits LinkStatus{enabled:false} before ToggleLink.
