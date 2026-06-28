@@ -1143,4 +1143,67 @@ mod tests {
             assert!((steps[0][0].prob - 1.0).abs() < 1e-6, "undo restored prior prob");
         }
     }
+
+    // --- semantic arrow-key cursor axis tests ----------------------------
+    // These tests tie the key→action mapping to actual cursor movement so a
+    // transposition of Up/Down vs Left/Right cannot silently return.
+
+    #[test]
+    fn drums_up_key_decreases_cur_row_and_left_key_decreases_cur_col() {
+        use crate::input::key_to_action;
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        let mut app = new_app();
+        app.apply(Action::FocusLane(0)); // drums lane
+
+        // Start at row 1, col 1 so there is room to move in both directions.
+        app.apply(Action::MoveCursor(1, 1));
+        assert_eq!((app.cur_row, app.cur_col), (1, 1));
+
+        // Drums Up should decrease cur_row (previous voice).
+        let up_action = key_to_action(
+            KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+            crate::app::Mode::Edit,
+            crate::pattern::model::LaneKind::Drums,
+        );
+        app.apply(up_action);
+        assert_eq!(app.cur_row, 0, "drums Up must decrease cur_row");
+        assert_eq!(app.cur_col, 1, "drums Up must not change cur_col");
+
+        // Reset to (1, 1).
+        app.apply(Action::MoveCursor(1, 0)); // back to row 1
+
+        // Drums Left should decrease cur_col (previous step).
+        let left_action = key_to_action(
+            KeyEvent::new(KeyCode::Left, KeyModifiers::NONE),
+            crate::app::Mode::Edit,
+            crate::pattern::model::LaneKind::Drums,
+        );
+        app.apply(left_action);
+        assert_eq!(app.cur_col, 0, "drums Left must decrease cur_col");
+        assert_eq!(app.cur_row, 1, "drums Left must not change cur_row");
+    }
+
+    #[test]
+    fn melodic_left_key_decreases_cur_col() {
+        use crate::input::key_to_action;
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        let mut app = new_app();
+        app.apply(Action::FocusLane(1)); // bass = melodic lane
+
+        // Move to col 3.
+        app.apply(Action::MoveCursor(0, 3));
+        assert_eq!(app.cur_col, 3);
+
+        // Melodic Left should decrease cur_col (previous step).
+        let left_action = key_to_action(
+            KeyEvent::new(KeyCode::Left, KeyModifiers::NONE),
+            crate::app::Mode::Edit,
+            crate::pattern::model::LaneKind::Melodic,
+        );
+        app.apply(left_action);
+        assert_eq!(app.cur_col, 2, "melodic Left must decrease cur_col");
+        assert_eq!(app.cur_row, 0, "melodic cur_row must remain 0");
+    }
 }

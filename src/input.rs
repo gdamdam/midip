@@ -11,8 +11,8 @@ use crate::pattern::model::LaneKind;
 ///
 /// # MoveCursor argument order
 /// `Action::MoveCursor(drow, dcol)` matches `App::move_cursor(drow, dcol)`:
-/// - drow: change in voice row (for drums: Left=-1, Right=+1; melodic: Left=-1, Right=+1)
-/// - dcol: change in step column (for drums: Up=-1, Down=+1; melodic: Left/Right also dcol)
+/// - drow: change in voice row  (Up=-1, Down=+1; drums only — melodic row is always 0)
+/// - dcol: change in step column (Left=-1, Right=+1; both drums and melodic)
 pub fn key_to_action(key: KeyEvent, mode: Mode, kind: LaneKind) -> Action {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     let shift = key.modifiers.contains(KeyModifiers::SHIFT);
@@ -59,16 +59,17 @@ pub fn key_to_action(key: KeyEvent, mode: Mode, kind: LaneKind) -> Action {
             KeyCode::Delete => return Action::ClearStep,
 
             // Arrow keys: behaviour differs by lane kind.
+            // Up/Down navigate the voice row (drums only); Left/Right navigate the step column.
             KeyCode::Up => match kind {
-                LaneKind::Drums => return Action::MoveCursor(0, -1),
+                LaneKind::Drums => return Action::MoveCursor(-1, 0),
                 LaneKind::Melodic => return Action::NoteUp,
             },
             KeyCode::Down => match kind {
-                LaneKind::Drums => return Action::MoveCursor(0, 1),
+                LaneKind::Drums => return Action::MoveCursor(1, 0),
                 LaneKind::Melodic => return Action::NoteDown,
             },
-            KeyCode::Left => return Action::MoveCursor(-1, 0),
-            KeyCode::Right => return Action::MoveCursor(1, 0),
+            KeyCode::Left => return Action::MoveCursor(0, -1),
+            KeyCode::Right => return Action::MoveCursor(0, 1),
 
             KeyCode::Char(c) => {
                 // Digit keys → lane focus or velocity bucket.
@@ -190,13 +191,15 @@ mod tests {
 
     #[test]
     fn arrows_move_cursor() {
+        // Left moves the step column back (dcol = -1, drow = 0).
         assert_eq!(
             key_to_action(k(KeyCode::Left), Mode::Edit, LaneKind::Drums),
-            Action::MoveCursor(-1, 0)
+            Action::MoveCursor(0, -1)
         );
+        // Down moves to the next voice row (drow = +1, dcol = 0).
         assert_eq!(
             key_to_action(k(KeyCode::Down), Mode::Edit, LaneKind::Drums),
-            Action::MoveCursor(0, 1)
+            Action::MoveCursor(1, 0)
         );
     }
 
@@ -210,9 +213,10 @@ mod tests {
             key_to_action(k(KeyCode::Down), Mode::Edit, LaneKind::Melodic),
             Action::NoteDown
         );
+        // Left moves the step column back in melodic mode too (dcol = -1, drow = 0).
         assert_eq!(
             key_to_action(k(KeyCode::Left), Mode::Edit, LaneKind::Melodic),
-            Action::MoveCursor(-1, 0)
+            Action::MoveCursor(0, -1)
         );
         assert_eq!(
             key_to_action(k(KeyCode::Char('g')), Mode::Edit, LaneKind::Melodic),
@@ -226,9 +230,10 @@ mod tests {
 
     #[test]
     fn drums_up_moves_cursor() {
+        // Up moves to the previous voice row (drow = -1, dcol = 0).
         assert_eq!(
             key_to_action(k(KeyCode::Up), Mode::Edit, LaneKind::Drums),
-            Action::MoveCursor(0, -1)
+            Action::MoveCursor(-1, 0)
         );
     }
 
