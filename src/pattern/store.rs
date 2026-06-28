@@ -167,6 +167,107 @@ pub fn load_set(path: &Path) -> anyhow::Result<Set> {
     })
 }
 
+/// Clamp and repair all fields in `set` to safe ranges.
+///
+/// Returns a list of human-readable notes describing what was changed.
+/// Returns an empty `Vec` (and leaves `set` unchanged) when everything is already in range.
+/// Never panics.
+pub fn validate_and_repair(set: &mut Set) -> Vec<String> {
+    let mut notes: Vec<String> = Vec::new();
+
+    // ── top-level fields ──────────────────────────────────────────────────────
+    let orig_bpm = set.bpm;
+    set.bpm = set.bpm.clamp(20.0, 300.0);
+    if set.bpm != orig_bpm {
+        notes.push(format!("bpm clamped {:.4}→{:.4}", orig_bpm, set.bpm));
+    }
+
+    let orig_swing = set.swing;
+    set.swing = set.swing.clamp(0.5, 0.66);
+    if set.swing != orig_swing {
+        notes.push(format!("swing clamped {:.4}→{:.4}", orig_swing, set.swing));
+    }
+
+    // ── per-lane ──────────────────────────────────────────────────────────────
+    for (lane_idx, lane) in set.lanes.iter_mut().enumerate() {
+        let pat = &mut lane.pattern;
+        let lane_num = lane_idx + 1;
+
+        // length
+        let orig_len = pat.length;
+        pat.length = pat.length.clamp(1, 64);
+        if pat.length != orig_len {
+            notes.push(format!(
+                "lane {} length {}→{}",
+                lane_num, orig_len, pat.length
+            ));
+        }
+        let target = pat.length;
+
+        // data resize + field clamping
+        match &mut pat.data {
+            crate::pattern::model::PatternData::Drums(steps) => {
+                if steps.len() != target {
+                    steps.resize_with(target, Vec::new);
+                    notes.push(format!("lane {} data resized to {}", lane_num, target));
+                }
+                let mut hit_repaired = false;
+                for step in steps.iter_mut() {
+                    for hit in step.iter_mut() {
+                        let orig_note = hit.note;
+                        hit.note = hit.note.clamp(0, 127);
+                        let orig_vel = hit.vel;
+                        hit.vel = hit.vel.clamp(1, 127);
+                        let orig_prob = hit.prob;
+                        hit.prob = hit.prob.clamp(0.0, 1.0);
+                        let orig_ratchet = hit.ratchet;
+                        hit.ratchet = hit.ratchet.clamp(1, 8);
+                        if hit.note != orig_note
+                            || hit.vel != orig_vel
+                            || hit.prob != orig_prob
+                            || hit.ratchet != orig_ratchet
+                        {
+                            hit_repaired = true;
+                        }
+                    }
+                }
+                if hit_repaired {
+                    notes.push(format!("lane {} drum hit fields clamped", lane_num));
+                }
+            }
+            crate::pattern::model::PatternData::Melodic(steps) => {
+                if steps.len() != target {
+                    steps.resize_with(target, || None);
+                    notes.push(format!("lane {} data resized to {}", lane_num, target));
+                }
+                let mut note_repaired = false;
+                for step in steps.iter_mut().flatten() {
+                    let orig_vel = step.vel;
+                    step.vel = step.vel.clamp(0.5, 1.3);
+                    let orig_len = step.len;
+                    step.len = step.len.clamp(0.0, 64.0);
+                    let orig_prob = step.prob;
+                    step.prob = step.prob.clamp(0.0, 1.0);
+                    let orig_ratchet = step.ratchet;
+                    step.ratchet = step.ratchet.clamp(1, 8);
+                    if step.vel != orig_vel
+                        || step.len != orig_len
+                        || step.prob != orig_prob
+                        || step.ratchet != orig_ratchet
+                    {
+                        note_repaired = true;
+                    }
+                }
+                if note_repaired {
+                    notes.push(format!("lane {} melodic note fields clamped", lane_num));
+                }
+            }
+        }
+    }
+
+    notes
+}
+
 /// All `*.json` set files in `dir` (non-recursive). Empty list if the dir is absent.
 pub fn list_sets(dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
     if !dir.exists() {
@@ -187,7 +288,83 @@ pub fn list_sets(dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
 mod tests {
     use super::*;
     use crate::devices::profiles::default_profiles;
-    use crate::pattern::model::{MelodicNote, PatternData, Set};
+    use crate::pattern::model::{DrumHit, MelodicNote, PatternData, Set};
+
+    // ── Task 3: validate_and_repair ───────────────────────────────────────────
+
+    #[test]
+    fn validate_clamps_bpm_swing() {
+        let mut set = Set::default_set(default_profiles());
+        set.bpm = 0.0;
+        set.swing = 2.0;
+        let notes = validate_and_repair(&mut set);
+        assert_eq!(set.bpm, 20.0, "bpm must be clamped to 20");
+        assert_eq!(set.swing, 0.66, "swing must be clamped to 0.66");
+        assert!(!notes.is_empty(), "repair notes must be non-empty");
+    }
+
+    #[test]
+    fn validate_resizes_data_to_length() {
+        let mut set = Set::default_set(default_profiles());
+        // Lane 0 is drums. Give it length=16 but only 4 data steps.
+        set.lanes[0].pattern.length = 16;
+        if let PatternData::Drums(ref mut v) = set.lanes[0].pattern.data {
+            v.truncate(4);
+        }
+        let notes = validate_and_repair(&mut set);
+        if let PatternData::Drums(ref v) = set.lanes[0].pattern.data {
+            assert_eq!(v.len(), 16, "data must be resized to match length=16");
+        }
+        assert!(!notes.is_empty());
+
+        // Also test length=0 is clamped to 1 and data resized.
+        let mut set2 = Set::default_set(default_profiles());
+        set2.lanes[0].pattern.length = 0;
+        if let PatternData::Drums(ref mut v) = set2.lanes[0].pattern.data {
+            v.clear();
+        }
+        let notes2 = validate_and_repair(&mut set2);
+        assert_eq!(
+            set2.lanes[0].pattern.length, 1,
+            "length 0 must be clamped to 1"
+        );
+        if let PatternData::Drums(ref v) = set2.lanes[0].pattern.data {
+            assert_eq!(v.len(), 1, "data must be resized to 1");
+        }
+        assert!(!notes2.is_empty());
+    }
+
+    #[test]
+    fn validate_clamps_drum_vel_prob_ratchet() {
+        let mut set = Set::default_set(default_profiles());
+        // Lane 0 is drums. Place a bad hit on step 0.
+        if let PatternData::Drums(ref mut v) = set.lanes[0].pattern.data {
+            v[0] = vec![DrumHit {
+                note: 200,
+                vel: 200,
+                prob: 5.0,
+                ratchet: 99,
+            }];
+        }
+        let notes = validate_and_repair(&mut set);
+        if let PatternData::Drums(ref v) = set.lanes[0].pattern.data {
+            let hit = &v[0][0];
+            assert_eq!(hit.note, 127, "note must be clamped to 127");
+            assert_eq!(hit.vel, 127, "vel must be clamped to 127");
+            assert_eq!(hit.prob, 1.0, "prob must be clamped to 1.0");
+            assert_eq!(hit.ratchet, 8, "ratchet must be clamped to 8");
+        }
+        assert!(!notes.is_empty());
+    }
+
+    #[test]
+    fn validate_clean_set_is_unchanged_and_returns_no_notes() {
+        let mut set = Set::default_set(default_profiles());
+        let original = set.clone();
+        let notes = validate_and_repair(&mut set);
+        assert!(notes.is_empty(), "clean set must return no repair notes");
+        assert_eq!(set, original, "clean set must be unchanged");
+    }
 
     /// A unique temp subdir per test run, so parallel tests don't collide.
     fn unique_dir(tag: &str) -> std::path::PathBuf {
