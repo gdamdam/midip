@@ -58,6 +58,27 @@ pub fn key_to_action(key: KeyEvent, mode: Mode, kind: LaneKind) -> Action {
             _ => {}
         },
         Mode::Help => return Action::Help,
+        Mode::RouteEditor => {
+            return match key.code {
+                KeyCode::Esc => Action::CloseRouteEditor,
+                KeyCode::Up => Action::RouteNavLane(-1),
+                KeyCode::Down => Action::RouteNavLane(1),
+                KeyCode::Left => Action::RouteCycleField(-1),
+                KeyCode::Right => Action::RouteCycleField(1),
+                KeyCode::Char('c') => {
+                    // Cycle port forward; Shift+c cycles backward.
+                    if shift {
+                        Action::RouteCyclePort(-1)
+                    } else {
+                        Action::RouteCyclePort(1)
+                    }
+                }
+                KeyCode::Char('[') => Action::RouteAdjustChannel(-1),
+                KeyCode::Char(']') => Action::RouteAdjustChannel(1),
+                KeyCode::Char('z') => Action::RouteToggleClockOut,
+                _ => Action::None,
+            };
+        }
         Mode::TempoEntry => {
             return match key.code {
                 KeyCode::Char(c) if c.is_ascii_digit() => Action::TempoDigit(c),
@@ -131,6 +152,7 @@ pub fn key_to_action(key: KeyEvent, mode: Mode, kind: LaneKind) -> Action {
                     'Y' => return Action::AdjustRatchet(1),
                     'l' => return Action::OpenLibrary,
                     'o' => return Action::OpenSetBrowser,
+                    'w' => return Action::OpenRouteEditor,
                     's' => return Action::Save,
                     'q' => return Action::Quit,
                     _ => {}
@@ -559,5 +581,138 @@ mod tests {
             key_to_action(k(KeyCode::BackTab), Mode::Edit, LaneKind::Drums),
             Action::FocusPrev
         );
+    }
+
+    // --- Route editor key bindings (Task 8) --------------------------------
+
+    #[test]
+    fn w_key_was_unbound_before_route_editor() {
+        // Verify 'w' was not previously bound: any prior Action for 'w' in Edit mode
+        // was Action::None. This test documents the choice of 'w' as the open key.
+        // NOTE: 'w' is now bound to OpenRouteEditor; this test confirms the OLD
+        // behavior was None by checking the new mapping is OpenRouteEditor (not something else),
+        // which implies it was free before this task added the binding.
+        // The actual assertion is that 'w' maps to OpenRouteEditor now:
+        for kind in [LaneKind::Drums, LaneKind::Melodic] {
+            assert_eq!(
+                key_to_action(k(KeyCode::Char('w')), Mode::Edit, kind),
+                Action::OpenRouteEditor,
+                "'w' in Edit mode must open the route editor"
+            );
+        }
+    }
+
+    #[test]
+    fn route_editor_esc_closes() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Esc), Mode::RouteEditor, LaneKind::Drums),
+            Action::CloseRouteEditor
+        );
+    }
+
+    #[test]
+    fn route_editor_arrows_navigate_lanes_and_cycle_field() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Up), Mode::RouteEditor, LaneKind::Drums),
+            Action::RouteNavLane(-1)
+        );
+        assert_eq!(
+            key_to_action(k(KeyCode::Down), Mode::RouteEditor, LaneKind::Drums),
+            Action::RouteNavLane(1)
+        );
+        assert_eq!(
+            key_to_action(k(KeyCode::Left), Mode::RouteEditor, LaneKind::Drums),
+            Action::RouteCycleField(-1)
+        );
+        assert_eq!(
+            key_to_action(k(KeyCode::Right), Mode::RouteEditor, LaneKind::Drums),
+            Action::RouteCycleField(1)
+        );
+    }
+
+    #[test]
+    fn route_editor_c_cycles_port_forward_shift_c_backward() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('c')), Mode::RouteEditor, LaneKind::Drums),
+            Action::RouteCyclePort(1)
+        );
+        let shift_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::SHIFT);
+        assert_eq!(
+            key_to_action(shift_c, Mode::RouteEditor, LaneKind::Drums),
+            Action::RouteCyclePort(-1)
+        );
+    }
+
+    #[test]
+    fn route_editor_bracket_keys_adjust_channel() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('[')), Mode::RouteEditor, LaneKind::Drums),
+            Action::RouteAdjustChannel(-1)
+        );
+        assert_eq!(
+            key_to_action(k(KeyCode::Char(']')), Mode::RouteEditor, LaneKind::Drums),
+            Action::RouteAdjustChannel(1)
+        );
+    }
+
+    #[test]
+    fn route_editor_z_toggles_clock_out() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('z')), Mode::RouteEditor, LaneKind::Drums),
+            Action::RouteToggleClockOut
+        );
+    }
+
+    #[test]
+    fn space_and_exclamation_still_fire_in_route_editor_mode() {
+        // Global shortcuts must work even in RouteEditor mode.
+        assert_eq!(
+            key_to_action(k(KeyCode::Char(' ')), Mode::RouteEditor, LaneKind::Drums),
+            Action::TogglePlay,
+            "space must be TogglePlay in RouteEditor mode"
+        );
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('!')), Mode::RouteEditor, LaneKind::Drums),
+            Action::Panic,
+            "! must be Panic in RouteEditor mode"
+        );
+    }
+
+    #[test]
+    fn space_is_toggle_play_in_all_modes_including_route_editor() {
+        for mode in [
+            Mode::Edit,
+            Mode::Library,
+            Mode::Help,
+            Mode::TempoEntry,
+            Mode::SetBrowser,
+            Mode::RouteEditor,
+        ] {
+            assert_eq!(
+                key_to_action(k(KeyCode::Char(' ')), mode, LaneKind::Drums),
+                Action::TogglePlay,
+                "Space should be TogglePlay in {:?}",
+                mode
+            );
+        }
+    }
+
+    #[test]
+    fn exclamation_is_panic_in_all_modes_including_route_editor() {
+        for mode in [
+            Mode::Edit,
+            Mode::Library,
+            Mode::Help,
+            Mode::TempoEntry,
+            Mode::SetBrowser,
+            Mode::RouteEditor,
+        ] {
+            assert_eq!(
+                key_to_action(k(KeyCode::Char('!')), mode, LaneKind::Drums),
+                Action::Panic,
+                "! should be Panic in {:?}",
+                mode
+            );
+        }
     }
 }

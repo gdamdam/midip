@@ -3,6 +3,7 @@ pub mod editor_melodic;
 pub mod help;
 pub mod lanes;
 pub mod library;
+pub mod route_editor;
 pub mod theme;
 pub mod transport;
 
@@ -30,6 +31,7 @@ fn context_footer(app: &App) -> Line<'static> {
         Mode::SetBrowser => "[↑↓]select [enter]open [o/esc]close",
         Mode::TempoEntry => "[0-9]type BPM [enter]set [esc]cancel",
         Mode::Help => "[?/esc]close",
+        Mode::RouteEditor => "[↑↓]lane [←→]field [c]port [[ /]]ch [z]clk-out [esc]close",
     };
     let label_style = Style::default()
         .fg(Color::Black)
@@ -110,6 +112,7 @@ pub fn render(f: &mut Frame, app: &App) {
         Mode::Library => library::render_library(f, centered(area, 90, 70), app),
         Mode::Help => help::render_help(f, centered(area, 60, 70)),
         Mode::SetBrowser => library::render_set_browser(f, centered(area, 60, 70), app),
+        Mode::RouteEditor => route_editor::render_route_editor(f, centered(area, 80, 70), app),
         Mode::Edit | Mode::TempoEntry => {}
     }
 }
@@ -286,6 +289,26 @@ mod tests {
         assert!(
             whole.contains("close"),
             "Help footer should contain 'close'"
+        );
+    }
+
+    #[test]
+    fn footer_route_editor_shows_lane_and_close_hints() {
+        let set = Set::default_set(default_profiles());
+        let mut app = App::new(set, empty_library());
+        app.mode = Mode::RouteEditor;
+        let whole = render_to_string(&app);
+        assert!(
+            whole.contains("lane"),
+            "RouteEditor footer should contain 'lane'; got: {whole:?}"
+        );
+        assert!(
+            whole.contains("close"),
+            "RouteEditor footer should contain 'close'; got: {whole:?}"
+        );
+        assert!(
+            whole.contains("ROUTES"),
+            "RouteEditor context label should be 'ROUTES'; got: {whole:?}"
         );
     }
 

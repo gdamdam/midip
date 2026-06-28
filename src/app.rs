@@ -9,7 +9,8 @@ use crate::engine::{EngineEvent, UiCommand};
 use crate::pattern::euclid;
 use crate::pattern::library::{LibRole, Library};
 use crate::pattern::model::{
-    DrumHit, DrumStep, Lane, LaneKind, MelodicNote, MelodicStep, Pattern, PatternData, Set,
+    DrumHit, DrumStep, Lane, LaneKind, LaneRoute, MelodicNote, MelodicStep, Pattern, PatternData,
+    PortRef, Set,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -19,6 +20,15 @@ pub enum Mode {
     Help,
     TempoEntry,
     SetBrowser,
+    RouteEditor,
+}
+
+/// Which field is focused in the route editor (cycles Left/Right).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum RouteField {
+    Port,
+    Channel,
+    ClockOut,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -88,6 +98,13 @@ pub enum Action {
     Save,
     Help,
     Quit,
+    OpenRouteEditor,
+    CloseRouteEditor,
+    RouteNavLane(i32),
+    RouteCycleField(i32),
+    RouteCyclePort(i32),
+    RouteAdjustChannel(i32),
+    RouteToggleClockOut,
     None,
 }
 
@@ -147,6 +164,14 @@ pub struct App {
     /// `Action::Audition`/`LibNav`, cleared by `LibLoad` (commit) or `CloseLibrary`
     /// (cancel/revert).
     pub audition: Option<AuditionPreview>,
+
+    // --- Route editor state (Mode::RouteEditor) ---
+    /// Selected lane index in the route editor.
+    pub route_editor_lane: usize,
+    /// Currently focused field in the route editor (Port / Channel / ClockOut).
+    pub route_editor_field: RouteField,
+    /// Available MIDI output port names, refreshed when the editor opens.
+    pub route_editor_ports: Vec<String>,
 }
 
 /// Default melodic velocity multiplier when placing a note (1.0 -> MIDI 100).
@@ -196,6 +221,9 @@ impl App {
             quit_armed: false,
             dirty: false,
             audition: None,
+            route_editor_lane: 0,
+            route_editor_field: RouteField::Port,
+            route_editor_ports: Vec::new(),
         }
     }
 
@@ -613,6 +641,145 @@ impl App {
                     Mode::Help
                 };
             }
+            Action::OpenRouteEditor => {
+                self.route_editor_lane = self.focus;
+                self.route_editor_field = RouteField::Port;
+                // Refresh the available port list on the UI thread (safe — not the timing thread).
+                self.route_editor_ports = crate::midi::ports::list_output_ports();
+                self.mode = Mode::RouteEditor;
+            }
+            Action::CloseRouteEditor => {
+                self.mode = Mode::Edit;
+            }
+            Action::RouteNavLane(d) => {
+                let n = self.set.lanes.len();
+                if n > 0 {
+                    self.route_editor_lane =
+                        (self.route_editor_lane as i32 + d).rem_euclid(n as i32) as usize;
+                }
+            }
+            Action::RouteCycleField(d) => {
+                self.route_editor_field = match (self.route_editor_field, d) {
+                    (RouteField::Port, d) if d > 0 => RouteField::Channel,
+                    (RouteField::Channel, d) if d > 0 => RouteField::ClockOut,
+                    (RouteField::ClockOut, d) if d > 0 => RouteField::Port,
+                    (RouteField::Port, _) => RouteField::ClockOut,
+                    (RouteField::Channel, _) => RouteField::Port,
+                    (RouteField::ClockOut, _) => RouteField::Channel,
+                };
+            }
+            Action::RouteCyclePort(d) => {
+                let lane = self.route_editor_lane;
+                if lane >= self.set.lanes.len() {
+                    return cmds;
+                }
+                // Build the port cycle list: "(default)" + all available ports.
+                // "(default)" → route = None; named port → route = Some(LaneRoute{...})
+                let n_ports = self.route_editor_ports.len();
+                // Current selection index: 0 = default, 1..=n = port[i-1]
+                let current_idx = match &self.set.lanes[lane].route {
+                    None => 0usize,
+                    Some(r) => self
+                        .route_editor_ports
+                        .iter()
+                        .position(|p| p == &r.port.name)
+                        .map(|i| i + 1)
+                        .unwrap_or(0),
+                };
+                let total = n_ports + 1; // 0=default, 1..=n_ports
+                let next_idx = ((current_idx as i32 + d).rem_euclid(total as i32)) as usize;
+                self.snapshot();
+                if next_idx == 0 {
+                    self.set.lanes[lane].route = None;
+                    self.set_status(format!("Lane {lane}: route → (default)"));
+                } else {
+                    let port_name = self.route_editor_ports[next_idx - 1].clone();
+                    // Preserve existing channel/clock_out when switching ports.
+                    let existing = self.set.lanes[lane].route.as_ref();
+                    let channel = existing
+                        .map(|r| r.channel)
+                        .unwrap_or_else(|| self.set.lanes[lane].profile.channel);
+                    let clock_out = existing.map(|r| r.clock_out).unwrap_or(true);
+                    self.set.lanes[lane].route = Some(LaneRoute {
+                        port: PortRef {
+                            stable_key: port_name.clone(),
+                            name: port_name.clone(),
+                        },
+                        channel,
+                        clock_out,
+                    });
+                    self.set_status(format!("Lane {lane}: port → {port_name}"));
+                }
+                let route = self.set.lanes[lane].route.clone();
+                cmds.push(UiCommand::SetRoute { lane, route });
+            }
+            Action::RouteAdjustChannel(d) => {
+                let lane = self.route_editor_lane;
+                if lane >= self.set.lanes.len() {
+                    return cmds;
+                }
+                self.snapshot();
+                // Build or update the explicit route with the new channel.
+                let existing_route = self.set.lanes[lane].route.clone();
+                let new_channel = match &existing_route {
+                    Some(r) => (r.channel as i32 + d).clamp(0, 15) as u8,
+                    None => {
+                        let profile_ch = self.set.lanes[lane].profile.channel as i32;
+                        (profile_ch + d).clamp(0, 15) as u8
+                    }
+                };
+                let port = match existing_route.as_ref() {
+                    Some(r) => r.port.clone(),
+                    None => PortRef {
+                        stable_key: self.set.lanes[lane].profile.port_match.to_string(),
+                        name: self.set.lanes[lane].profile.port_match.to_string(),
+                    },
+                };
+                let clock_out = existing_route.as_ref().map(|r| r.clock_out).unwrap_or(true);
+                self.set.lanes[lane].route = Some(LaneRoute {
+                    port,
+                    channel: new_channel,
+                    clock_out,
+                });
+                self.set_status(format!(
+                    "Lane {lane}: channel → {} (MIDI {})",
+                    new_channel,
+                    new_channel + 1
+                ));
+                let route = self.set.lanes[lane].route.clone();
+                cmds.push(UiCommand::SetRoute { lane, route });
+            }
+            Action::RouteToggleClockOut => {
+                let lane = self.route_editor_lane;
+                if lane >= self.set.lanes.len() {
+                    return cmds;
+                }
+                self.snapshot();
+                let existing_route = self.set.lanes[lane].route.clone();
+                let port = match existing_route.as_ref() {
+                    Some(r) => r.port.clone(),
+                    None => PortRef {
+                        stable_key: self.set.lanes[lane].profile.port_match.to_string(),
+                        name: self.set.lanes[lane].profile.port_match.to_string(),
+                    },
+                };
+                let channel = match existing_route.as_ref() {
+                    Some(r) => r.channel,
+                    None => self.set.lanes[lane].profile.channel,
+                };
+                let new_clock_out = !existing_route.as_ref().map(|r| r.clock_out).unwrap_or(true);
+                self.set.lanes[lane].route = Some(LaneRoute {
+                    port,
+                    channel,
+                    clock_out: new_clock_out,
+                });
+                self.set_status(format!(
+                    "Lane {lane}: clock-out {}",
+                    if new_clock_out { "on" } else { "off" }
+                ));
+                let route = self.set.lanes[lane].route.clone();
+                cmds.push(UiCommand::SetRoute { lane, route });
+            }
             Action::Quit => {
                 if self.playing && !self.quit_armed {
                     self.quit_armed = true;
@@ -762,6 +929,7 @@ impl App {
             Mode::Help => "HELP",
             Mode::TempoEntry => "TEMPO",
             Mode::SetBrowser => "OPEN SET",
+            Mode::RouteEditor => "ROUTES",
         }
     }
 
@@ -2933,5 +3101,159 @@ mod tests {
             app.status_ttl, ttl_before,
             "Playhead event must not alter status_ttl"
         );
+    }
+
+    // --- Route editor (Task 8) -------------------------------------------
+
+    #[test]
+    fn open_route_editor_sets_mode_and_remembers_focused_lane() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(1));
+        app.apply(Action::OpenRouteEditor);
+        assert_eq!(app.mode, Mode::RouteEditor);
+        assert_eq!(app.route_editor_lane, 1);
+        assert_eq!(app.route_editor_field, RouteField::Port);
+    }
+
+    #[test]
+    fn close_route_editor_returns_to_edit() {
+        let mut app = new_app();
+        app.apply(Action::OpenRouteEditor);
+        assert_eq!(app.mode, Mode::RouteEditor);
+        app.apply(Action::CloseRouteEditor);
+        assert_eq!(app.mode, Mode::Edit);
+    }
+
+    #[test]
+    fn route_nav_lane_wraps_within_lane_count() {
+        let mut app = new_app();
+        app.apply(Action::OpenRouteEditor);
+        // default 3 lanes, start at 0
+        app.apply(Action::RouteNavLane(1));
+        assert_eq!(app.route_editor_lane, 1);
+        app.apply(Action::RouteNavLane(1));
+        assert_eq!(app.route_editor_lane, 2);
+        app.apply(Action::RouteNavLane(1)); // wrap 2 -> 0
+        assert_eq!(app.route_editor_lane, 0);
+        app.apply(Action::RouteNavLane(-1)); // wrap 0 -> 2
+        assert_eq!(app.route_editor_lane, 2);
+    }
+
+    #[test]
+    fn route_adjust_channel_plus_one_updates_route_sets_dirty_emits_set_route() {
+        let mut app = new_app();
+        app.apply(Action::OpenRouteEditor);
+        // Lane 0 has no explicit route; profile channel is 9.
+        assert!(app.set.lanes[0].route.is_none());
+        let cmds = app.apply(Action::RouteAdjustChannel(1));
+        // Should now have an explicit route with channel 10.
+        assert!(app.set.lanes[0].route.is_some());
+        assert_eq!(app.set.lanes[0].route.as_ref().unwrap().channel, 10);
+        // dirty flag set.
+        assert!(app.dirty);
+        // Emits SetRoute for lane 0.
+        assert!(
+            cmds.iter().any(|c| matches!(
+                c,
+                UiCommand::SetRoute {
+                    lane: 0,
+                    route: Some(_)
+                }
+            )),
+            "expected SetRoute command, got: {:?}",
+            cmds
+        );
+    }
+
+    #[test]
+    fn route_adjust_channel_clamps_at_zero_and_fifteen() {
+        let mut app = new_app();
+        app.apply(Action::OpenRouteEditor);
+        // Force channel to 0 by subtracting a lot.
+        for _ in 0..20 {
+            app.apply(Action::RouteAdjustChannel(-1));
+        }
+        assert_eq!(app.set.lanes[0].route.as_ref().unwrap().channel, 0);
+        // Force channel to 15 by adding a lot.
+        for _ in 0..20 {
+            app.apply(Action::RouteAdjustChannel(1));
+        }
+        assert_eq!(app.set.lanes[0].route.as_ref().unwrap().channel, 15);
+    }
+
+    #[test]
+    fn route_cycle_port_to_default_sets_route_none_and_emits_set_route() {
+        let mut app = new_app();
+        app.apply(Action::OpenRouteEditor);
+        // Pre-seed an explicit route on lane 0 so we can cycle away from it.
+        app.set.lanes[0].route = Some(LaneRoute {
+            port: PortRef {
+                stable_key: "fake-port".into(),
+                name: "fake-port".into(),
+            },
+            channel: 5,
+            clock_out: true,
+        });
+        // route_editor_ports is empty (no real hardware), so total slots = 1 (just "default").
+        // Cycling by +1 from current (index 0, default is not found so current_idx=0) → stays 0.
+        // Actually with an unknown port current_idx=0, next=1 but total=1, so next=0 → default.
+        // Inject a fake port list so cycling works.
+        app.route_editor_ports = vec!["fake-port".to_string()];
+        // current_idx = 1 (found at index 0, +1 = 1), total = 2
+        // cycling +1 from 1 → (1+1) % 2 = 0 → default
+        let cmds = app.apply(Action::RouteCyclePort(1));
+        assert!(
+            app.set.lanes[0].route.is_none(),
+            "cycling to index 0 sets route=None"
+        );
+        assert!(
+            cmds.iter().any(|c| matches!(
+                c,
+                UiCommand::SetRoute {
+                    lane: 0,
+                    route: None
+                }
+            )),
+            "expected SetRoute{{lane:0, route:None}}, got: {:?}",
+            cmds
+        );
+    }
+
+    #[test]
+    fn route_toggle_clock_out_flips_and_emits_set_route() {
+        let mut app = new_app();
+        app.apply(Action::OpenRouteEditor);
+        // Lane 0 starts with no explicit route (clock_out defaults to true in effective_route).
+        let cmds = app.apply(Action::RouteToggleClockOut);
+        // Now has an explicit route with clock_out = false (toggled from default true).
+        assert!(
+            !app.set.lanes[0].route.as_ref().unwrap().clock_out,
+            "clock_out should be false after first toggle"
+        );
+        assert!(cmds.iter().any(|c| matches!(
+            c,
+            UiCommand::SetRoute {
+                lane: 0,
+                route: Some(_)
+            }
+        )));
+        // Toggle again → clock_out = true.
+        app.apply(Action::RouteToggleClockOut);
+        assert!(
+            app.set.lanes[0].route.as_ref().unwrap().clock_out,
+            "clock_out should be true after second toggle"
+        );
+    }
+
+    #[test]
+    fn route_adjust_channel_is_undoable() {
+        let mut app = new_app();
+        app.apply(Action::OpenRouteEditor);
+        let before_route = app.set.lanes[0].route.clone();
+        app.apply(Action::RouteAdjustChannel(1));
+        assert!(app.set.lanes[0].route.is_some());
+        // Undo should restore the original route (None).
+        app.apply(Action::Undo);
+        assert_eq!(app.set.lanes[0].route, before_route);
     }
 }
