@@ -1,0 +1,17 @@
+[package]
+name = "midip"
+version = "0.1.0"
+edition = "2021"
+description = "Terminal MIDI pattern sequencer for Roland AIRA Compact T-8 and S-1"
+license = "MIT"
+
+[dependencies]
+ratatui = "0.29"
+crossterm = "0.28"
+midir = "0.10"
+rusty_link = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+indexmap = { version = "2", features = ["serde"] }
+crossbeam-channel = "0.5"
+anyhow = "1"
