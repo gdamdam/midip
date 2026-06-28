@@ -118,6 +118,21 @@ pub enum Action {
     ToggleLaunchQuant,
     /// Cancel any pending queued launch on the focused lane.
     CancelQueue,
+    /// Save a copy of the focused lane's pattern under a new name/id to the user-pattern store.
+    /// Does NOT mutate the lane. Task 7 supplies the name from a dialog; here it is a param.
+    SaveAsUserPattern(String),
+    /// Replace the focused lane's pattern with a same-kind, same-length empty pattern ("init").
+    /// Snapshots for undo. Confirmation when material exists is Task 7.
+    ClearPattern,
+    /// Load the user pattern at `path`, assign a fresh id and " copy" suffix, re-save.
+    /// Only ever touches paths under the user `patterns/` dir; vendored library dir is never written.
+    DuplicateUserPattern(std::path::PathBuf),
+    /// Rename the user pattern at `path`: keep its id, update name, save new file, remove old.
+    /// Only ever touches paths under the user `patterns/` dir; vendored library dir is never written.
+    RenameUserPattern(std::path::PathBuf, String),
+    /// Delete the user pattern file at `path`. Best-effort removal.
+    /// Only ever touches paths under the user `patterns/` dir; vendored library dir is never written.
+    DeleteUserPattern(std::path::PathBuf),
     None,
 }
 
@@ -957,6 +972,80 @@ impl App {
                     },
                 );
                 cmds.push(crate::engine::UiCommand::SetMirror(self.mirror_on));
+            }
+            Action::SaveAsUserPattern(name) => {
+                // Clone the focused lane's pattern and give it a fresh identity so
+                // save-as creates a new file rather than overwriting the source.
+                let mut clone = self.set.lanes[self.focus].pattern.clone();
+                clone.name = name.clone();
+                clone.id = crate::persist::Id::nil();
+                clone.ensure_id();
+                let dir = crate::config::data_dir().join("patterns");
+                match crate::pattern::store::save_user_pattern(&dir, &mut clone) {
+                    Ok(_) => self.set_status(format!("Saved pattern {}", name)),
+                    Err(e) => self.set_status(format!("Save failed: {}", e)),
+                }
+                // Does NOT mutate the lane or mark dirty.
+            }
+            Action::ClearPattern => {
+                self.snapshot();
+                let lane = &self.set.lanes[self.focus];
+                let len = lane.pattern.length;
+                let kind = lane.pattern.kind();
+                let empty = match kind {
+                    crate::pattern::model::LaneKind::Drums => {
+                        crate::pattern::model::Pattern::empty_drums(len)
+                    }
+                    crate::pattern::model::LaneKind::Melodic => {
+                        crate::pattern::model::Pattern::empty_melodic(len)
+                    }
+                };
+                self.set.lanes[self.focus].pattern = empty;
+                self.set_status("Cleared lane");
+                cmds.push(self.load_focused());
+            }
+            Action::DuplicateUserPattern(path) => {
+                // Only ever touches paths under the user `patterns/` dir; vendored library dir is never written.
+                let dir = crate::config::data_dir().join("patterns");
+                match crate::pattern::store::load_user_pattern(&path) {
+                    Ok(mut p) => {
+                        let new_name = format!("{} copy", p.name);
+                        p.name = new_name.clone();
+                        p.id = crate::persist::Id::nil();
+                        p.ensure_id();
+                        match crate::pattern::store::save_user_pattern(&dir, &mut p) {
+                            Ok(_) => self.set_status(format!("Duplicated as {}", new_name)),
+                            Err(e) => self.set_status(format!("Duplicate failed: {}", e)),
+                        }
+                    }
+                    Err(e) => self.set_status(format!("Duplicate failed: {}", e)),
+                }
+            }
+            Action::RenameUserPattern(path, new_name) => {
+                // Only ever touches paths under the user `patterns/` dir; vendored library dir is never written.
+                let dir = crate::config::data_dir().join("patterns");
+                match crate::pattern::store::load_user_pattern(&path) {
+                    Ok(mut p) => {
+                        let old_id = p.id.clone();
+                        p.name = new_name.clone();
+                        match crate::pattern::store::save_user_pattern(&dir, &mut p) {
+                            Ok(_) => {
+                                // Remove the old file (best-effort; ignore errors).
+                                let _ = std::fs::remove_file(&path);
+                                debug_assert_eq!(p.id, old_id, "rename must keep the pattern id");
+                                self.set_status(format!("Renamed to {}", new_name));
+                            }
+                            Err(e) => self.set_status(format!("Rename failed: {}", e)),
+                        }
+                    }
+                    Err(e) => self.set_status(format!("Rename failed: {}", e)),
+                }
+            }
+            Action::DeleteUserPattern(path) => {
+                // Only ever touches paths under the user `patterns/` dir; vendored library dir is never written.
+                // Best-effort: silently ignore "not found" errors.
+                let _ = std::fs::remove_file(&path);
+                self.set_status("Deleted pattern");
             }
             Action::None => {}
         }
@@ -3859,5 +3948,209 @@ mod tests {
             app.audition.is_none(),
             "self.audition must be None after committing via LibLoad"
         );
+    }
+
+    // ── M3 Task 5: pattern management ops ────────────────────────────────────
+
+    /// Returns a unique token for each call within the process (nanos + pid + atomic counter).
+    /// Used to make filenames unique across parallel test threads without touching the env.
+    fn unique_token(tag: &str) -> String {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static CTR: AtomicU64 = AtomicU64::new(1);
+        let n = CTR.fetch_add(1, Ordering::Relaxed);
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos() as u64;
+        format!("{}-{}-{}", tag, nanos, n)
+    }
+
+    #[test]
+    fn clear_pattern_empties_focused_lane_and_marks_dirty() {
+        let mut app = new_app();
+        // Place a hit on lane 0 (drums) so it is non-empty.
+        app.apply(Action::FocusLane(0));
+        app.apply(Action::MoveCursor(0, 0));
+        app.apply(Action::ToggleStep);
+        let len = app.focused_lane().pattern.length;
+        let undo_depth_before = app.undo.len();
+
+        let cmds = app.apply(Action::ClearPattern);
+
+        // Snapshot taken → undo stack grew by 1.
+        assert_eq!(
+            app.undo.len(),
+            undo_depth_before + 1,
+            "ClearPattern must snapshot (undoable)"
+        );
+        assert!(app.dirty, "ClearPattern must mark dirty");
+        // Lane pattern is now all-empty drums of the same length.
+        if let PatternData::Drums(steps) = &app.focused_lane().pattern.data {
+            assert_eq!(steps.len(), len, "length must be preserved");
+            assert!(
+                steps.iter().all(|s| s.is_empty()),
+                "all steps must be empty after clear"
+            );
+        } else {
+            panic!("expected drums");
+        }
+        assert_eq!(app.focused_lane().pattern.name, "init");
+        assert!(
+            cmds.iter()
+                .any(|c| matches!(c, UiCommand::LoadPattern { lane: 0, .. })),
+            "must emit LoadPattern for the engine"
+        );
+        // Undo must restore the hit.
+        app.apply(Action::Undo);
+        if let PatternData::Drums(steps) = &app.focused_lane().pattern.data {
+            assert_eq!(steps[0].len(), 1, "undo must restore the drum hit");
+        }
+    }
+
+    #[test]
+    fn save_as_user_pattern_writes_file_with_fresh_id() {
+        // Write to the real data_dir()/patterns using a unique pattern name.
+        // This avoids env-var mutation (which races with other tests using config::data_dir()).
+        let pat_dir = crate::config::data_dir().join("patterns");
+        std::fs::create_dir_all(&pat_dir).ok();
+        let tok = unique_token("save-as");
+        let unique_name = format!("t5-save-as-{}", tok);
+
+        let mut app = new_app();
+        app.apply(Action::FocusLane(0));
+        let original_id = app.focused_lane().pattern.id.clone();
+
+        app.apply(Action::SaveAsUserPattern(unique_name.clone()));
+
+        // Lane is NOT mutated.
+        assert_eq!(
+            app.focused_lane().pattern.id,
+            original_id,
+            "SaveAsUserPattern must not mutate the lane's pattern id"
+        );
+        // Find the written file by listing and matching the unique name.
+        let files = crate::pattern::store::list_user_patterns(&pat_dir);
+        let written = files
+            .iter()
+            .find(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|n| n.contains("t5-save-as"))
+                    .unwrap_or(false)
+            })
+            .expect("a file with the unique name must have been written");
+        let saved = crate::pattern::store::load_user_pattern(written).unwrap();
+        assert_eq!(saved.name, unique_name);
+        assert_ne!(
+            saved.id, original_id,
+            "saved pattern must have a fresh (different) id"
+        );
+        assert!(!saved.id.is_nil(), "saved id must be non-nil");
+
+        // Clean up only the file we created.
+        std::fs::remove_file(written).ok();
+    }
+
+    #[test]
+    fn duplicate_user_pattern_creates_new_id_copy() {
+        // Write source and copy both into data_dir()/patterns using unique names.
+        let pat_dir = crate::config::data_dir().join("patterns");
+        std::fs::create_dir_all(&pat_dir).ok();
+        let tok = unique_token("dup");
+
+        let mut src = crate::pattern::model::Pattern::empty_drums(8);
+        src.name = format!("t5-dup-src-{}", tok);
+        let src_path = crate::pattern::store::save_user_pattern(&pat_dir, &mut src).unwrap();
+        let src_id = src.id.clone();
+
+        let mut app = new_app();
+        app.apply(Action::DuplicateUserPattern(src_path.clone()));
+
+        // Find the copy file: unique to this run via tok, and contains "copy".
+        let files = crate::pattern::store::list_user_patterns(&pat_dir);
+        let copy_file = files
+            .iter()
+            .find(|p| {
+                let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                name.contains("copy") && name.contains("t5-dup-src")
+            })
+            .expect("copy file must exist and contain 'copy' in the filename");
+        let copy = crate::pattern::store::load_user_pattern(copy_file).unwrap();
+        assert!(
+            copy.name.contains("copy"),
+            "copy name must contain 'copy': {}",
+            copy.name
+        );
+        assert_ne!(
+            copy.id, src_id,
+            "copy must have a different id than the original"
+        );
+        assert!(!copy.id.is_nil());
+
+        // Clean up only the files we created.
+        std::fs::remove_file(&src_path).ok();
+        std::fs::remove_file(copy_file).ok();
+    }
+
+    #[test]
+    fn rename_user_pattern_keeps_id_changes_name_removes_old() {
+        let pat_dir = crate::config::data_dir().join("patterns");
+        std::fs::create_dir_all(&pat_dir).ok();
+        let tok = unique_token("rename");
+
+        let mut src = crate::pattern::model::Pattern::empty_drums(8);
+        src.name = format!("t5-rename-old-{}", tok);
+        let old_path = crate::pattern::store::save_user_pattern(&pat_dir, &mut src).unwrap();
+        let original_id = src.id.clone();
+        let new_name = format!("t5-rename-new-{}", tok);
+
+        let mut app = new_app();
+        app.apply(Action::RenameUserPattern(
+            old_path.clone(),
+            new_name.clone(),
+        ));
+
+        // Old file is gone.
+        assert!(!old_path.exists(), "old file must be removed after rename");
+        // New file exists in pat_dir with updated name but same id.
+        let files = crate::pattern::store::list_user_patterns(&pat_dir);
+        let new_file = files
+            .iter()
+            .find(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|n| n.contains("t5-rename-new"))
+                    .unwrap_or(false)
+            })
+            .expect("renamed file must exist");
+        let renamed = crate::pattern::store::load_user_pattern(new_file).unwrap();
+        assert_eq!(renamed.name, new_name);
+        assert_eq!(
+            renamed.id, original_id,
+            "rename must preserve the pattern id"
+        );
+
+        std::fs::remove_file(new_file).ok();
+    }
+
+    #[test]
+    fn delete_user_pattern_removes_file() {
+        // DeleteUserPattern takes an explicit path — no env var or shared dir needed.
+        // Write to a private temp dir to keep this fully isolated.
+        let tok = unique_token("delete");
+        let tmp = std::env::temp_dir().join(format!("midip-t5-del-{}", tok));
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let mut p = crate::pattern::model::Pattern::empty_drums(4);
+        p.name = format!("doomed-{}", tok);
+        let path = crate::pattern::store::save_user_pattern(&tmp, &mut p).unwrap();
+        assert!(path.exists(), "file must exist before delete");
+
+        let mut app = new_app();
+        app.apply(Action::DeleteUserPattern(path.clone()));
+
+        assert!(!path.exists(), "file must be gone after DeleteUserPattern");
+
+        std::fs::remove_dir_all(&tmp).ok();
     }
 }
