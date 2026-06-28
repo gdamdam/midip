@@ -63,6 +63,13 @@ pub struct Sequencer {
     origin_micros: u64,
     /// The next step index that has not yet been materialized into the queue.
     next_step: usize,
+    /// Fix #5 — accumulated schedule.
+    /// `last_step_at` is the absolute time of the most recently fired step, or
+    /// `None` before the first step fires. The NEXT step is due at
+    /// `last_step_at + current_step_dur`; when `None`, step 0 is due at `origin_micros`.
+    /// Storing the fire time (not the next-due time) means a bpm change between
+    /// ticks shifts only future intervals without touching already-fired steps.
+    last_step_at: Option<u64>,
     /// Time-ordered (ascending `at_micros`) pending events.
     queue: Vec<ScheduledEvent>,
     /// One active melodic note per lane (index parallels `set.lanes`).
@@ -84,6 +91,7 @@ impl Sequencer {
             playing: false,
             origin_micros: 0,
             next_step: 0,
+            last_step_at: None,
             queue: Vec::new(),
             active: vec![None; n],
             current: 0,
@@ -126,6 +134,9 @@ impl Sequencer {
         self.origin_micros = at_micros;
         self.current = 0;
         self.next_step = 0;
+        // Fix #5: reset the accumulated clock. `None` signals that no step has
+        // fired yet; the tick loop treats this as "step 0 is due at origin_micros".
+        self.last_step_at = None;
         self.queue.clear();
         for a in self.active.iter_mut() {
             *a = None;
@@ -232,22 +243,48 @@ impl Sequencer {
         if !self.playing {
             return None;
         }
-        let dur = step_dur_micros(self.set.bpm);
+
+        // Fix #7 — release held notes on lanes that became inaudible since the
+        // last tick (muted or soloed-out). At most 1ms latency is acceptable.
+        let any_solo = self.set.lanes.iter().any(|l| l.solo);
+        for lane_idx in 0..self.set.lanes.len() {
+            if !self.lane_audible(lane_idx, any_solo) {
+                if let Some(held) = self.active[lane_idx].take() {
+                    sink.send(
+                        MidiMessage::NoteOff { channel: held.channel, note: held.note },
+                        now_micros,
+                    );
+                }
+            }
+        }
+
         let mut advanced: Option<usize> = None;
 
-        // Materialize every step whose start time has been reached (inclusive).
-        // Break only when step_start is strictly in the future so that a step
-        // landing exactly on now_micros is not deferred to the next tick.
+        // Fix #5 — accumulated schedule: the next step is due at
+        // `last_step_at + current_dur` (or at `origin_micros` for step 0).
+        // Recomputing `dur` from the CURRENT bpm on every iteration means a
+        // mid-play tempo change shifts only future intervals — already-fired
+        // steps' timestamps are never retroactively moved.
         loop {
-            let step_start = self.origin_micros + self.next_step as u64 * dur;
-            if step_start > now_micros {
+            let dur = step_dur_micros(self.set.bpm);
+            // Compute when the upcoming step is due.
+            let step_due = match self.last_step_at {
+                None => self.origin_micros,          // step 0 due at play origin
+                Some(prev) => prev + dur,            // subsequent steps
+            };
+            if step_due > now_micros {
                 break;
             }
             let step = self.next_step;
-            self.materialize_step(step, dur);
+            // Pass the actual fire time into materialize so event timestamps
+            // reflect the accumulated position, not origin + step * dur.
+            self.materialize_step_at(step, dur, step_due);
             self.current = step;
             advanced = Some(step);
             self.next_step += 1;
+            // Record this step's fire time so the NEXT step's due time can be
+            // computed from it (with whatever bpm is current at that moment).
+            self.last_step_at = Some(step_due);
         }
 
         // Flush all queued events with at_micros <= now.
@@ -256,16 +293,51 @@ impl Sequencer {
     }
 
     /// Link mode: place the sequencer at musical `beat` (16th = beat*4) at `bpm`.
+    ///
+    /// Fix #1 — idempotent sync: `next_step` is only advanced forward, never
+    /// reset to a step that has already been materialized. Repeated calls with
+    /// the same (or non-advancing) beat therefore have no effect on the queue —
+    /// each absolute step's NoteOns are emitted at most once. Only when the beat
+    /// advances to a new step does `tick` materialize it.
+    ///
+    /// A BACKWARD jump (`new_step < next_step`, e.g. a Link loop or rewind) is
+    /// intentionally IGNORED: the step sequencer does not rewind — it only ever
+    /// moves forward — so we never re-materialize a step already emitted.
+    ///
+    /// Forward-jump re-anchoring (#1/#5 interaction): when Link advances by more
+    /// than one step across a sync gap (or jumps the beat), we RE-ANCHOR
+    /// `last_step_at` to the scheduled fire time of `new_step - 1`. Without this,
+    /// the next `tick` would see a stale `last_step_at` far in the past and
+    /// greedily materialize a catch-up burst of every skipped step (ghost notes).
+    /// Re-anchoring makes the next tick materialize ONLY `new_step` at its
+    /// correct time, skipping the intervening steps without emitting them.
     pub fn sync_to_beat(&mut self, beat: f64, bpm: f64) {
         self.set.bpm = bpm;
-        self.current = step_from_beat(beat);
-        self.next_step = self.current;
+        let new_step = step_from_beat(beat);
+        self.current = new_step;
+        // Only move next_step forward; never re-materialize already-emitted steps
+        // and never rewind on a backward jump.
+        if new_step > self.next_step {
+            self.next_step = new_step;
+            // Re-anchor the accumulated clock to (new_step - 1)'s fire time so the
+            // next tick fires only new_step (no back-fill of the skipped steps).
+            // `step_from_beat(beat) >= 1` here since new_step > next_step >= 0, so
+            // `new_step - 1` does not underflow; we still saturate defensively.
+            let dur = step_dur_micros(self.set.bpm);
+            let prev_step = new_step.saturating_sub(1) as u64;
+            self.last_step_at = Some(self.origin_micros + prev_step * dur);
+        }
     }
 
     // --- internals -------------------------------------------------------
 
-    fn materialize_step(&mut self, step: usize, dur: u64) {
-        let step_start = self.origin_micros + step as u64 * dur;
+    /// Materialize step `step` at the given absolute fire time `step_at`.
+    /// `dur` is the step duration at this step's tempo (for gate/swing calculations).
+    fn materialize_step_at(&mut self, step: usize, dur: u64, step_at: u64) {
+        // Fix #5: step_at is the accumulated fire time passed from tick(), not
+        // recomputed from origin + step * dur, so tempo changes don't shift
+        // already-queued steps.
+        let step_start = step_at;
         let swung = (step_start as i64
             + swing_offset_micros(step, self.set.swing, dur))
         .max(0) as u64;
@@ -1121,5 +1193,401 @@ mod sequencer_tests {
             .map(|(t, _)| *t)
             .collect();
         assert_eq!(offs, vec![gate]);
+    }
+
+    // =========================================================================
+    // Regression tests for fixes #1, #5, #7
+    // =========================================================================
+
+    // --- Fix #5: accumulated step scheduling (no tempo-change distortion) ----
+
+    /// A drum lane with a kick on every step, so we can measure inter-step gaps.
+    fn drum_lane_every_step(length: usize) -> Lane {
+        let mut steps: Vec<Vec<DrumHit>> = vec![Vec::new(); length];
+        for s in 0..length {
+            steps[s].push(DrumHit { note: 36, vel: 100, prob: 1.0, ratchet: 1 });
+        }
+        Lane {
+            profile: T8_DRUMS,
+            pattern: Pattern {
+                name: "every".to_string(),
+                desc: String::new(),
+                length,
+                data: PatternData::Drums(steps),
+            },
+            mute: false,
+            solo: false,
+            transpose: 0,
+            octave: 0,
+        }
+    }
+
+    #[test]
+    fn tempo_change_only_affects_future_step_intervals() {
+        // Play at 120 bpm → step_dur = 125_000 µs.
+        // Tick through steps 0 and 1, then change to 60 bpm → step_dur = 250_000 µs.
+        // The gap between step 1 and step 2 should be 250_000 µs (new tempo),
+        // not a burst of catch-up notes (old distortion: gap would be near 0)
+        // or a huge pause (retroactive recalculation).
+        let dur_120 = step_dur_micros(120.0); // 125_000
+        let dur_60 = step_dur_micros(60.0);   // 250_000
+
+        let mut seq = Sequencer::new(set_with(vec![drum_lane_every_step(16)]));
+        let mut sink = RecordingSink::new();
+        seq.play(0);
+
+        // Tick through step 0 (t=0) and step 1 (t=125_000).
+        seq.tick(0, &mut sink);
+        seq.tick(dur_120, &mut sink);
+
+        // Capture timestamps so far to assert they are unchanged later.
+        let early_ons: Vec<u64> = sink
+            .events
+            .iter()
+            .filter(|(_, m)| *m == MidiMessage::NoteOn { channel: 9, note: 36, vel: 100 })
+            .map(|(t, _)| *t)
+            .collect();
+        assert_eq!(early_ons, vec![0, dur_120], "steps 0 and 1 must fire at 120 bpm intervals");
+
+        // Change tempo mid-play.
+        seq.set_bpm(60.0);
+
+        // Tick through a window that covers step 2 at the NEW duration.
+        // Step 2 should fire at: step1_at + dur_60 = 125_000 + 250_000 = 375_000.
+        // (Old buggy code: origin + 2 * dur_60 = 0 + 500_000 — a huge pause.)
+        let step2_expected = dur_120 + dur_60; // 375_000
+        seq.tick(step2_expected, &mut sink);
+
+        let all_ons: Vec<u64> = sink
+            .events
+            .iter()
+            .filter(|(_, m)| *m == MidiMessage::NoteOn { channel: 9, note: 36, vel: 100 })
+            .map(|(t, _)| *t)
+            .collect();
+
+        // Step 2 must be at the accumulated position (125_000 + 250_000).
+        assert!(
+            all_ons.contains(&step2_expected),
+            "step 2 must fire at accumulated position {step2_expected}, got {all_ons:?}"
+        );
+
+        // Earlier steps' timestamps must be unchanged.
+        assert_eq!(
+            all_ons[0], 0,
+            "step 0 timestamp must not be retroactively changed"
+        );
+        assert_eq!(
+            all_ons[1], dur_120,
+            "step 1 timestamp must not be retroactively changed"
+        );
+
+        // The gap between step 1 and step 2 equals the NEW step duration.
+        assert_eq!(
+            all_ons[2] - all_ons[1],
+            dur_60,
+            "gap after tempo change must equal new step_dur"
+        );
+    }
+
+    // --- Fix #1: idempotent Link sync (no repeated step emission) -----------
+
+    #[test]
+    fn sync_to_beat_repeated_calls_emit_step_exactly_once() {
+        // A lane with a kick on step 0 (beat 0.0 → step 0).
+        let dur = step_dur_micros(120.0);
+        let mut seq = Sequencer::new(set_with(vec![drum_lane_four_on_floor()]));
+        let mut sink = RecordingSink::new();
+        seq.play(0);
+
+        // Repeatedly call sync_to_beat with the SAME beat, interleaved with tick.
+        // Step 0 should appear exactly once.
+        for _ in 0..5 {
+            seq.sync_to_beat(0.0, 120.0);
+            seq.tick(0, &mut sink);
+        }
+
+        let kick_ons: Vec<u64> = sink
+            .events
+            .iter()
+            .filter(|(_, m)| *m == MidiMessage::NoteOn { channel: 9, note: 36, vel: 100 })
+            .map(|(t, _)| *t)
+            .collect();
+
+        assert_eq!(
+            kick_ons.len(),
+            1,
+            "step 0 NoteOn must be emitted exactly once, got {} times: {:?}",
+            kick_ons.len(),
+            kick_ons
+        );
+
+        // Now advance the beat to step 4 (beat 1.0 → step 4 has a kick in four-on-floor).
+        // But since we need to let tick fire it, we provide a time past step 4.
+        // Advance next_step_at by ticking normally for a few more steps then sync.
+        seq.sync_to_beat(1.0, 120.0); // step 4
+        seq.tick(4 * dur, &mut sink);
+
+        let kick_ons2: Vec<u64> = sink
+            .events
+            .iter()
+            .filter(|(_, m)| *m == MidiMessage::NoteOn { channel: 9, note: 36, vel: 100 })
+            .map(|(t, _)| *t)
+            .collect();
+
+        // After advancing to beat 1.0 (step 4) and ticking, step 4 kick should appear.
+        assert_eq!(
+            kick_ons2.len(),
+            2,
+            "advancing beat to step 4 must emit step 4 kick; total NoteOns: {:?}",
+            kick_ons2
+        );
+    }
+
+    // --- Fix #7: release held note when lane becomes muted / soloed-out -----
+
+    /// Build a lane with a slide note at step 0 so the sequencer holds the note
+    /// (off_at = None → no scheduled NoteOff until the next step fires).
+    fn melodic_lane_slide_held() -> Lane {
+        // step 0: note semi=0, slide=true (so sequencer holds it).
+        // step 1: rest — slide lookahead won't find a following note, but slide
+        // is on step 0 itself so the active note is held until step 1 materializes.
+        // We want the note HELD after step 0 fires.
+        let notes = vec![
+            Some(MelodicNote { semi: 0, vel: 1.0, slide: true, len: 1.0, prob: 1.0, ratchet: 1 }),
+            None,
+            None,
+            None,
+        ];
+        Lane {
+            profile: T8_BASS,
+            pattern: Pattern {
+                name: "slide".to_string(),
+                desc: String::new(),
+                length: 4,
+                data: PatternData::Melodic(notes),
+            },
+            mute: false,
+            solo: false,
+            transpose: 0,
+            octave: 0,
+        }
+    }
+
+    #[test]
+    fn mute_releases_held_slide_note_on_next_tick() {
+        let dur = step_dur_micros(120.0);
+        // Lane 0: slide held note. Lane 1: drum (to give us a non-muted companion).
+        let mut seq = Sequencer::new(set_with(vec![
+            melodic_lane_slide_held(),
+            drum_lane_four_on_floor(),
+        ]));
+        let mut sink = RecordingSink::new();
+        seq.play(0);
+
+        // Tick step 0 — melodic NoteOn fires and note is held (slide).
+        seq.tick(0, &mut sink);
+
+        // Confirm the NoteOn fired.
+        let note_pitch = 45u8; // T8_BASS root 45 + semi 0 = 45
+        assert!(
+            sink.events
+                .iter()
+                .any(|(_, m)| *m == MidiMessage::NoteOn { channel: 1, note: note_pitch, vel: 100 }),
+            "NoteOn for held note must have fired"
+        );
+
+        // No NoteOff yet (it's slide-held).
+        let noteoff_before = sink
+            .events
+            .iter()
+            .filter(|(_, m)| *m == MidiMessage::NoteOff { channel: 1, note: note_pitch })
+            .count();
+        assert_eq!(noteoff_before, 0, "held note must not have a NoteOff yet");
+
+        // Mute the melodic lane.
+        let mut muted = melodic_lane_slide_held();
+        muted.mute = true;
+        seq.update_lane(0, muted);
+
+        // Tick — Fix #7 must release the held note.
+        let mute_tick_time = dur / 2; // some time before step 1
+        seq.tick(mute_tick_time, &mut sink);
+
+        let noteoff_after = sink
+            .events
+            .iter()
+            .filter(|(_, m)| *m == MidiMessage::NoteOff { channel: 1, note: note_pitch })
+            .count();
+        assert_eq!(
+            noteoff_after, 1,
+            "muting a lane must release its held slide note via NoteOff"
+        );
+    }
+
+    #[test]
+    fn solo_other_lane_releases_held_slide_note_on_next_tick() {
+        let dur = step_dur_micros(120.0);
+        // Lane 0: melodic (slide held). Lane 1: drums (will be soloed).
+        let mut seq = Sequencer::new(set_with(vec![
+            melodic_lane_slide_held(),
+            drum_lane_four_on_floor(),
+        ]));
+        let mut sink = RecordingSink::new();
+        seq.play(0);
+
+        // Fire step 0 — melodic note is held.
+        seq.tick(0, &mut sink);
+
+        let note_pitch = 45u8;
+        assert!(
+            sink.events
+                .iter()
+                .any(|(_, m)| *m == MidiMessage::NoteOn { channel: 1, note: note_pitch, vel: 100 }),
+            "NoteOn for held note must have fired"
+        );
+
+        // Solo the DRUM lane (lane 1), leaving melodic lane (lane 0) silenced.
+        let mut soloed_drums = drum_lane_four_on_floor();
+        soloed_drums.solo = true;
+        seq.update_lane(1, soloed_drums);
+
+        // Tick — Fix #7 must release the melodic lane's held note.
+        let solo_tick_time = dur / 2;
+        seq.tick(solo_tick_time, &mut sink);
+
+        let noteoff_count = sink
+            .events
+            .iter()
+            .filter(|(_, m)| *m == MidiMessage::NoteOff { channel: 1, note: note_pitch })
+            .count();
+        assert_eq!(
+            noteoff_count, 1,
+            "soloing another lane must release the silenced lane's held slide note"
+        );
+    }
+
+    // --- Fix #1/#5 interaction: forward Link jump must not back-fill steps ----
+
+    /// A 4-step drum lane with a DISTINCT kick note per step so we can tell which
+    /// steps fired. Step 0 → note 36, step 1 → 37, step 2 → 38, step 3 → 39.
+    fn drum_lane_distinct_per_step() -> Lane {
+        let mut steps: Vec<Vec<DrumHit>> = vec![Vec::new(); 4];
+        for (i, step) in steps.iter_mut().enumerate() {
+            step.push(DrumHit { note: 36 + i as u8, vel: 100, prob: 1.0, ratchet: 1 });
+        }
+        Lane {
+            profile: T8_DRUMS,
+            pattern: Pattern {
+                name: "distinct".to_string(),
+                desc: String::new(),
+                length: 4,
+                data: PatternData::Drums(steps),
+            },
+            mute: false,
+            solo: false,
+            transpose: 0,
+            octave: 0,
+        }
+    }
+
+    #[test]
+    fn forward_link_jump_does_not_backfill_skipped_steps() {
+        // Ghost-step regression: a forward Link jump from step 0 to step 4 must
+        // NOT emit the notes for the skipped steps 1, 2, 3. The pattern has a
+        // distinct note on every step so a back-filled catch-up burst is visible.
+        let dur = step_dur_micros(120.0);
+        let mut seq = Sequencer::new(set_with(vec![drum_lane_distinct_per_step()]));
+        let mut sink = RecordingSink::new();
+        seq.play(0);
+
+        // Link reports beat 0.0 → step 0; tick fires step 0 (note 36).
+        seq.sync_to_beat(0.0, 120.0);
+        seq.tick(0, &mut sink);
+
+        // Link jumps forward to beat 1.0 → step 4 (skipping 1, 2, 3).
+        // step 4 wraps to local step 0 in the 4-step pattern → note 36 again.
+        seq.sync_to_beat(1.0, 120.0);
+        seq.tick(4 * dur, &mut sink);
+
+        let fired_notes: Vec<u8> = sink
+            .events
+            .iter()
+            .filter_map(|(_, m)| match m {
+                MidiMessage::NoteOn { note, .. } => Some(*note),
+                _ => None,
+            })
+            .collect();
+
+        // Steps 1, 2, 3 (notes 37, 38, 39) must NEVER have fired.
+        for ghost in [37u8, 38, 39] {
+            assert!(
+                !fired_notes.contains(&ghost),
+                "skipped step's note {ghost} was ghost-emitted; fired={fired_notes:?}"
+            );
+        }
+        // Step 0 fired (initial) and step 4 fired (wraps to note 36) → exactly two 36s.
+        let note36_count = fired_notes.iter().filter(|&&n| n == 36).count();
+        assert_eq!(
+            note36_count, 2,
+            "expected step 0 + step 4 (both note 36), got {fired_notes:?}"
+        );
+    }
+
+    #[test]
+    fn forward_step_by_step_link_sync_advances_normally() {
+        // Guard against over-skipping: a one-step-at-a-time forward sync must
+        // still fire each step's distinct note in order.
+        let dur = step_dur_micros(120.0);
+        let mut seq = Sequencer::new(set_with(vec![drum_lane_distinct_per_step()]));
+        let mut sink = RecordingSink::new();
+        seq.play(0);
+
+        // beat for step k is k/4. Drive steps 0..=3 one at a time.
+        for step in 0..4u64 {
+            let beat = step as f64 / 4.0;
+            seq.sync_to_beat(beat, 120.0);
+            seq.tick(step * dur, &mut sink);
+        }
+
+        let fired_notes: Vec<u8> = sink
+            .events
+            .iter()
+            .filter_map(|(_, m)| match m {
+                MidiMessage::NoteOn { note, .. } => Some(*note),
+                _ => None,
+            })
+            .collect();
+        // Every step's note must appear exactly once, in order.
+        assert_eq!(fired_notes, vec![36, 37, 38, 39], "step-by-step must fire all steps");
+    }
+
+    #[test]
+    fn backward_sync_to_beat_is_a_noop() {
+        // A backward Link jump (loop/rewind) must not rewind the sequencer or
+        // re-emit an already-played step.
+        let dur = step_dur_micros(120.0);
+        let mut seq = Sequencer::new(set_with(vec![drum_lane_distinct_per_step()]));
+        let mut sink = RecordingSink::new();
+        seq.play(0);
+
+        // Advance to step 2 (beat 0.5) and fire it.
+        seq.sync_to_beat(0.5, 120.0); // step 2
+        seq.tick(2 * dur, &mut sink);
+        assert_eq!(seq.current_step(), 2);
+
+        let before = sink.events.len();
+
+        // Backward jump to step 0 (beat 0.0). next_step must NOT rewind.
+        seq.sync_to_beat(0.0, 120.0);
+        // current is allowed to reflect the reported beat, but next_step must stay
+        // ahead so no step is re-materialized.
+        seq.tick(2 * dur, &mut sink);
+
+        // No new events emitted by the backward jump + tick.
+        assert_eq!(
+            sink.events.len(),
+            before,
+            "backward sync_to_beat must be a no-op (no re-emitted steps)"
+        );
     }
 }
