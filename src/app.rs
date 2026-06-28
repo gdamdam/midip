@@ -71,6 +71,7 @@ pub enum Action {
     CloseLibrary,
     LibNav(i32, i32),
     LibLoad,
+    Audition,
     OpenSetBrowser,
     SetBrowserNav(i32),
     SetBrowserLoad,
@@ -120,6 +121,10 @@ pub struct App {
     pub quit_armed: bool,
     /// True when the Set has unsaved mutations since the last successful Save.
     pub dirty: bool,
+    /// Original pattern of the focused lane when an audition preview is active.
+    /// `None` when not auditioning. Set by `Action::Audition`, cleared by `LibLoad`
+    /// (commit) or `CloseLibrary` (cancel/revert).
+    pub audition: Option<Pattern>,
 }
 
 /// Default melodic velocity multiplier when placing a note (1.0 -> MIDI 100).
@@ -160,6 +165,7 @@ impl App {
             tempo_input: String::new(),
             quit_armed: false,
             dirty: false,
+            audition: None,
         }
     }
 
@@ -385,14 +391,48 @@ impl App {
                 cmds.push(UiCommand::Panic);
             }
             Action::OpenLibrary => self.mode = Mode::Library,
-            Action::CloseLibrary => self.mode = Mode::Edit,
-            Action::LibNav(dx, dy) => self.lib_nav(dx, dy),
+            Action::CloseLibrary => {
+                if let Some(backup) = self.audition.take() {
+                    // Cancel audition: restore original pattern.
+                    self.set.lanes[self.focus].pattern = backup.clone();
+                    cmds.push(UiCommand::LoadPattern { lane: self.focus, pattern: backup });
+                    self.status = "Audition cancelled".into();
+                }
+                self.mode = Mode::Edit;
+            }
+            Action::LibNav(dx, dy) => {
+                self.lib_nav(dx, dy);
+                // Re-audition the newly-selected pattern if an audition is active.
+                if self.audition.is_some() {
+                    if let Some(pat) = self.selected_lib_pattern().cloned() {
+                        self.set.lanes[self.focus].pattern = pat.clone();
+                        cmds.push(UiCommand::LoadPattern { lane: self.focus, pattern: pat });
+                    }
+                }
+            }
             Action::LibLoad => {
                 if let Some(pat) = self.selected_lib_pattern().cloned() {
-                    self.status = format!("Loaded {}", pat.name);
+                    let name = pat.name.clone();
+                    // Commit: keep whatever is already loaded in the lane.
+                    // Clear the audition backup without restoring.
+                    self.audition = None;
+                    self.status = format!("Loaded {}", name);
                     self.snapshot();
-                    self.set.lanes[self.focus].pattern = pat;
-                    cmds.push(self.load_focused());
+                    self.set.lanes[self.focus].pattern = pat.clone();
+                    cmds.push(UiCommand::LoadPattern { lane: self.focus, pattern: pat });
+                    self.mode = Mode::Edit;
+                }
+            }
+            Action::Audition => {
+                // Only save backup on first Audition (idempotent guard).
+                if self.audition.is_none() {
+                    self.audition = Some(self.set.lanes[self.focus].pattern.clone());
+                }
+                if let Some(pat) = self.selected_lib_pattern().cloned() {
+                    self.status = format!("Auditioning {}", pat.name);
+                    self.set.lanes[self.focus].pattern = pat.clone();
+                    cmds.push(UiCommand::LoadPattern { lane: self.focus, pattern: pat });
+                    // Do NOT mark dirty — this is a preview.
                 }
             }
             Action::OpenSetBrowser => {
@@ -2068,6 +2108,174 @@ mod tests {
         let mut app = new_app();
         app.mode = Mode::SetBrowser;
         assert_eq!(app.context_label(), "OPEN SET");
+    }
+
+    // --- Audition: cue-before-commit -----------------------------------------
+
+    /// Put the test app into Library mode with focus on drums lane (index 0).
+    fn enter_library(app: &mut App) {
+        app.apply(Action::FocusLane(0)); // drums
+        app.apply(Action::OpenLibrary);
+    }
+
+    #[test]
+    fn audition_saves_original_loads_selected_returns_load_pattern_no_dirty() {
+        let mut app = new_app();
+        let original = app.set.lanes[0].pattern.clone();
+        enter_library(&mut app);
+
+        assert!(app.audition.is_none());
+        let cmds = app.apply(Action::Audition);
+
+        // Backup saved.
+        assert!(app.audition.is_some(), "audition field should be Some after Audition");
+        assert_eq!(app.audition.as_ref().unwrap().name, original.name, "saved original");
+
+        // Focused lane now has the library pattern.
+        assert_eq!(app.set.lanes[0].pattern.name, "lib-drum");
+
+        // Returns a LoadPattern for the focused lane.
+        assert!(
+            cmds.iter().any(|c| matches!(c, UiCommand::LoadPattern { lane: 0, .. })),
+            "must emit LoadPattern for lane 0"
+        );
+
+        // Status shows auditioning.
+        assert!(app.status.contains("Auditioning"), "status: {:?}", app.status);
+
+        // NOT dirty (preview, not commit).
+        assert!(!app.dirty, "audition must not set dirty");
+    }
+
+    #[test]
+    fn audition_noop_when_already_auditioning() {
+        let mut app = new_app();
+        enter_library(&mut app);
+        app.apply(Action::Audition);
+        let backup_after_first = app.audition.clone().unwrap();
+
+        // Second Audition should not overwrite the saved backup.
+        app.apply(Action::Audition);
+        assert_eq!(
+            app.audition.as_ref().unwrap().name,
+            backup_after_first.name,
+            "second Audition must not overwrite the saved original"
+        );
+    }
+
+    #[test]
+    fn lib_nav_while_auditioning_loads_new_pattern_keeps_backup() {
+        // Build a library with TWO patterns for drums so LibNav can select the second.
+        let mut drums = crate::pattern::library::GenreMap::new();
+        let dsteps_a = vec![Vec::new(); 16];
+        let dsteps_b = {
+            let mut s = vec![Vec::new(); 16];
+            s[0] = vec![DrumHit { note: 36, vel: 80, prob: 1.0, ratchet: 1 }];
+            s
+        };
+        drums.insert(
+            "techno".into(),
+            vec![
+                Pattern { name: "pat-A".into(), desc: String::new(), length: 16, data: PatternData::Drums(dsteps_a) },
+                Pattern { name: "pat-B".into(), desc: String::new(), length: 16, data: PatternData::Drums(dsteps_b) },
+            ],
+        );
+        let library = Library {
+            drums,
+            bass: crate::pattern::library::GenreMap::new(),
+            synth: crate::pattern::library::GenreMap::new(),
+        };
+        let set = crate::pattern::model::Set::default_set(crate::devices::profiles::default_profiles());
+        let original_name = set.lanes[0].pattern.name.clone();
+        let mut app = App::new(set, library);
+
+        app.apply(Action::FocusLane(0));
+        app.apply(Action::OpenLibrary);
+        // Switch to Pattern column, pat-A is at index 0.
+        app.apply(Action::LibNav(1, 0));
+        app.apply(Action::Audition);
+        assert_eq!(app.set.lanes[0].pattern.name, "pat-A");
+        assert_eq!(app.audition.as_ref().unwrap().name, original_name, "backup is original");
+
+        // Navigate to pat-B — should re-audition pat-B.
+        let cmds = app.apply(Action::LibNav(0, 1)); // dy=+1 → pat-B
+        assert_eq!(app.set.lanes[0].pattern.name, "pat-B", "lane should now hold pat-B");
+        assert!(
+            cmds.iter().any(|c| matches!(c, UiCommand::LoadPattern { lane: 0, .. })),
+            "LibNav while auditioning must return LoadPattern"
+        );
+        // Original backup unchanged.
+        assert_eq!(app.audition.as_ref().unwrap().name, original_name, "backup must not change on LibNav");
+    }
+
+    #[test]
+    fn lib_load_while_auditioning_commits_clears_audition_dirty_edit() {
+        let mut app = new_app();
+        enter_library(&mut app);
+        app.apply(Action::Audition);
+        assert!(app.audition.is_some());
+
+        let cmds = app.apply(Action::LibLoad);
+
+        // Committed: audition cleared, dirty set, mode=Edit, status "Loaded …".
+        assert!(app.audition.is_none(), "audition should be cleared after commit");
+        assert!(app.dirty, "dirty should be true after commit");
+        assert_eq!(app.mode, Mode::Edit);
+        assert!(app.status.starts_with("Loaded"), "status: {:?}", app.status);
+        // Returns LoadPattern.
+        assert!(cmds.iter().any(|c| matches!(c, UiCommand::LoadPattern { lane: 0, .. })));
+        // Pattern stays as the auditioned one.
+        assert_eq!(app.set.lanes[0].pattern.name, "lib-drum");
+    }
+
+    #[test]
+    fn close_library_while_auditioning_restores_original_and_clears_audition() {
+        let mut app = new_app();
+        let original_name = app.set.lanes[0].pattern.name.clone();
+        enter_library(&mut app);
+        app.apply(Action::Audition);
+        // Lane now holds lib-drum.
+        assert_eq!(app.set.lanes[0].pattern.name, "lib-drum");
+
+        let cmds = app.apply(Action::CloseLibrary);
+
+        // Reverted: lane has original back.
+        assert_eq!(app.set.lanes[0].pattern.name, original_name, "original restored");
+        // Returns LoadPattern to restore in engine.
+        assert!(
+            cmds.iter().any(|c| matches!(c, UiCommand::LoadPattern { lane: 0, .. })),
+            "must emit LoadPattern to restore in engine"
+        );
+        // Audition cleared.
+        assert!(app.audition.is_none());
+        // Status says cancelled.
+        assert_eq!(app.status, "Audition cancelled");
+        // Mode = Edit.
+        assert_eq!(app.mode, Mode::Edit);
+    }
+
+    #[test]
+    fn lib_load_without_auditioning_still_loads_and_commits() {
+        let mut app = new_app();
+        enter_library(&mut app);
+        assert!(app.audition.is_none());
+        let cmds = app.apply(Action::LibLoad);
+        assert_eq!(app.set.lanes[0].pattern.name, "lib-drum");
+        assert!(app.dirty);
+        assert_eq!(app.mode, Mode::Edit);
+        assert!(cmds.iter().any(|c| matches!(c, UiCommand::LoadPattern { lane: 0, .. })));
+    }
+
+    #[test]
+    fn close_library_without_auditioning_just_closes() {
+        let mut app = new_app();
+        let original = app.set.lanes[0].pattern.name.clone();
+        enter_library(&mut app);
+        let cmds = app.apply(Action::CloseLibrary);
+        assert_eq!(app.mode, Mode::Edit);
+        assert_eq!(app.set.lanes[0].pattern.name, original);
+        assert!(cmds.is_empty(), "no commands on plain close");
+        assert!(app.audition.is_none());
     }
 
     // --- Task 4: Swing toast ------------------------------------------------

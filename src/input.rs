@@ -44,6 +44,7 @@ pub fn key_to_action(key: KeyEvent, mode: Mode, kind: LaneKind) -> Action {
             KeyCode::Up    => return Action::LibNav(0, -1),  // move up in focused list
             KeyCode::Down  => return Action::LibNav(0, 1),   // move down in focused list
             KeyCode::Enter => return Action::LibLoad,
+            KeyCode::Char('a') => return Action::Audition,   // cue/audition selected pattern
             KeyCode::Char('l') | KeyCode::Esc => return Action::CloseLibrary,
             _ => {}
         },
@@ -434,6 +435,11 @@ mod tests {
         assert_eq!(
             key_to_action(k(KeyCode::Esc), Mode::Library, LaneKind::Drums),
             Action::CloseLibrary
+        );
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('a')), Mode::Library, LaneKind::Drums),
+            Action::Audition,
+            "a in Library mode should trigger Audition"
         );
     }
 

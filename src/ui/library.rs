@@ -215,16 +215,26 @@ pub fn render_library(f: &mut Frame, area: Rect, app: &App) {
     }
     f.render_widget(Paragraph::new(pattern_lines), cols[1]);
 
-    // Column 3: detailed preview for the selected pattern + load hint.
+    // Column 3: detailed preview for the selected pattern + audition badge + load hint.
     let preview_width = cols[2].width as usize;
     let preview_height = cols[2].height as usize;
+    let auditioning = app.audition.is_some();
+    // Reserve lines: 1 for the hint (or 2 when auditioning for the badge).
+    let reserved = if auditioning { 2 } else { 1 };
     let mut preview_lines: Vec<Line> = Vec::new();
     if let Some(p) = selected_patterns.get(app.lib_pattern) {
-        // Reserve one line for the load hint at the bottom.
-        let max_h = preview_height.saturating_sub(1);
+        let max_h = preview_height.saturating_sub(reserved);
         preview_lines.extend(build_preview_lines(p, preview_width, max_h));
     }
-    preview_lines.push(Line::from(Span::raw("[enter] load → focused lane")));
+    if auditioning {
+        preview_lines.push(Line::from(Span::styled(
+            "[ AUDITION ]",
+            Style::default().add_modifier(Modifier::BOLD).add_modifier(Modifier::REVERSED),
+        )));
+        preview_lines.push(Line::from(Span::raw("[enter] keep  [esc] revert")));
+    } else {
+        preview_lines.push(Line::from(Span::raw("[a] audition  [enter] load → focused lane")));
+    }
     f.render_widget(Paragraph::new(preview_lines), cols[2]);
 }
 
@@ -395,5 +405,45 @@ mod tests {
         assert!(whole.contains("8th-note"), "expected desc text in: {whole:?}");
         // root=45 (A2), semi=0 → A2; semi=7 → E3
         assert!(whole.contains("A2"), "expected note name A2 in: {whole:?}");
+    }
+
+    #[test]
+    fn render_library_shows_audition_badge_when_auditioning() {
+        use crate::pattern::model::{DrumHit, Pattern, PatternData};
+
+        let mut drums = GenreMap::new();
+        let pat = Pattern {
+            name: "Test Beat".to_string(),
+            desc: String::new(),
+            length: 16,
+            data: PatternData::Drums(vec![vec![DrumHit { note: 36, vel: 100, prob: 1.0, ratchet: 1 }]; 16]),
+        };
+        drums.insert("techno".to_string(), vec![pat]);
+        let library = Library { drums, bass: GenreMap::new(), synth: GenreMap::new() };
+
+        let set = Set::default_set(default_profiles());
+        let mut app = App::new(set, library);
+        app.lib_role = LibRole::Drums;
+        app.lib_genre = 0;
+        app.lib_pattern = 0;
+
+        // Without audition: no badge, shows the standard hint.
+        let whole = render_to_string(&app);
+        assert!(!whole.contains("AUDITION"), "no badge before audition: {whole:?}");
+        assert!(whole.contains("[a] audition"), "standard hint before audition: {whole:?}");
+
+        // Simulate audition active by setting the field directly.
+        use crate::pattern::model::PatternData as PD;
+        app.audition = Some(crate::pattern::model::Pattern {
+            name: "original".to_string(),
+            desc: String::new(),
+            length: 16,
+            data: PD::Drums(vec![Vec::new(); 16]),
+        });
+
+        let whole = render_to_string(&app);
+        assert!(whole.contains("AUDITION"), "badge must appear when auditioning: {whole:?}");
+        assert!(whole.contains("[enter] keep"), "keep hint must appear: {whole:?}");
+        assert!(whole.contains("[esc] revert"), "revert hint must appear: {whole:?}");
     }
 }
