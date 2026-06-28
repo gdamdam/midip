@@ -1310,6 +1310,7 @@ mod tests {
                 desc: String::new(),
                 length: 16,
                 data: PatternData::Drums(dsteps),
+                id: crate::persist::Id::nil(),
             }],
         );
 
@@ -1330,6 +1331,7 @@ mod tests {
                 desc: String::new(),
                 length: 16,
                 data: PatternData::Melodic(bsteps),
+                id: crate::persist::Id::nil(),
             }],
         );
 
@@ -1341,6 +1343,7 @@ mod tests {
                 desc: String::new(),
                 length: 16,
                 data: PatternData::Melodic(vec![None; 16]),
+                id: crate::persist::Id::nil(),
             }],
         );
 
@@ -2557,12 +2560,14 @@ mod tests {
                     desc: String::new(),
                     length: 16,
                     data: PatternData::Drums(dsteps_a),
+                    id: crate::persist::Id::nil(),
                 },
                 Pattern {
                     name: "pat-B".into(),
                     desc: String::new(),
                     length: 16,
                     data: PatternData::Drums(dsteps_b),
+                    id: crate::persist::Id::nil(),
                 },
             ],
         );
@@ -2704,6 +2709,7 @@ mod tests {
             desc: String::new(),
             length: 16,
             data: PatternData::Drums(vec![Vec::new(); 16]),
+            id: crate::persist::Id::nil(),
         };
         let pat_b = Pattern {
             name: "pat-B".into(),
@@ -2719,6 +2725,7 @@ mod tests {
                 }];
                 s
             }),
+            id: crate::persist::Id::nil(),
         };
         drums.insert("techno".into(), vec![pat_a, pat_b]);
         let library = Library {

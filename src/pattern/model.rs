@@ -1,4 +1,5 @@
 use crate::devices::profiles::DeviceProfile;
+use crate::persist;
 
 /// serde defaults for the per-step fields absent from the vendored library data.
 fn default_prob() -> f32 {
@@ -49,6 +50,8 @@ pub struct Pattern {
     pub desc: String,
     pub length: usize, // 1..=64
     pub data: PatternData,
+    #[serde(default)]
+    pub id: persist::Id,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -65,6 +68,7 @@ impl Pattern {
             desc: String::new(),
             length,
             data: PatternData::Drums(vec![Vec::new(); length]),
+            id: persist::Id::nil(),
         }
     }
 
@@ -75,6 +79,14 @@ impl Pattern {
             desc: String::new(),
             length,
             data: PatternData::Melodic(vec![None; length]),
+            id: persist::Id::nil(),
+        }
+    }
+
+    /// Set `id` to a fresh minted id only when it is currently nil.
+    pub fn ensure_id(&mut self) {
+        if self.id.is_nil() {
+            self.id = persist::mint_id();
         }
     }
 
@@ -106,9 +118,17 @@ pub struct Set {
     pub bpm: f64,
     pub swing: f32,
     pub lanes: Vec<Lane>,
+    pub id: persist::Id,
 }
 
 impl Set {
+    /// Set `id` to a fresh minted id only when it is currently nil.
+    pub fn ensure_id(&mut self) {
+        if self.id.is_nil() {
+            self.id = persist::mint_id();
+        }
+    }
+
     /// A fresh set: bpm 120, swing 0.5, one empty 16-step lane per profile.
     /// Drum-kind profiles get an empty drum pattern; melodic-kind get empty melodic.
     pub fn default_set(profiles: [DeviceProfile; 3]) -> Set {
@@ -134,6 +154,7 @@ impl Set {
             bpm: 120.0,
             swing: 0.5,
             lanes,
+            id: persist::Id::nil(),
         }
     }
 }
@@ -175,6 +196,36 @@ mod tests {
     }
 
     #[test]
+    fn ensure_id_assigns_only_when_nil() {
+        // nil → assigned non-nil
+        let mut p = Pattern::empty_drums(4);
+        assert!(p.id.is_nil());
+        p.ensure_id();
+        assert!(!p.id.is_nil());
+
+        // preset → unchanged
+        let preset = crate::persist::Id::generate(0xABCD, 42);
+        let mut p2 = Pattern::empty_drums(4);
+        p2.id = preset.clone();
+        p2.ensure_id();
+        assert_eq!(p2.id, preset);
+
+        // same for Set
+        let profiles = crate::devices::profiles::default_profiles();
+        let mut s = Set::default_set(profiles);
+        assert!(s.id.is_nil());
+        s.ensure_id();
+        assert!(!s.id.is_nil());
+
+        let preset_set = crate::persist::Id::generate(0x1234, 99);
+        let profiles2 = crate::devices::profiles::default_profiles();
+        let mut s2 = Set::default_set(profiles2);
+        s2.id = preset_set.clone();
+        s2.ensure_id();
+        assert_eq!(s2.id, preset_set);
+    }
+
+    #[test]
     fn drum_pattern_serde_round_trips() {
         let p = Pattern {
             name: "techno #03".to_string(),
@@ -197,6 +248,7 @@ mod tests {
                 ],
                 vec![],
             ]),
+            id: crate::persist::Id::nil(),
         };
         let json = serde_json::to_string(&p).unwrap();
         let back: Pattern = serde_json::from_str(&json).unwrap();
@@ -220,6 +272,7 @@ mod tests {
                 }),
                 None,
             ]),
+            id: crate::persist::Id::nil(),
         };
         let json = serde_json::to_string(&p).unwrap();
         let back: Pattern = serde_json::from_str(&json).unwrap();

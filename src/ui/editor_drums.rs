@@ -225,6 +225,7 @@ mod tests {
             desc: String::new(),
             length: 16,
             data: PatternData::Drums(steps),
+            id: crate::persist::Id::nil(),
         };
         let mut app = App::new(set, empty_library());
         app.focus = 0;
@@ -280,6 +281,7 @@ mod tests {
             desc: String::new(),
             length: 32,
             data: PatternData::Drums(steps),
+            id: crate::persist::Id::nil(),
         };
         let mut app = App::new(set, empty_library());
         app.focus = 0;
@@ -344,6 +346,7 @@ mod tests {
             desc: String::new(),
             length: 32,
             data: PatternData::Drums(steps),
+            id: crate::persist::Id::nil(),
         };
         let mut app = App::new(set, empty_library());
         app.focus = 0;
@@ -378,6 +381,7 @@ mod tests {
             desc: String::new(),
             length: 16,
             data: PatternData::Drums(steps),
+            id: crate::persist::Id::nil(),
         };
         let mut app = App::new(set, empty_library());
         app.focus = 0;
@@ -413,6 +417,7 @@ mod tests {
             desc: String::new(),
             length: 16,
             data: PatternData::Drums(steps),
+            id: crate::persist::Id::nil(),
         };
         let mut app = App::new(set, empty_library());
         app.focus = 0;

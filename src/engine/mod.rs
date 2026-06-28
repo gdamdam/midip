@@ -878,6 +878,7 @@ mod tests {
             desc: String::new(),
             length: 16,
             data: PatternData::Melodic(steps),
+            id: crate::persist::Id::nil(),
         };
         set.bpm = 120.0; // step_dur = 125_000 µs
 
@@ -1068,6 +1069,7 @@ mod tests {
             desc: String::new(),
             length: 16,
             data: PatternData::Drums(steps),
+            id: crate::persist::Id::nil(),
         };
 
         let mut link = FakeLink::new(); // link disabled

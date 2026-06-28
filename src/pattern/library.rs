@@ -70,6 +70,7 @@ pub fn parse_drum_file(json: &str) -> anyhow::Result<GenreMap> {
                 desc: String::new(),
                 length,
                 data: PatternData::Drums(data),
+                id: crate::persist::Id::nil(),
             });
         }
         out.insert(genre, parsed);
@@ -104,6 +105,7 @@ pub fn parse_melodic_file(json: &str, gate_fraction: f32) -> anyhow::Result<Genr
                 desc: String::new(),
                 length,
                 data: PatternData::Melodic(data),
+                id: crate::persist::Id::nil(),
             });
         }
         out.insert(genre, parsed);

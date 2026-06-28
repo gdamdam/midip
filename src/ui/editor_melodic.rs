@@ -235,6 +235,7 @@ mod tests {
             desc: String::new(),
             length: 32,
             data: PatternData::Melodic(steps),
+            id: crate::persist::Id::nil(),
         };
         let mut app = App::new(set, empty_library());
         app.focus = 1;
@@ -289,6 +290,7 @@ mod tests {
             desc: String::new(),
             length: 16,
             data: PatternData::Melodic(steps),
+            id: crate::persist::Id::nil(),
         };
         let mut app = App::new(set, empty_library());
         app.focus = 1;
@@ -342,6 +344,7 @@ mod tests {
             desc: String::new(),
             length: 32,
             data: PatternData::Melodic(steps),
+            id: crate::persist::Id::nil(),
         };
         let mut app = App::new(set, empty_library());
         app.focus = 1;
@@ -382,6 +385,7 @@ mod tests {
             desc: String::new(),
             length: 16,
             data: PatternData::Melodic(steps),
+            id: crate::persist::Id::nil(),
         };
         let mut app = App::new(set, empty_library());
         app.focus = 1;
@@ -419,6 +423,7 @@ mod tests {
             desc: String::new(),
             length: 16,
             data: PatternData::Melodic(steps1),
+            id: crate::persist::Id::nil(),
         };
         let mut app1 = App::new(set1, empty_library());
         app1.focus = 1;
@@ -450,6 +455,7 @@ mod tests {
             desc: String::new(),
             length: 16,
             data: PatternData::Melodic(steps2),
+            id: crate::persist::Id::nil(),
         };
         let mut app2 = App::new(set2, empty_library());
         app2.focus = 1;
@@ -497,6 +503,7 @@ mod tests {
             desc: String::new(),
             length: 16,
             data: PatternData::Melodic(steps),
+            id: crate::persist::Id::nil(),
         };
         let mut app = App::new(set, empty_library());
         app.focus = 1;
@@ -542,6 +549,7 @@ mod tests {
             desc: String::new(),
             length: 16,
             data: PatternData::Melodic(steps),
+            id: crate::persist::Id::nil(),
         };
         let mut app = App::new(set, empty_library());
         app.focus = 1;
@@ -571,6 +579,7 @@ mod tests {
             desc: String::new(),
             length: 16,
             data: PatternData::Melodic(vec![None; 16]),
+            id: crate::persist::Id::nil(),
         };
         // Set non-zero octave and transpose so the signed display is unambiguous.
         set.lanes[1].octave = 2;
@@ -623,6 +632,7 @@ mod tests {
             desc: String::new(),
             length: 16,
             data: PatternData::Melodic(steps),
+            id: crate::persist::Id::nil(),
         };
         let mut app = App::new(set, empty_library());
         app.focus = 1;

@@ -5,6 +5,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::devices::profiles::profile_by_id;
 use crate::pattern::model::{Lane, Pattern, Set};
+use crate::persist;
+
+/// The current on-disk schema version. Increment when the format changes.
+pub const CURRENT_SET_VERSION: u32 = 1;
 
 /// On-disk lane: stores the profile *id* (not the static profile), rehydrated on load.
 #[derive(Serialize, Deserialize)]
@@ -19,6 +23,10 @@ struct LaneDto {
 
 #[derive(Serialize, Deserialize)]
 struct SetDto {
+    #[serde(default)]
+    version: u32,
+    #[serde(default)]
+    id: persist::Id,
     name: String,
     bpm: f64,
     swing: f32,
@@ -41,6 +49,8 @@ impl From<&Lane> for LaneDto {
 impl From<&Set> for SetDto {
     fn from(set: &Set) -> Self {
         SetDto {
+            version: CURRENT_SET_VERSION,
+            id: set.id.clone(),
             name: set.name.clone(),
             bpm: set.bpm,
             swing: set.swing,
@@ -71,6 +81,52 @@ fn slug(name: &str) -> String {
     }
 }
 
+/// Returns true if the value is missing, null, or an empty/all-zero string.
+fn id_value_is_empty(v: &serde_json::Value) -> bool {
+    match v {
+        serde_json::Value::String(s) => s.is_empty() || s == "0000000000000000",
+        serde_json::Value::Null => true,
+        _ => true,
+    }
+}
+
+/// Migration: v0 (no version, no ids) → v1 (version=1, ids assigned to set + lane patterns).
+fn migrate_v0_to_v1(v: &mut serde_json::Value) {
+    v["version"] = serde_json::json!(1u32);
+    if id_value_is_empty(&v["id"]) {
+        v["id"] = serde_json::json!(persist::mint_id().as_str().to_string());
+    }
+    if let Some(lanes) = v["lanes"].as_array_mut() {
+        for lane in lanes {
+            let pat = &mut lane["pattern"];
+            if id_value_is_empty(&pat["id"]) {
+                pat["id"] = serde_json::json!(persist::mint_id().as_str().to_string());
+            }
+        }
+    }
+}
+
+/// Run the migration ladder on a `serde_json::Value` before typed parse.
+/// Rejects files saved by a newer midip; upgrades older files in-place.
+pub fn migrate_set_value(v: &mut serde_json::Value) -> anyhow::Result<()> {
+    let version = v["version"].as_u64().unwrap_or(0) as u32;
+    if version > CURRENT_SET_VERSION {
+        return Err(anyhow!(
+            "set was saved by a newer midip (v{}); not loading",
+            version
+        ));
+    }
+    let mut cur = version;
+    while cur < CURRENT_SET_VERSION {
+        match cur {
+            0 => migrate_v0_to_v1(v),
+            _ => break,
+        }
+        cur += 1;
+    }
+    Ok(())
+}
+
 /// Serialize `set` to `<dir>/<slug>.json`. Returns the written path.
 pub fn save_set(dir: &Path, set: &Set) -> anyhow::Result<PathBuf> {
     std::fs::create_dir_all(dir).context("creating set store dir")?;
@@ -82,10 +138,13 @@ pub fn save_set(dir: &Path, set: &Set) -> anyhow::Result<PathBuf> {
 }
 
 /// Load a set from a JSON file, rehydrating each lane's static profile via its id.
+/// Runs the migration ladder before typed parse so old files (no version, no id) load correctly.
 pub fn load_set(path: &Path) -> anyhow::Result<Set> {
     let json =
         std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-    let dto: SetDto = serde_json::from_str(&json).context("deserializing set")?;
+    let mut value: serde_json::Value = serde_json::from_str(&json).context("parsing set JSON")?;
+    migrate_set_value(&mut value).context("migrating set")?;
+    let dto: SetDto = serde_json::from_value(value).context("deserializing set")?;
     let mut lanes = Vec::with_capacity(dto.lanes.len());
     for l in dto.lanes {
         let profile = profile_by_id(&l.profile_id)
@@ -104,6 +163,7 @@ pub fn load_set(path: &Path) -> anyhow::Result<Set> {
         bpm: dto.bpm,
         swing: dto.swing,
         lanes,
+        id: dto.id,
     })
 }
 
@@ -140,6 +200,76 @@ mod tests {
         dir
     }
 
+    /// A minimal v0 JSON: no version, no ids. Simulates a file saved before T2.
+    const OLD_SET_JSON_NO_VERSION: &str = r#"{
+        "name": "old jam",
+        "bpm": 120.0,
+        "swing": 0.5,
+        "lanes": [
+            {
+                "profile_id": "drums-sp404",
+                "pattern": {
+                    "name": "beat",
+                    "desc": "",
+                    "length": 1,
+                    "data": {"Drums": [[]]}
+                },
+                "mute": false,
+                "solo": false,
+                "transpose": 0,
+                "octave": 0
+            }
+        ]
+    }"#;
+
+    #[test]
+    fn migrate_v0_assigns_version_and_ids() {
+        let mut v: serde_json::Value = serde_json::from_str(OLD_SET_JSON_NO_VERSION).unwrap();
+        migrate_set_value(&mut v).unwrap();
+        assert_eq!(v["version"], 1);
+        assert!(
+            v["id"].as_str().map(|s| !s.is_empty()).unwrap_or(false),
+            "set id must be non-empty after migration"
+        );
+        // Each lane's pattern should also have a non-empty id
+        let lane_pat_id = &v["lanes"][0]["pattern"]["id"];
+        assert!(
+            lane_pat_id.as_str().map(|s| !s.is_empty()).unwrap_or(false),
+            "lane pattern id must be non-empty after migration"
+        );
+    }
+
+    #[test]
+    fn newer_version_is_rejected_not_misparsed() {
+        let mut v = serde_json::json!({
+            "version": 9999u32,
+            "name": "x",
+            "bpm": 120.0,
+            "swing": 0.5,
+            "lanes": []
+        });
+        assert!(
+            migrate_set_value(&mut v).is_err(),
+            "a future-version file must be rejected"
+        );
+    }
+
+    #[test]
+    fn already_v1_file_passes_through_unchanged() {
+        let id = persist::Id::generate(0xABCD, 1);
+        let mut v = serde_json::json!({
+            "version": 1u32,
+            "id": id.as_str(),
+            "name": "current",
+            "bpm": 120.0,
+            "swing": 0.5,
+            "lanes": []
+        });
+        migrate_set_value(&mut v).unwrap();
+        assert_eq!(v["version"], 1);
+        assert_eq!(v["id"].as_str().unwrap(), id.as_str());
+    }
+
     #[test]
     fn save_then_load_round_trips_a_set() {
         let dir = unique_dir("roundtrip");
@@ -165,7 +295,60 @@ mod tests {
         assert!(path.exists());
 
         let loaded = load_set(&path).unwrap();
-        assert_eq!(loaded, set);
+        // Ids are nil (not yet minted by ensure_id), so they survive the round-trip as nil.
+        assert_eq!(loaded.id, set.id);
+        assert_eq!(loaded.name, set.name);
+        assert_eq!(loaded.bpm, set.bpm);
+        assert_eq!(loaded.swing, set.swing);
+        assert_eq!(loaded.lanes.len(), set.lanes.len());
+        for (a, b) in loaded.lanes.iter().zip(set.lanes.iter()) {
+            assert_eq!(a.pattern, b.pattern);
+            assert_eq!(a.mute, b.mute);
+            assert_eq!(a.transpose, b.transpose);
+        }
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn load_old_file_without_version_succeeds_and_assigns_ids() {
+        // Write a raw v0 file (no version, no id) and verify load_set migrates it.
+        let dir = unique_dir("old-file");
+        // We need a valid profile_id; use one from default_profiles.
+        let profile_id = default_profiles()[0].id;
+        let old_json = format!(
+            r#"{{
+                "name": "legacy",
+                "bpm": 100.0,
+                "swing": 0.5,
+                "lanes": [{{
+                    "profile_id": "{}",
+                    "pattern": {{
+                        "name": "old",
+                        "desc": "",
+                        "length": 1,
+                        "data": {{"Drums": [[]]}}
+                    }},
+                    "mute": false,
+                    "solo": false,
+                    "transpose": 0,
+                    "octave": 0
+                }}]
+            }}"#,
+            profile_id
+        );
+        let path = dir.join("legacy.json");
+        std::fs::write(&path, &old_json).unwrap();
+
+        let loaded = load_set(&path).unwrap();
+        assert_eq!(loaded.name, "legacy");
+        // Migration assigns a non-nil id to the set
+        assert!(!loaded.id.is_nil(), "migrated set must have a non-nil id");
+        // And to the lane pattern
+        assert!(
+            !loaded.lanes[0].pattern.id.is_nil(),
+            "migrated lane pattern must have a non-nil id"
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }
