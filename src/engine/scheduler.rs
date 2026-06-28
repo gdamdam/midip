@@ -299,13 +299,33 @@ impl Sequencer {
     /// the same (or non-advancing) beat therefore have no effect on the queue —
     /// each absolute step's NoteOns are emitted at most once. Only when the beat
     /// advances to a new step does `tick` materialize it.
+    ///
+    /// A BACKWARD jump (`new_step < next_step`, e.g. a Link loop or rewind) is
+    /// intentionally IGNORED: the step sequencer does not rewind — it only ever
+    /// moves forward — so we never re-materialize a step already emitted.
+    ///
+    /// Forward-jump re-anchoring (#1/#5 interaction): when Link advances by more
+    /// than one step across a sync gap (or jumps the beat), we RE-ANCHOR
+    /// `last_step_at` to the scheduled fire time of `new_step - 1`. Without this,
+    /// the next `tick` would see a stale `last_step_at` far in the past and
+    /// greedily materialize a catch-up burst of every skipped step (ghost notes).
+    /// Re-anchoring makes the next tick materialize ONLY `new_step` at its
+    /// correct time, skipping the intervening steps without emitting them.
     pub fn sync_to_beat(&mut self, beat: f64, bpm: f64) {
         self.set.bpm = bpm;
         let new_step = step_from_beat(beat);
         self.current = new_step;
-        // Only move next_step forward; never re-materialize already-emitted steps.
+        // Only move next_step forward; never re-materialize already-emitted steps
+        // and never rewind on a backward jump.
         if new_step > self.next_step {
             self.next_step = new_step;
+            // Re-anchor the accumulated clock to (new_step - 1)'s fire time so the
+            // next tick fires only new_step (no back-fill of the skipped steps).
+            // `step_from_beat(beat) >= 1` here since new_step > next_step >= 0, so
+            // `new_step - 1` does not underflow; we still saturate defensively.
+            let dur = step_dur_micros(self.set.bpm);
+            let prev_step = new_step.saturating_sub(1) as u64;
+            self.last_step_at = Some(self.origin_micros + prev_step * dur);
         }
     }
 
@@ -1444,6 +1464,130 @@ mod sequencer_tests {
             noteoff_count, 1,
             "soloing another lane must release the silenced lane's held slide note"
         );
-        let _ = dur;
+    }
+
+    // --- Fix #1/#5 interaction: forward Link jump must not back-fill steps ----
+
+    /// A 4-step drum lane with a DISTINCT kick note per step so we can tell which
+    /// steps fired. Step 0 → note 36, step 1 → 37, step 2 → 38, step 3 → 39.
+    fn drum_lane_distinct_per_step() -> Lane {
+        let mut steps: Vec<Vec<DrumHit>> = vec![Vec::new(); 4];
+        for (i, step) in steps.iter_mut().enumerate() {
+            step.push(DrumHit { note: 36 + i as u8, vel: 100, prob: 1.0, ratchet: 1 });
+        }
+        Lane {
+            profile: T8_DRUMS,
+            pattern: Pattern {
+                name: "distinct".to_string(),
+                desc: String::new(),
+                length: 4,
+                data: PatternData::Drums(steps),
+            },
+            mute: false,
+            solo: false,
+            transpose: 0,
+            octave: 0,
+        }
+    }
+
+    #[test]
+    fn forward_link_jump_does_not_backfill_skipped_steps() {
+        // Ghost-step regression: a forward Link jump from step 0 to step 4 must
+        // NOT emit the notes for the skipped steps 1, 2, 3. The pattern has a
+        // distinct note on every step so a back-filled catch-up burst is visible.
+        let dur = step_dur_micros(120.0);
+        let mut seq = Sequencer::new(set_with(vec![drum_lane_distinct_per_step()]));
+        let mut sink = RecordingSink::new();
+        seq.play(0);
+
+        // Link reports beat 0.0 → step 0; tick fires step 0 (note 36).
+        seq.sync_to_beat(0.0, 120.0);
+        seq.tick(0, &mut sink);
+
+        // Link jumps forward to beat 1.0 → step 4 (skipping 1, 2, 3).
+        // step 4 wraps to local step 0 in the 4-step pattern → note 36 again.
+        seq.sync_to_beat(1.0, 120.0);
+        seq.tick(4 * dur, &mut sink);
+
+        let fired_notes: Vec<u8> = sink
+            .events
+            .iter()
+            .filter_map(|(_, m)| match m {
+                MidiMessage::NoteOn { note, .. } => Some(*note),
+                _ => None,
+            })
+            .collect();
+
+        // Steps 1, 2, 3 (notes 37, 38, 39) must NEVER have fired.
+        for ghost in [37u8, 38, 39] {
+            assert!(
+                !fired_notes.contains(&ghost),
+                "skipped step's note {ghost} was ghost-emitted; fired={fired_notes:?}"
+            );
+        }
+        // Step 0 fired (initial) and step 4 fired (wraps to note 36) → exactly two 36s.
+        let note36_count = fired_notes.iter().filter(|&&n| n == 36).count();
+        assert_eq!(
+            note36_count, 2,
+            "expected step 0 + step 4 (both note 36), got {fired_notes:?}"
+        );
+    }
+
+    #[test]
+    fn forward_step_by_step_link_sync_advances_normally() {
+        // Guard against over-skipping: a one-step-at-a-time forward sync must
+        // still fire each step's distinct note in order.
+        let dur = step_dur_micros(120.0);
+        let mut seq = Sequencer::new(set_with(vec![drum_lane_distinct_per_step()]));
+        let mut sink = RecordingSink::new();
+        seq.play(0);
+
+        // beat for step k is k/4. Drive steps 0..=3 one at a time.
+        for step in 0..4u64 {
+            let beat = step as f64 / 4.0;
+            seq.sync_to_beat(beat, 120.0);
+            seq.tick(step * dur, &mut sink);
+        }
+
+        let fired_notes: Vec<u8> = sink
+            .events
+            .iter()
+            .filter_map(|(_, m)| match m {
+                MidiMessage::NoteOn { note, .. } => Some(*note),
+                _ => None,
+            })
+            .collect();
+        // Every step's note must appear exactly once, in order.
+        assert_eq!(fired_notes, vec![36, 37, 38, 39], "step-by-step must fire all steps");
+    }
+
+    #[test]
+    fn backward_sync_to_beat_is_a_noop() {
+        // A backward Link jump (loop/rewind) must not rewind the sequencer or
+        // re-emit an already-played step.
+        let dur = step_dur_micros(120.0);
+        let mut seq = Sequencer::new(set_with(vec![drum_lane_distinct_per_step()]));
+        let mut sink = RecordingSink::new();
+        seq.play(0);
+
+        // Advance to step 2 (beat 0.5) and fire it.
+        seq.sync_to_beat(0.5, 120.0); // step 2
+        seq.tick(2 * dur, &mut sink);
+        assert_eq!(seq.current_step(), 2);
+
+        let before = sink.events.len();
+
+        // Backward jump to step 0 (beat 0.0). next_step must NOT rewind.
+        seq.sync_to_beat(0.0, 120.0);
+        // current is allowed to reflect the reported beat, but next_step must stay
+        // ahead so no step is re-materialized.
+        seq.tick(2 * dur, &mut sink);
+
+        // No new events emitted by the backward jump + tick.
+        assert_eq!(
+            sink.events.len(),
+            before,
+            "backward sync_to_beat must be a no-op (no re-emitted steps)"
+        );
     }
 }
