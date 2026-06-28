@@ -127,16 +127,14 @@ impl Sequencer {
         self.playing = true;
         self.origin_micros = at_micros;
         self.current = 0;
+        self.next_step = 0;
         self.queue.clear();
         for a in self.active.iter_mut() {
             *a = None;
         }
-        // Eagerly materialize step 0 so the caller's first tick (even at t=0) sees
-        // its events ready to flush. next_step advances to 1 after materialization.
-        let dur = step_dur_micros(self.set.bpm);
-        self.next_step = 0;
-        self.materialize_step(0, dur);
-        self.next_step = 1;
+        // Step 0 (and all other steps) are materialized by tick() once
+        // now_micros >= step_start. This avoids double-emit when the first
+        // tick lands exactly on the origin (step_start == now_micros).
     }
 
     /// Halt the sequencer, immediately sending NoteOff for every active melodic note.
@@ -239,10 +237,12 @@ impl Sequencer {
         let dur = step_dur_micros(self.set.bpm);
         let mut advanced: Option<usize> = None;
 
-        // Materialize every step whose start time has been reached.
+        // Materialize every step whose start time has been reached (inclusive).
+        // Break only when step_start is strictly in the future so that a step
+        // landing exactly on now_micros is not deferred to the next tick.
         loop {
             let step_start = self.origin_micros + self.next_step as u64 * dur;
-            if step_start >= now_micros {
+            if step_start > now_micros {
                 break;
             }
             let step = self.next_step;
@@ -655,8 +655,10 @@ mod sequencer_tests {
         let mut seq = Sequencer::new(set_with(vec![drum_lane_four_on_floor()]));
         let mut sink = RecordingSink::new();
         seq.play(0);
-        // one bar = 16 steps * 125_000 = 2_000_000 µs; run a hair past.
-        run(&mut seq, &mut sink, 16 * dur, 1_000);
+        // one bar = 16 steps * 125_000 = 2_000_000 µs. Stop before step 16
+        // (which is bar 2 beat 1) — use 16*dur - 1 so the boundary tick at
+        // exactly 16*dur is not reached (the fixed scheduler is inclusive).
+        run(&mut seq, &mut sink, 16 * dur - 1, 1_000);
 
         // collect kick NoteOn times.
         let ons: Vec<u64> = sink
@@ -1045,6 +1047,54 @@ mod sequencer_tests {
             .map(|(t, _)| *t)
             .collect();
         assert_eq!(offs, vec![gate, sub + gate, 2 * sub + gate]);
+    }
+
+    // --- (j) coarse-tick boundary regression --------------------------------
+
+    /// Drive the sequencer with ticks landing EXACTLY on step boundaries and assert:
+    /// 1. Step 0 is emitted exactly once after play(t) + tick(t).
+    /// 2. Each subsequent step is materialized on the tick whose time == step_start
+    ///    (i.e. not deferred to a later tick).
+    #[test]
+    fn step_at_exact_tick_boundary_is_not_deferred() {
+        let dur = step_dur_micros(120.0); // 125_000
+        // Four-on-floor kick at steps 0, 4, 8, 12 — gives us clear NoteOn timestamps.
+        let mut seq = Sequencer::new(set_with(vec![drum_lane_four_on_floor()]));
+        let mut sink = RecordingSink::new();
+        let origin = 1_000_000u64; // non-zero origin to test general case
+
+        seq.play(origin);
+
+        // Tick exactly at each step boundary for the first 5 steps (0..=4),
+        // which covers steps 0 and 4 — both have kick hits in four-on-floor.
+        for i in 0..=4usize {
+            let boundary = origin + i as u64 * dur;
+            seq.tick(boundary, &mut sink);
+        }
+
+        // Collect kick NoteOn timestamps.
+        let ons: Vec<u64> = sink
+            .events
+            .iter()
+            .filter(|(_, m)| *m == MidiMessage::NoteOn { channel: 9, note: 36, vel: 100 })
+            .map(|(t, _)| *t)
+            .collect();
+
+        // Step 0 (at origin) must appear exactly once — not zero (deferred) and not twice (double-emit).
+        let step0_count = ons.iter().filter(|&&t| t == origin).count();
+        assert_eq!(step0_count, 1, "step 0 must be emitted exactly once, got {step0_count}");
+
+        // Steps 0 and 4 fall on exact boundaries (steps 1,2,3 have no kick hit).
+        // Step 0 NoteOn must be at origin, step 4 NoteOn at origin + 4*dur.
+        assert!(
+            ons.contains(&origin),
+            "step 0 NoteOn at boundary {origin} was deferred; ons={ons:?}"
+        );
+        assert!(
+            ons.contains(&(origin + 4 * dur)),
+            "step 4 NoteOn at boundary {} was deferred; ons={ons:?}",
+            origin + 4 * dur
+        );
     }
 
     #[test]
