@@ -401,10 +401,10 @@ struct PortSink {
 
 /// Distinct-port plan derived purely from profiles — NO hardware access.
 ///
-/// Returns `(ports, lane_to_port)` where `ports[i].port_match` is the i-th distinct
-/// `port_match` in first-seen order, and `lane_to_port[lane]` is the index into `ports`
-/// for that lane. Lanes sharing a `port_match` map to the SAME port index — this is the
-/// dedup that guarantees one connection per physical port. Mirrors the old `unique_ports`.
+/// Returns `(distinct, lane_to_port)` where `distinct[i]` is the i-th distinct `port_match`
+/// substring in first-seen order, and `lane_to_port[lane]` is the index into `distinct` for
+/// that lane. Lanes sharing a `port_match` map to the SAME port index — this is the dedup
+/// that guarantees one connection per physical port. Mirrors the old `unique_ports`.
 fn map_lanes_to_ports(profiles: &[DeviceProfile; 3]) -> (Vec<&'static str>, [usize; 3]) {
     let mut distinct: Vec<&'static str> = Vec::new();
     let mut lane_to_port = [0usize; 3];
@@ -669,6 +669,10 @@ pub fn spawn_engine(
                     PortUpdate::Disconnected { idx } => {
                         // P1: release this port's sounding notes BEFORE swapping to NullSink,
                         // so the NoteOffs go out the still-live connection (not into the void).
+                        // `release_lanes` selects by lane, but the fanout broadcasts the NoteOffs to
+                        // every port (deliberate, harmless: devices ignore notes on channels they
+                        // never sounded — matches the pre-existing per-port fanout model; M4 routing
+                        // will make sends port-targeted).
                         let lanes = lanes_of(&lane_to_port, idx);
                         let mut fanout = PortFanoutSink {
                             ports: &mut port_sinks,
