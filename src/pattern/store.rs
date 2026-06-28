@@ -294,19 +294,17 @@ pub fn validate_and_repair(set: &mut Set) -> Vec<String> {
     notes
 }
 
-/// Returns the path of the autosave recovery file (never inside the sets dir).
-pub fn recovery_path() -> PathBuf {
-    crate::config::data_dir()
-        .join("recovery")
-        .join("autosave.json")
+/// Returns the path of the autosave recovery file under `dir` (never inside the sets dir).
+pub fn recovery_path(dir: &Path) -> PathBuf {
+    dir.join("recovery").join("autosave.json")
 }
 
-/// Write a snapshot of `set` to the recovery file atomically.
+/// Write a snapshot of `set` to the recovery file under `dir` atomically.
 ///
 /// Takes `&Set` (not `&mut Set`) so it never mints ids or mutates the live document.
 /// The recovery file is a transient crash-recovery snapshot, not a deliberate save.
-pub fn save_recovery(set: &Set) -> anyhow::Result<()> {
-    let path = recovery_path();
+pub fn save_recovery(dir: &Path, set: &Set) -> anyhow::Result<()> {
+    let path = recovery_path(dir);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).context("creating recovery dir")?;
     }
@@ -317,9 +315,9 @@ pub fn save_recovery(set: &Set) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Remove the recovery file. Best-effort: "not found" errors are silently ignored.
-pub fn clear_recovery() {
-    let path = recovery_path();
+/// Remove the recovery file under `dir`. Best-effort: "not found" errors are silently ignored.
+pub fn clear_recovery(dir: &Path) {
+    let path = recovery_path(dir);
     if let Err(e) = std::fs::remove_file(&path) {
         // Only ignore "not found"; surface other errors as a debug note (no panic).
         if e.kind() != std::io::ErrorKind::NotFound {
@@ -328,9 +326,9 @@ pub fn clear_recovery() {
     }
 }
 
-/// Returns true when the recovery file exists on disk.
-pub fn recovery_exists() -> bool {
-    recovery_path().exists()
+/// Returns true when the recovery file under `dir` exists on disk.
+pub fn recovery_exists(dir: &Path) -> bool {
+    recovery_path(dir).exists()
 }
 
 /// All `*.json` set files in `dir` (non-recursive). Empty list if the dir is absent.
@@ -874,8 +872,11 @@ mod tests {
 
     #[test]
     fn save_recovery_writes_to_recovery_path_not_set_dir() {
-        // Verify recovery_path() ends in recovery/autosave.json.
-        let rpath = recovery_path();
+        // Unique temp dir so this test never shares a path with another.
+        let dir = unique_dir("recovery-path");
+
+        // Verify recovery_path(dir) ends in recovery/autosave.json.
+        let rpath = recovery_path(&dir);
         assert!(
             rpath.ends_with("recovery/autosave.json"),
             "recovery_path must end with recovery/autosave.json but was: {}",
@@ -884,36 +885,40 @@ mod tests {
 
         // save_recovery then recovery_exists → true.
         let set = Set::default_set(default_profiles());
-        save_recovery(&set).unwrap();
+        save_recovery(&dir, &set).unwrap();
         assert!(
-            recovery_exists(),
+            recovery_exists(&dir),
             "recovery_exists must be true after save_recovery"
         );
 
-        // The written file must NOT be inside data_dir()/sets.
-        let sets_dir = crate::config::data_dir().join("sets");
+        // The written file must NOT be inside the sets dir.
+        let sets_dir = dir.join("sets");
         assert!(
             !rpath.starts_with(&sets_dir),
             "recovery file must not be in the sets dir"
         );
 
         // Clean up.
-        clear_recovery();
+        clear_recovery(&dir);
         assert!(
-            !recovery_exists(),
+            !recovery_exists(&dir),
             "recovery_exists must be false after clear_recovery"
         );
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn clear_recovery_removes_file() {
+        // Unique temp dir so this test never shares a path with another.
+        let dir = unique_dir("recovery-clear");
         let set = Set::default_set(default_profiles());
-        save_recovery(&set).unwrap();
-        assert!(recovery_exists());
-        clear_recovery();
+        save_recovery(&dir, &set).unwrap();
+        assert!(recovery_exists(&dir));
+        clear_recovery(&dir);
         assert!(
-            !recovery_exists(),
+            !recovery_exists(&dir),
             "recovery file must be gone after clear_recovery"
         );
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

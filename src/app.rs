@@ -659,7 +659,7 @@ impl App {
                         self.set_status("Saved");
                         self.dirty = false;
                         // Deliberate save supersedes the recovery snapshot.
-                        crate::pattern::store::clear_recovery();
+                        crate::pattern::store::clear_recovery(&crate::config::data_dir());
                     }
                     Err(e) => self.set_status(format!("Save failed: {}", e)),
                 }
@@ -3321,12 +3321,17 @@ mod tests {
     #[test]
     fn deliberate_save_clears_recovery() {
         // Write a recovery file, then call save via Action::Save, verify recovery gone.
-        // This test writes to the real data dir — acceptable since clear_recovery is
-        // best-effort and recovery/ is always transient.
+        // The reducer hardcodes `config::data_dir()`, so this test must use the same dir
+        // for its recovery calls. Writing to the real data dir is acceptable since
+        // recovery/ is always transient and clear_recovery is best-effort.
         use crate::pattern::store;
+        let data_dir = crate::config::data_dir();
         let set = Set::default_set(profiles::default_profiles());
-        store::save_recovery(&set).unwrap();
-        assert!(store::recovery_exists(), "recovery must exist before Save");
+        store::save_recovery(&data_dir, &set).unwrap();
+        assert!(
+            store::recovery_exists(&data_dir),
+            "recovery must exist before Save"
+        );
 
         let mut app = new_app();
         // Action::Save calls clear_recovery on success. Let it run.
@@ -3336,11 +3341,11 @@ mod tests {
         if !app.dirty {
             // dirty == false means save succeeded
             assert!(
-                !store::recovery_exists(),
+                !store::recovery_exists(&data_dir),
                 "recovery must be cleared after a successful deliberate Save"
             );
         }
         // Clean up in case Save failed and recovery is still there.
-        store::clear_recovery();
+        store::clear_recovery(&data_dir);
     }
 }
