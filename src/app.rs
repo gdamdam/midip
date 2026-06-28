@@ -4,13 +4,13 @@
 //! `UiCommand`s that must be forwarded to the engine (e.g. pattern edits emit
 //! `LoadPattern`). Undo/redo snapshot the whole `Set`.
 
+use crate::devices::profiles;
 use crate::engine::{EngineEvent, UiCommand};
 use crate::pattern::euclid;
-use crate::pattern::library::{Library, LibRole};
+use crate::pattern::library::{LibRole, Library};
 use crate::pattern::model::{
     DrumHit, DrumStep, Lane, LaneKind, MelodicNote, MelodicStep, Pattern, PatternData, Set,
 };
-use crate::devices::profiles;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Mode {
@@ -61,12 +61,12 @@ pub enum Action {
     TempoCommit,
     TempoCancel,
     AdjustBpm(i32),
-    AdjustSwing(i8),       // transport swing param (distinct from AdjustLen = melodic note len)
-    AdjustPatternLen(i8),  // resize the focused lane's pattern length
-    AdjustProb(i8),        // per-step probability on the cursor cell (±0.1 per unit)
-    AdjustRatchet(i8),     // per-step ratchet count on the cursor cell (clamped 1..=8)
+    AdjustSwing(i8), // transport swing param (distinct from AdjustLen = melodic note len)
+    AdjustPatternLen(i8), // resize the focused lane's pattern length
+    AdjustProb(i8),  // per-step probability on the cursor cell (±0.1 per unit)
+    AdjustRatchet(i8), // per-step ratchet count on the cursor cell (clamped 1..=8)
     Euclid { dp: i8, dr: i8 }, // drums: dp = ±pulses for focused voice, dr = ±rotation
-    Panic,                     // all-notes-off; no undo snapshot, no Set mutation
+    Panic,           // all-notes-off; no undo snapshot, no Set mutation
     OpenLibrary,
     CloseLibrary,
     LibNav(i32, i32),
@@ -133,7 +133,12 @@ const MEL_DEFAULT_VEL: f32 = 1.0;
 impl App {
     pub fn new(set: Set, library: Library) -> App {
         let n = set.lanes.len();
-        let role = role_for_profile(set.lanes.get(0).map(|l| l.profile.id).unwrap_or("t8-drums"));
+        let role = role_for_profile(
+            set.lanes
+                .first()
+                .map(|l| l.profile.id)
+                .unwrap_or("t8-drums"),
+        );
         App {
             set,
             focus: 0,
@@ -188,7 +193,11 @@ impl App {
         match action {
             Action::TogglePlay => {
                 self.playing = !self.playing;
-                cmds.push(if self.playing { UiCommand::Play } else { UiCommand::Stop });
+                cmds.push(if self.playing {
+                    UiCommand::Play
+                } else {
+                    UiCommand::Stop
+                });
             }
             Action::FocusNext => self.set_focus((self.focus + 1) % self.set.lanes.len()),
             Action::FocusPrev => {
@@ -242,7 +251,10 @@ impl App {
                 let lane = &mut self.set.lanes[self.focus];
                 lane.octave = (lane.octave as i32 + d as i32).clamp(-4, 4) as i8;
                 let new_octave = lane.octave;
-                cmds.push(UiCommand::SetOctave { lane: self.focus, octave: new_octave });
+                cmds.push(UiCommand::SetOctave {
+                    lane: self.focus,
+                    octave: new_octave,
+                });
                 cmds.push(self.load_focused());
             }
             Action::ToggleSlide => {
@@ -292,14 +304,20 @@ impl App {
                 lane.mute = !lane.mute;
                 let (n, muted) = (self.focus, self.set.lanes[self.focus].mute);
                 self.status = format!("Lane {} {}", n, if muted { "muted" } else { "unmuted" });
-                cmds.push(UiCommand::Mute { lane: self.focus, on: self.set.lanes[self.focus].mute });
+                cmds.push(UiCommand::Mute {
+                    lane: self.focus,
+                    on: self.set.lanes[self.focus].mute,
+                });
             }
             Action::ToggleSolo => {
                 let lane = &mut self.set.lanes[self.focus];
                 lane.solo = !lane.solo;
                 let (n, soloed) = (self.focus, self.set.lanes[self.focus].solo);
                 self.status = format!("Lane {} {}", n, if soloed { "solo" } else { "unsolo" });
-                cmds.push(UiCommand::Solo { lane: self.focus, on: self.set.lanes[self.focus].solo });
+                cmds.push(UiCommand::Solo {
+                    lane: self.focus,
+                    on: self.set.lanes[self.focus].solo,
+                });
             }
             Action::SetBpm(bpm) => {
                 self.set.bpm = bpm;
@@ -308,7 +326,11 @@ impl App {
             Action::Tap => cmds.push(UiCommand::Tap),
             Action::ToggleLink => {
                 self.link_enabled = !self.link_enabled;
-                self.status = if self.link_enabled { "Link on".into() } else { "Link off".into() };
+                self.status = if self.link_enabled {
+                    "Link on".into()
+                } else {
+                    "Link off".into()
+                };
                 cmds.push(UiCommand::ToggleLink(self.link_enabled));
             }
             Action::OpenTempo => {
@@ -352,8 +374,7 @@ impl App {
             Action::AdjustPatternLen(d) => {
                 self.snapshot();
                 let lane = &mut self.set.lanes[self.focus];
-                let new_len =
-                    (lane.pattern.length as i32 + d as i32).clamp(1, 64) as usize;
+                let new_len = (lane.pattern.length as i32 + d as i32).clamp(1, 64) as usize;
                 match &mut lane.pattern.data {
                     PatternData::Drums(steps) => steps.resize(new_len, Vec::new()),
                     PatternData::Melodic(steps) => steps.resize(new_len, Option::None),
@@ -395,7 +416,10 @@ impl App {
                 if let Some(backup) = self.audition.take() {
                     // Cancel audition: restore original pattern.
                     self.set.lanes[self.focus].pattern = backup.clone();
-                    cmds.push(UiCommand::LoadPattern { lane: self.focus, pattern: backup });
+                    cmds.push(UiCommand::LoadPattern {
+                        lane: self.focus,
+                        pattern: backup,
+                    });
                     self.status = "Audition cancelled".into();
                 }
                 self.mode = Mode::Edit;
@@ -406,7 +430,10 @@ impl App {
                 if self.audition.is_some() {
                     if let Some(pat) = self.selected_lib_pattern().cloned() {
                         self.set.lanes[self.focus].pattern = pat.clone();
-                        cmds.push(UiCommand::LoadPattern { lane: self.focus, pattern: pat });
+                        cmds.push(UiCommand::LoadPattern {
+                            lane: self.focus,
+                            pattern: pat,
+                        });
                     }
                 }
             }
@@ -419,7 +446,10 @@ impl App {
                     self.status = format!("Loaded {}", name);
                     self.snapshot();
                     self.set.lanes[self.focus].pattern = pat.clone();
-                    cmds.push(UiCommand::LoadPattern { lane: self.focus, pattern: pat });
+                    cmds.push(UiCommand::LoadPattern {
+                        lane: self.focus,
+                        pattern: pat,
+                    });
                     self.mode = Mode::Edit;
                 }
             }
@@ -431,14 +461,17 @@ impl App {
                 if let Some(pat) = self.selected_lib_pattern().cloned() {
                     self.status = format!("Auditioning {}", pat.name);
                     self.set.lanes[self.focus].pattern = pat.clone();
-                    cmds.push(UiCommand::LoadPattern { lane: self.focus, pattern: pat });
+                    cmds.push(UiCommand::LoadPattern {
+                        lane: self.focus,
+                        pattern: pat,
+                    });
                     // Do NOT mark dirty — this is a preview.
                 }
             }
             Action::OpenSetBrowser => {
-                self.set_files = crate::pattern::store::list_sets(
-                    &crate::config::data_dir().join("sets")
-                ).unwrap_or_default();
+                self.set_files =
+                    crate::pattern::store::list_sets(&crate::config::data_dir().join("sets"))
+                        .unwrap_or_default();
                 self.set_sel = 0;
                 self.mode = Mode::SetBrowser;
             }
@@ -485,7 +518,11 @@ impl App {
                 }
             }
             Action::Help => {
-                self.mode = if self.mode == Mode::Help { Mode::Edit } else { Mode::Help };
+                self.mode = if self.mode == Mode::Help {
+                    Mode::Edit
+                } else {
+                    Mode::Help
+                };
             }
             Action::Quit => {
                 if self.playing && !self.quit_armed {
@@ -507,7 +544,11 @@ impl App {
                 self.playhead = step;
                 self.bar = bar;
             }
-            EngineEvent::LinkStatus { enabled, tempo, peers } => {
+            EngineEvent::LinkStatus {
+                enabled,
+                tempo,
+                peers,
+            } => {
                 let prev = self.prev_peers;
                 self.link_enabled = enabled;
                 self.link_tempo = tempo;
@@ -523,7 +564,11 @@ impl App {
                     }
                 }
             }
-            EngineEvent::DeviceStatus { lane, connected, port } => {
+            EngineEvent::DeviceStatus {
+                lane,
+                connected,
+                port,
+            } => {
                 if let Some(slot) = self.device_status.get_mut(lane) {
                     *slot = (connected, port.clone());
                 }
@@ -536,7 +581,11 @@ impl App {
                 self.status = format!(
                     "MIDI: {} {}",
                     label,
-                    if connected { "connected" } else { "disconnected" }
+                    if connected {
+                        "connected"
+                    } else {
+                        "disconnected"
+                    }
                 );
             }
         }
@@ -551,7 +600,7 @@ impl App {
         self.lib_genre = 0;
         self.lib_pattern = 0;
         self.euclid_rotation = 0; // focus changed -> reset euclid rotation
-        self.step_scroll = 0;     // reset horizontal scroll on lane change
+        self.step_scroll = 0; // reset horizontal scroll on lane change
         self.clamp_cursor();
     }
 
@@ -599,11 +648,11 @@ impl App {
     pub fn context_label(&self) -> &'static str {
         match self.mode {
             Mode::Edit => match self.focused_kind() {
-                LaneKind::Drums   => "EDIT DRUM",
+                LaneKind::Drums => "EDIT DRUM",
                 LaneKind::Melodic => "EDIT MELODIC",
             },
-            Mode::Library    => "LIBRARY",
-            Mode::Help       => "HELP",
+            Mode::Library => "LIBRARY",
+            Mode::Help => "HELP",
             Mode::TempoEntry => "TEMPO",
             Mode::SetBrowser => "OPEN SET",
         }
@@ -667,7 +716,12 @@ impl App {
                     if let Some(pos) = step.iter().position(|h| h.note == note) {
                         step.remove(pos);
                     } else {
-                        step.push(DrumHit { note, vel: 100, prob: 1.0, ratchet: 1 });
+                        step.push(DrumHit {
+                            note,
+                            vel: 100,
+                            prob: 1.0,
+                            ratchet: 1,
+                        });
                     }
                 }
             }
@@ -677,7 +731,14 @@ impl App {
                         *slot = Option::None;
                     } else {
                         let len = lane.profile.gate_fraction;
-                        *slot = Some(MelodicNote { semi: 0, vel: MEL_DEFAULT_VEL, slide: false, len, prob: 1.0, ratchet: 1 });
+                        *slot = Some(MelodicNote {
+                            semi: 0,
+                            vel: MEL_DEFAULT_VEL,
+                            slide: false,
+                            len,
+                            prob: 1.0,
+                            ratchet: 1,
+                        });
                     }
                 }
             }
@@ -699,7 +760,10 @@ impl App {
         match &mut lane.pattern.data {
             PatternData::Drums(steps) => {
                 let note = profiles::DRUM_VOICES[row].note;
-                if let Some(hit) = steps.get_mut(col).and_then(|s| s.iter_mut().find(|h| h.note == note)) {
+                if let Some(hit) = steps
+                    .get_mut(col)
+                    .and_then(|s| s.iter_mut().find(|h| h.note == note))
+                {
                     hit.prob = (hit.prob + d as f32 * 0.1).clamp(0.0, 1.0);
                 }
             }
@@ -725,7 +789,10 @@ impl App {
         match &mut lane.pattern.data {
             PatternData::Drums(steps) => {
                 let note = profiles::DRUM_VOICES[row].note;
-                if let Some(hit) = steps.get_mut(col).and_then(|s| s.iter_mut().find(|h| h.note == note)) {
+                if let Some(hit) = steps
+                    .get_mut(col)
+                    .and_then(|s| s.iter_mut().find(|h| h.note == note))
+                {
                     hit.ratchet = (hit.ratchet as i16 + d as i16).clamp(1, 8) as u8;
                 }
             }
@@ -746,7 +813,10 @@ impl App {
         match &self.set.lanes[self.focus].pattern.data {
             PatternData::Drums(steps) => {
                 let note = profiles::DRUM_VOICES[row].note;
-                steps.get(col).map(|s| s.iter().any(|h| h.note == note)).unwrap_or(false)
+                steps
+                    .get(col)
+                    .map(|s| s.iter().any(|h| h.note == note))
+                    .unwrap_or(false)
             }
             PatternData::Melodic(steps) => {
                 matches!(steps.get(col), Some(Some(_)))
@@ -761,15 +831,15 @@ impl App {
         match &self.set.lanes[self.focus].pattern.data {
             PatternData::Drums(steps) => {
                 let note = profiles::DRUM_VOICES[row].note;
-                steps.get(col)
+                steps
+                    .get(col)
                     .and_then(|s| s.iter().find(|h| h.note == note))
                     .map(|h| h.vel)
             }
-            PatternData::Melodic(steps) => {
-                steps.get(col)
-                    .and_then(|s| s.as_ref())
-                    .map(|n| (n.vel.clamp(0.0, 1.3) * 97.0) as u8)
-            }
+            PatternData::Melodic(steps) => steps
+                .get(col)
+                .and_then(|s| s.as_ref())
+                .map(|n| (n.vel.clamp(0.0, 1.3) * 97.0) as u8),
         }
     }
 
@@ -780,15 +850,15 @@ impl App {
         match &self.set.lanes[self.focus].pattern.data {
             PatternData::Drums(steps) => {
                 let note = profiles::DRUM_VOICES[row].note;
-                steps.get(col)
+                steps
+                    .get(col)
                     .and_then(|s| s.iter().find(|h| h.note == note))
                     .map(|h| (h.prob * 100.0).round() as u32)
             }
-            PatternData::Melodic(steps) => {
-                steps.get(col)
-                    .and_then(|s| s.as_ref())
-                    .map(|n| (n.prob * 100.0).round() as u32)
-            }
+            PatternData::Melodic(steps) => steps
+                .get(col)
+                .and_then(|s| s.as_ref())
+                .map(|n| (n.prob * 100.0).round() as u32),
         }
     }
 
@@ -799,14 +869,13 @@ impl App {
         match &self.set.lanes[self.focus].pattern.data {
             PatternData::Drums(steps) => {
                 let note = profiles::DRUM_VOICES[row].note;
-                steps.get(col)
+                steps
+                    .get(col)
                     .and_then(|s| s.iter().find(|h| h.note == note))
                     .map(|h| h.ratchet)
             }
             PatternData::Melodic(steps) => {
-                steps.get(col)
-                    .and_then(|s| s.as_ref())
-                    .map(|n| n.ratchet)
+                steps.get(col).and_then(|s| s.as_ref()).map(|n| n.ratchet)
             }
         }
     }
@@ -848,8 +917,15 @@ impl App {
                 let present = step.iter().position(|h| h.note == voice_note);
                 let want = mask.get(i).copied().unwrap_or(false);
                 match (present, want) {
-                    (Option::None, true) => step.push(DrumHit { note: voice_note, vel: 100, prob: 1.0, ratchet: 1 }),
-                    (Some(pos), false) => { step.remove(pos); }
+                    (Option::None, true) => step.push(DrumHit {
+                        note: voice_note,
+                        vel: 100,
+                        prob: 1.0,
+                        ratchet: 1,
+                    }),
+                    (Some(pos), false) => {
+                        step.remove(pos);
+                    }
                     _ => {} // already in the desired state; leave it (and other voices) untouched.
                 }
             }
@@ -1022,7 +1098,11 @@ impl App {
         // dx: column switch (Left=-1 → Genre, Right=+1 → Pattern)
         // dy: move selection within the focused column
         if dx != 0 {
-            self.lib_col = if dx > 0 { LibCol::Pattern } else { LibCol::Genre };
+            self.lib_col = if dx > 0 {
+                LibCol::Pattern
+            } else {
+                LibCol::Genre
+            };
             // Switching to Genre resets pattern selection so the two are in sync.
             if self.lib_col == LibCol::Genre {
                 self.lib_pattern = 0;
@@ -1036,21 +1116,22 @@ impl App {
                     if genre_count == 0 {
                         return;
                     }
-                    self.lib_genre = (self.lib_genre as i32 + dy)
-                        .clamp(0, genre_count as i32 - 1) as usize;
+                    self.lib_genre =
+                        (self.lib_genre as i32 + dy).clamp(0, genre_count as i32 - 1) as usize;
                     // Changing genre always resets pattern selection.
                     self.lib_pattern = 0;
                 }
                 LibCol::Pattern => {
-                    let pat_count = self.current_genre_map()
+                    let pat_count = self
+                        .current_genre_map()
                         .get_index(self.lib_genre)
                         .map(|(_, v)| v.len())
                         .unwrap_or(0);
                     if pat_count == 0 {
                         return;
                     }
-                    self.lib_pattern = (self.lib_pattern as i32 + dy)
-                        .clamp(0, pat_count as i32 - 1) as usize;
+                    self.lib_pattern =
+                        (self.lib_pattern as i32 + dy).clamp(0, pat_count as i32 - 1) as usize;
                 }
             }
         }
@@ -1078,33 +1159,58 @@ mod tests {
     use super::*;
     use crate::devices::profiles;
     use crate::engine::UiCommand;
-    use crate::pattern::library::{GenreMap, Library, LibRole};
-    use crate::pattern::model::{
-        DrumHit, MelodicNote, Pattern, PatternData, Set,
-    };
+    use crate::pattern::library::{GenreMap, LibRole, Library};
+    use crate::pattern::model::{DrumHit, MelodicNote, Pattern, PatternData, Set};
 
     /// Minimal in-memory library (one genre, one pattern per role) for deterministic tests.
     fn test_library() -> Library {
         let mut drums: GenreMap = GenreMap::new();
         let mut dsteps = vec![Vec::new(); 16];
-        dsteps[2] = vec![DrumHit { note: 38, vel: 90, prob: 1.0, ratchet: 1 }];
+        dsteps[2] = vec![DrumHit {
+            note: 38,
+            vel: 90,
+            prob: 1.0,
+            ratchet: 1,
+        }];
         drums.insert(
             "techno".into(),
-            vec![Pattern { name: "lib-drum".into(), desc: String::new(), length: 16, data: PatternData::Drums(dsteps) }],
+            vec![Pattern {
+                name: "lib-drum".into(),
+                desc: String::new(),
+                length: 16,
+                data: PatternData::Drums(dsteps),
+            }],
         );
 
         let mut bass: GenreMap = GenreMap::new();
         let mut bsteps = vec![None; 16];
-        bsteps[0] = Some(MelodicNote { semi: 3, vel: 1.0, slide: false, len: 0.5, prob: 1.0, ratchet: 1 });
+        bsteps[0] = Some(MelodicNote {
+            semi: 3,
+            vel: 1.0,
+            slide: false,
+            len: 0.5,
+            prob: 1.0,
+            ratchet: 1,
+        });
         bass.insert(
             "acid".into(),
-            vec![Pattern { name: "lib-bass".into(), desc: String::new(), length: 16, data: PatternData::Melodic(bsteps) }],
+            vec![Pattern {
+                name: "lib-bass".into(),
+                desc: String::new(),
+                length: 16,
+                data: PatternData::Melodic(bsteps),
+            }],
         );
 
         let mut synth: GenreMap = GenreMap::new();
         synth.insert(
             "dub".into(),
-            vec![Pattern { name: "lib-synth".into(), desc: String::new(), length: 16, data: PatternData::Melodic(vec![None; 16]) }],
+            vec![Pattern {
+                name: "lib-synth".into(),
+                desc: String::new(),
+                length: 16,
+                data: PatternData::Melodic(vec![None; 16]),
+            }],
         );
 
         Library { drums, bass, synth }
@@ -1132,7 +1238,7 @@ mod tests {
     fn cursor_clamps_to_grid() {
         let mut app = new_app();
         app.apply(Action::FocusLane(0)); // drums
-        // Move far up/left -> clamp to 0,0.
+                                         // Move far up/left -> clamp to 0,0.
         app.apply(Action::MoveCursor(-50, -50));
         assert_eq!((app.cur_row, app.cur_col), (0, 0));
         // Move far right/down -> clamp to (rows-1, cols-1).
@@ -1158,7 +1264,9 @@ mod tests {
         app.apply(Action::MoveCursor(0, 3)); // col 3, voice 0 (note 36)
         let cmds = app.apply(Action::ToggleStep);
         // Adds a hit and emits a LoadPattern command.
-        assert!(cmds.iter().any(|c| matches!(c, UiCommand::LoadPattern { lane: 0, .. })));
+        assert!(cmds
+            .iter()
+            .any(|c| matches!(c, UiCommand::LoadPattern { lane: 0, .. })));
         if let PatternData::Drums(steps) = &app.focused_lane().pattern.data {
             assert_eq!(steps[3].len(), 1);
             assert_eq!(steps[3][0].note, profiles::DRUM_VOICES[0].note);
@@ -1234,7 +1342,9 @@ mod tests {
         app.apply(Action::FocusLane(0)); // drums; lib_role -> Drums
         app.apply(Action::OpenLibrary);
         let cmds = app.apply(Action::LibLoad);
-        assert!(cmds.iter().any(|c| matches!(c, UiCommand::LoadPattern { lane: 0, .. })));
+        assert!(cmds
+            .iter()
+            .any(|c| matches!(c, UiCommand::LoadPattern { lane: 0, .. })));
         assert_eq!(app.focused_lane().pattern.name, "lib-drum");
     }
 
@@ -1256,14 +1366,20 @@ mod tests {
         for _ in 0..20 {
             app.apply(Action::AdjustSwing(1));
         }
-        assert!((app.set.swing - 0.66).abs() < 1e-6, "swing should clamp to 0.66");
+        assert!(
+            (app.set.swing - 0.66).abs() < 1e-6,
+            "swing should clamp to 0.66"
+        );
         let cmds = app.apply(Action::AdjustSwing(1));
         assert!(cmds.iter().any(|c| matches!(c, UiCommand::SetSwing(_))));
         // Clamp low: many -steps cannot drop below 0.5.
         for _ in 0..20 {
             app.apply(Action::AdjustSwing(-1));
         }
-        assert!((app.set.swing - 0.5).abs() < 1e-6, "swing should clamp to 0.5");
+        assert!(
+            (app.set.swing - 0.5).abs() < 1e-6,
+            "swing should clamp to 0.5"
+        );
     }
 
     #[test]
@@ -1289,7 +1405,11 @@ mod tests {
         let shrunk = app.focused_lane().pattern.length;
         assert_eq!(shrunk, grown - 3);
         if let PatternData::Drums(steps) = &app.focused_lane().pattern.data {
-            assert_eq!(steps.len(), shrunk, "drum steps Vec truncated to new length");
+            assert_eq!(
+                steps.len(),
+                shrunk,
+                "drum steps Vec truncated to new length"
+            );
         } else {
             panic!("expected drums");
         }
@@ -1350,7 +1470,7 @@ mod tests {
             connected: false,
             port: "Roland S-1".to_string(),
         });
-        assert_eq!(app.device_status[1].0, false);
+        assert!(!app.device_status[1].0);
         assert!(
             app.status.contains("disconnected"),
             "toast should say disconnected, got: {:?}",
@@ -1424,7 +1544,11 @@ mod tests {
         assert_eq!(cmds, vec![UiCommand::Panic]);
         // No state change and no undo snapshot for a panic.
         assert_eq!(app.set, before, "panic must not mutate the Set");
-        assert_eq!(app.undo.len(), undo_len, "panic must not push an undo snapshot");
+        assert_eq!(
+            app.undo.len(),
+            undo_len,
+            "panic must not push an undo snapshot"
+        );
     }
 
     // --- per-step prob / ratchet edits -----------------------------------
@@ -1436,7 +1560,9 @@ mod tests {
         app.apply(Action::MoveCursor(0, 0));
         app.apply(Action::ToggleStep); // place a hit (prob defaults to 1.0)
         let cmds = app.apply(Action::AdjustProb(-1)); // 1.0 -> 0.9
-        assert!(cmds.iter().any(|c| matches!(c, UiCommand::LoadPattern { lane: 0, .. })));
+        assert!(cmds
+            .iter()
+            .any(|c| matches!(c, UiCommand::LoadPattern { lane: 0, .. })));
         if let PatternData::Drums(steps) = &app.focused_lane().pattern.data {
             assert!((steps[0][0].prob - 0.9).abs() < 1e-6);
         }
@@ -1463,7 +1589,9 @@ mod tests {
         app.apply(Action::MoveCursor(0, 0));
         app.apply(Action::ToggleStep); // place a hit (ratchet defaults to 1)
         let cmds = app.apply(Action::AdjustRatchet(2)); // 1 -> 3
-        assert!(cmds.iter().any(|c| matches!(c, UiCommand::LoadPattern { lane: 0, .. })));
+        assert!(cmds
+            .iter()
+            .any(|c| matches!(c, UiCommand::LoadPattern { lane: 0, .. })));
         if let PatternData::Drums(steps) = &app.focused_lane().pattern.data {
             assert_eq!(steps[0][0].ratchet, 3);
         }
@@ -1498,16 +1626,23 @@ mod tests {
         let mut app = new_app();
         app.apply(Action::FocusLane(0)); // drums, 16 steps, focused voice = BD (note 36)
         app.apply(Action::MoveCursor(0, 0)); // voice row 0
-        // current pulses = 0; dp=+1 -> 1 pulse, rotation 0 -> bjorklund(1,16,0) = onset at 0.
+                                             // current pulses = 0; dp=+1 -> 1 pulse, rotation 0 -> bjorklund(1,16,0) = onset at 0.
         let cmds = app.apply(Action::Euclid { dp: 1, dr: 0 });
-        assert!(cmds.iter().any(|c| matches!(c, UiCommand::LoadPattern { lane: 0, .. })));
+        assert!(cmds
+            .iter()
+            .any(|c| matches!(c, UiCommand::LoadPattern { lane: 0, .. })));
         let bd = profiles::DRUM_VOICES[0].note;
         let on_steps = |app: &App| -> Vec<usize> {
             if let PatternData::Drums(steps) = &app.focused_lane().pattern.data {
-                steps.iter().enumerate()
+                steps
+                    .iter()
+                    .enumerate()
                     .filter(|(_, s)| s.iter().any(|h| h.note == bd))
-                    .map(|(i, _)| i).collect()
-            } else { panic!("expected drums") }
+                    .map(|(i, _)| i)
+                    .collect()
+            } else {
+                panic!("expected drums")
+            }
         };
         assert_eq!(on_steps(&app), vec![0]);
         // dp=+3 more -> 4 pulses over 16 -> {0,4,8,12}.
@@ -1521,14 +1656,17 @@ mod tests {
         app.apply(Action::FocusLane(0));
         app.apply(Action::MoveCursor(0, 0));
         app.apply(Action::Euclid { dp: 4, dr: 0 }); // {0,4,8,12}
-        // Rotate left by 1 (pulse count unchanged): {3,7,11,15}.
+                                                    // Rotate left by 1 (pulse count unchanged): {3,7,11,15}.
         app.apply(Action::Euclid { dp: 0, dr: 1 });
         assert_eq!(app.euclid_rotation, 1);
         let bd = profiles::DRUM_VOICES[0].note;
         if let PatternData::Drums(steps) = &app.focused_lane().pattern.data {
-            let on: Vec<usize> = steps.iter().enumerate()
+            let on: Vec<usize> = steps
+                .iter()
+                .enumerate()
                 .filter(|(_, s)| s.iter().any(|h| h.note == bd))
-                .map(|(i, _)| i).collect();
+                .map(|(i, _)| i)
+                .collect();
             assert_eq!(on, vec![3, 7, 11, 15]);
         }
     }
@@ -1676,7 +1814,10 @@ mod tests {
         app.apply(Action::AdjustSwing(1));
         assert!((app.set.swing - before).abs() > 1e-9, "swing changed");
         app.apply(Action::Undo);
-        assert!((app.set.swing - before).abs() < 1e-9, "undo restored prior swing");
+        assert!(
+            (app.set.swing - before).abs() < 1e-9,
+            "undo restored prior swing"
+        );
     }
 
     #[test]
@@ -1688,7 +1829,10 @@ mod tests {
         app.apply(Action::AdjustProb(-1)); // -> 0.9, snapshots undo
         app.apply(Action::Undo);
         if let PatternData::Drums(steps) = &app.focused_lane().pattern.data {
-            assert!((steps[0][0].prob - 1.0).abs() < 1e-6, "undo restored prior prob");
+            assert!(
+                (steps[0][0].prob - 1.0).abs() < 1e-6,
+                "undo restored prior prob"
+            );
         }
     }
 
@@ -1727,7 +1871,7 @@ mod tests {
     fn step_scroll_advances_when_cursor_moves_past_visible_window() {
         let mut app = new_app();
         app.apply(Action::FocusLane(0)); // drums, default 16 steps
-        // Extend pattern to 32 steps so there is room to scroll.
+                                         // Extend pattern to 32 steps so there is room to scroll.
         for _ in 0..16 {
             app.apply(Action::AdjustPatternLen(1));
         }
@@ -1739,7 +1883,8 @@ mod tests {
         assert_eq!(app.cur_col, 20);
         // step_scroll must have advanced so col 20 is within [step_scroll, step_scroll+16).
         assert!(
-            app.cur_col >= app.step_scroll && app.cur_col < app.step_scroll + crate::app::VISIBLE_STEPS,
+            app.cur_col >= app.step_scroll
+                && app.cur_col < app.step_scroll + crate::app::VISIBLE_STEPS,
             "col 20 should be in the visible window [{}..{})",
             app.step_scroll,
             app.step_scroll + crate::app::VISIBLE_STEPS
@@ -1760,7 +1905,10 @@ mod tests {
         // Move cursor back to col 0 (many steps left).
         app.apply(Action::MoveCursor(0, -20));
         assert_eq!(app.cur_col, 0);
-        assert_eq!(app.step_scroll, 0, "scroll should reset to 0 when cursor is at col 0");
+        assert_eq!(
+            app.step_scroll, 0,
+            "scroll should reset to 0 when cursor is at col 0"
+        );
     }
 
     #[test]
@@ -1774,7 +1922,10 @@ mod tests {
         assert!(app.step_scroll > 0);
 
         app.apply(Action::FocusNext); // switch lane
-        assert_eq!(app.step_scroll, 0, "step_scroll should reset on lane change");
+        assert_eq!(
+            app.step_scroll, 0,
+            "step_scroll should reset on lane change"
+        );
     }
 
     // --- semantic arrow-key cursor axis tests ----------------------------
@@ -1872,7 +2023,10 @@ mod tests {
 
         // Another Quit now re-arms instead of quitting.
         app.apply(Action::Quit);
-        assert!(!app.should_quit, "disarmed quit should not quit on next Quit");
+        assert!(
+            !app.should_quit,
+            "disarmed quit should not quit on next Quit"
+        );
         assert!(app.quit_armed);
     }
 
@@ -1881,7 +2035,10 @@ mod tests {
         let mut app = new_app();
         assert!(!app.playing);
         app.apply(Action::Quit);
-        assert!(app.should_quit, "Quit while stopped should quit immediately");
+        assert!(
+            app.should_quit,
+            "Quit while stopped should quit immediately"
+        );
     }
 
     // --- Item 3: 16-step paging via visible_step_range ----------------------
@@ -1901,11 +2058,13 @@ mod tests {
         let mut app = new_app();
         app.apply(Action::FocusLane(0));
         // Extend to 32 steps.
-        for _ in 0..16 { app.apply(Action::AdjustPatternLen(1)); }
+        for _ in 0..16 {
+            app.apply(Action::AdjustPatternLen(1));
+        }
         app.apply(Action::MoveCursor(0, 20));
         let (start, end) = app.visible_step_range();
         assert_eq!(start, 16); // page 1: 20/16 = 1 -> 1*16=16
-        assert_eq!(end, 32);   // min(16+16, 32) = 32
+        assert_eq!(end, 32); // min(16+16, 32) = 32
     }
 
     #[test]
@@ -1913,12 +2072,14 @@ mod tests {
         let mut app = new_app();
         app.apply(Action::FocusLane(0));
         // Extend to 64 steps.
-        for _ in 0..48 { app.apply(Action::AdjustPatternLen(1)); }
+        for _ in 0..48 {
+            app.apply(Action::AdjustPatternLen(1));
+        }
         assert_eq!(app.focused_lane().pattern.length, 64);
         app.apply(Action::MoveCursor(0, 50));
         let (start, end) = app.visible_step_range();
         assert_eq!(start, 48); // page 3: 50/16 = 3 -> 3*16=48
-        assert_eq!(end, 64);   // min(48+16, 64) = 64
+        assert_eq!(end, 64); // min(48+16, 64) = 64
     }
 
     // --- Item 4: context_label ----------------------------------------------
@@ -1954,7 +2115,8 @@ mod tests {
         // On success it is "Saved"; on error it starts with "Save failed:".
         assert!(
             app.status == "Saved" || app.status.starts_with("Save failed:"),
-            "status after Save should be 'Saved' or 'Save failed: ...' but was {:?}", app.status
+            "status after Save should be 'Saved' or 'Save failed: ...' but was {:?}",
+            app.status
         );
     }
 
@@ -1967,7 +2129,8 @@ mod tests {
         app.apply(Action::SetVelBucket(5));
         assert!(
             app.status.contains("Velocity"),
-            "status after SetVelBucket should contain 'Velocity' but was {:?}", app.status
+            "status after SetVelBucket should contain 'Velocity' but was {:?}",
+            app.status
         );
     }
 
@@ -1995,7 +2158,10 @@ mod tests {
         assert!(app.dirty());
         app.apply(Action::Save); // may succeed or fail
         if app.status == "Saved" {
-            assert!(!app.dirty(), "dirty should be false after a successful Save");
+            assert!(
+                !app.dirty(),
+                "dirty should be false after a successful Save"
+            );
         }
         // If save failed (no fs), dirty remains true — that's correct behavior.
     }
@@ -2044,7 +2210,11 @@ mod tests {
         // test_library drums has 1 pattern, so pattern nav clamps at 0.
         app.apply(Action::LibNav(0, 1));
         assert_eq!(app.lib_pattern, 0); // clamped — only 1 pattern
-        assert_eq!(app.lib_col, LibCol::Pattern, "column should not change on dy");
+        assert_eq!(
+            app.lib_col,
+            LibCol::Pattern,
+            "column should not change on dy"
+        );
     }
 
     // --- Task 2: SetBrowser tests -------------------------------------------
@@ -2091,7 +2261,11 @@ mod tests {
         app.mode = Mode::SetBrowser;
 
         let cmds = app.apply(Action::SetBrowserLoad);
-        assert_eq!(app.mode, Mode::Edit, "mode should return to Edit after load");
+        assert_eq!(
+            app.mode,
+            Mode::Edit,
+            "mode should return to Edit after load"
+        );
         assert!(!app.dirty, "dirty should be false after load");
         assert!(app.status.starts_with("Loaded"), "status should say Loaded");
         assert!(
@@ -2128,20 +2302,32 @@ mod tests {
         let cmds = app.apply(Action::Audition);
 
         // Backup saved.
-        assert!(app.audition.is_some(), "audition field should be Some after Audition");
-        assert_eq!(app.audition.as_ref().unwrap().name, original.name, "saved original");
+        assert!(
+            app.audition.is_some(),
+            "audition field should be Some after Audition"
+        );
+        assert_eq!(
+            app.audition.as_ref().unwrap().name,
+            original.name,
+            "saved original"
+        );
 
         // Focused lane now has the library pattern.
         assert_eq!(app.set.lanes[0].pattern.name, "lib-drum");
 
         // Returns a LoadPattern for the focused lane.
         assert!(
-            cmds.iter().any(|c| matches!(c, UiCommand::LoadPattern { lane: 0, .. })),
+            cmds.iter()
+                .any(|c| matches!(c, UiCommand::LoadPattern { lane: 0, .. })),
             "must emit LoadPattern for lane 0"
         );
 
         // Status shows auditioning.
-        assert!(app.status.contains("Auditioning"), "status: {:?}", app.status);
+        assert!(
+            app.status.contains("Auditioning"),
+            "status: {:?}",
+            app.status
+        );
 
         // NOT dirty (preview, not commit).
         assert!(!app.dirty, "audition must not set dirty");
@@ -2170,14 +2356,29 @@ mod tests {
         let dsteps_a = vec![Vec::new(); 16];
         let dsteps_b = {
             let mut s = vec![Vec::new(); 16];
-            s[0] = vec![DrumHit { note: 36, vel: 80, prob: 1.0, ratchet: 1 }];
+            s[0] = vec![DrumHit {
+                note: 36,
+                vel: 80,
+                prob: 1.0,
+                ratchet: 1,
+            }];
             s
         };
         drums.insert(
             "techno".into(),
             vec![
-                Pattern { name: "pat-A".into(), desc: String::new(), length: 16, data: PatternData::Drums(dsteps_a) },
-                Pattern { name: "pat-B".into(), desc: String::new(), length: 16, data: PatternData::Drums(dsteps_b) },
+                Pattern {
+                    name: "pat-A".into(),
+                    desc: String::new(),
+                    length: 16,
+                    data: PatternData::Drums(dsteps_a),
+                },
+                Pattern {
+                    name: "pat-B".into(),
+                    desc: String::new(),
+                    length: 16,
+                    data: PatternData::Drums(dsteps_b),
+                },
             ],
         );
         let library = Library {
@@ -2185,7 +2386,8 @@ mod tests {
             bass: crate::pattern::library::GenreMap::new(),
             synth: crate::pattern::library::GenreMap::new(),
         };
-        let set = crate::pattern::model::Set::default_set(crate::devices::profiles::default_profiles());
+        let set =
+            crate::pattern::model::Set::default_set(crate::devices::profiles::default_profiles());
         let original_name = set.lanes[0].pattern.name.clone();
         let mut app = App::new(set, library);
 
@@ -2195,17 +2397,29 @@ mod tests {
         app.apply(Action::LibNav(1, 0));
         app.apply(Action::Audition);
         assert_eq!(app.set.lanes[0].pattern.name, "pat-A");
-        assert_eq!(app.audition.as_ref().unwrap().name, original_name, "backup is original");
+        assert_eq!(
+            app.audition.as_ref().unwrap().name,
+            original_name,
+            "backup is original"
+        );
 
         // Navigate to pat-B — should re-audition pat-B.
         let cmds = app.apply(Action::LibNav(0, 1)); // dy=+1 → pat-B
-        assert_eq!(app.set.lanes[0].pattern.name, "pat-B", "lane should now hold pat-B");
+        assert_eq!(
+            app.set.lanes[0].pattern.name, "pat-B",
+            "lane should now hold pat-B"
+        );
         assert!(
-            cmds.iter().any(|c| matches!(c, UiCommand::LoadPattern { lane: 0, .. })),
+            cmds.iter()
+                .any(|c| matches!(c, UiCommand::LoadPattern { lane: 0, .. })),
             "LibNav while auditioning must return LoadPattern"
         );
         // Original backup unchanged.
-        assert_eq!(app.audition.as_ref().unwrap().name, original_name, "backup must not change on LibNav");
+        assert_eq!(
+            app.audition.as_ref().unwrap().name,
+            original_name,
+            "backup must not change on LibNav"
+        );
     }
 
     #[test]
@@ -2218,12 +2432,17 @@ mod tests {
         let cmds = app.apply(Action::LibLoad);
 
         // Committed: audition cleared, dirty set, mode=Edit, status "Loaded …".
-        assert!(app.audition.is_none(), "audition should be cleared after commit");
+        assert!(
+            app.audition.is_none(),
+            "audition should be cleared after commit"
+        );
         assert!(app.dirty, "dirty should be true after commit");
         assert_eq!(app.mode, Mode::Edit);
         assert!(app.status.starts_with("Loaded"), "status: {:?}", app.status);
         // Returns LoadPattern.
-        assert!(cmds.iter().any(|c| matches!(c, UiCommand::LoadPattern { lane: 0, .. })));
+        assert!(cmds
+            .iter()
+            .any(|c| matches!(c, UiCommand::LoadPattern { lane: 0, .. })));
         // Pattern stays as the auditioned one.
         assert_eq!(app.set.lanes[0].pattern.name, "lib-drum");
     }
@@ -2240,10 +2459,14 @@ mod tests {
         let cmds = app.apply(Action::CloseLibrary);
 
         // Reverted: lane has original back.
-        assert_eq!(app.set.lanes[0].pattern.name, original_name, "original restored");
+        assert_eq!(
+            app.set.lanes[0].pattern.name, original_name,
+            "original restored"
+        );
         // Returns LoadPattern to restore in engine.
         assert!(
-            cmds.iter().any(|c| matches!(c, UiCommand::LoadPattern { lane: 0, .. })),
+            cmds.iter()
+                .any(|c| matches!(c, UiCommand::LoadPattern { lane: 0, .. })),
             "must emit LoadPattern to restore in engine"
         );
         // Audition cleared.
@@ -2263,7 +2486,9 @@ mod tests {
         assert_eq!(app.set.lanes[0].pattern.name, "lib-drum");
         assert!(app.dirty);
         assert_eq!(app.mode, Mode::Edit);
-        assert!(cmds.iter().any(|c| matches!(c, UiCommand::LoadPattern { lane: 0, .. })));
+        assert!(cmds
+            .iter()
+            .any(|c| matches!(c, UiCommand::LoadPattern { lane: 0, .. })));
     }
 
     #[test]

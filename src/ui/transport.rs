@@ -23,7 +23,9 @@ fn muted_style() -> Style {
 }
 
 fn bright_style() -> Style {
-    Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
+    Style::default()
+        .fg(Color::White)
+        .add_modifier(Modifier::BOLD)
 }
 
 fn ok_style() -> Style {
@@ -62,7 +64,11 @@ pub fn render_transport(f: &mut Frame, area: Rect, app: &App) {
     let bpm_field: String = if app.mode == Mode::TempoEntry {
         format!("BPM: {}_", app.tempo_input)
     } else {
-        let bpm = if app.link_enabled { app.link_tempo } else { app.set.bpm };
+        let bpm = if app.link_enabled {
+            app.link_tempo
+        } else {
+            app.set.bpm
+        };
         format!("{} BPM", bpm.round() as i64)
     };
 
@@ -90,8 +96,14 @@ pub fn render_transport(f: &mut Frame, area: Rect, app: &App) {
     // --- assemble top line --------------------------------------------------
     let sep = Span::styled(" | ", sep_style());
     let mut top_spans = vec![
-        Span::styled(play_glyph, Style::default().fg(accent).add_modifier(Modifier::BOLD)),
-        Span::styled(play_label, Style::default().fg(accent).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            play_glyph,
+            Style::default().fg(accent).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            play_label,
+            Style::default().fg(accent).add_modifier(Modifier::BOLD),
+        ),
         sep.clone(),
         Span::styled(bpm_field, bright_style()),
         sep.clone(),
@@ -138,7 +150,11 @@ mod tests {
     use ratatui::Terminal;
 
     fn empty_library() -> Library {
-        Library { drums: GenreMap::new(), bass: GenreMap::new(), synth: GenreMap::new() }
+        Library {
+            drums: GenreMap::new(),
+            bass: GenreMap::new(),
+            synth: GenreMap::new(),
+        }
     }
 
     fn make_app() -> App {
@@ -147,7 +163,12 @@ mod tests {
     }
 
     fn buf_text(t: &Terminal<TestBackend>) -> String {
-        t.backend().buffer().content().iter().map(|c| c.symbol()).collect()
+        t.backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect()
     }
 
     /// Render into a 100×5 TestBackend and return the full buffer string.
@@ -164,7 +185,10 @@ mod tests {
         app.playing = true;
         let text = render(&app);
         assert!(text.contains("PLAY"), "expected PLAY, got: {text:?}");
-        assert!(!text.contains("STOP"), "should not show STOP when playing, got: {text:?}");
+        assert!(
+            !text.contains("STOP"),
+            "should not show STOP when playing, got: {text:?}"
+        );
     }
 
     #[test]
@@ -172,7 +196,10 @@ mod tests {
         let app = make_app();
         let text = render(&app);
         assert!(text.contains("STOP"), "expected STOP, got: {text:?}");
-        assert!(!text.contains("PLAY"), "should not show PLAY when stopped, got: {text:?}");
+        assert!(
+            !text.contains("PLAY"),
+            "should not show PLAY when stopped, got: {text:?}"
+        );
     }
 
     #[test]
@@ -192,7 +219,10 @@ mod tests {
         app.link_enabled = true;
         app.link_tempo = 128.5; // rounds to 129
         let text = render(&app);
-        assert!(text.contains("129"), "expected rounded link_tempo 129, got: {text:?}");
+        assert!(
+            text.contains("129"),
+            "expected rounded link_tempo 129, got: {text:?}"
+        );
         assert!(text.contains("BPM"), "expected BPM label, got: {text:?}");
     }
 
@@ -204,7 +234,10 @@ mod tests {
         let text = render(&app);
         assert!(text.contains("LINK"), "expected LINK, got: {text:?}");
         assert!(text.contains('2'), "expected peer count 2, got: {text:?}");
-        assert!(text.contains("LOCKED"), "expected LOCKED with peers>0, got: {text:?}");
+        assert!(
+            text.contains("LOCKED"),
+            "expected LOCKED with peers>0, got: {text:?}"
+        );
     }
 
     #[test]
@@ -212,8 +245,14 @@ mod tests {
         let app = make_app();
         let text = render(&app);
         assert!(text.contains("LINK"), "expected LINK, got: {text:?}");
-        assert!(text.contains("off"), "expected 'off' when disabled, got: {text:?}");
-        assert!(!text.contains("LOCKED"), "should not show LOCKED, got: {text:?}");
+        assert!(
+            text.contains("off"),
+            "expected 'off' when disabled, got: {text:?}"
+        );
+        assert!(
+            !text.contains("LOCKED"),
+            "should not show LOCKED, got: {text:?}"
+        );
     }
 
     #[test]
@@ -246,7 +285,10 @@ mod tests {
         assert!(!app.dirty());
         let text = render(&app);
         assert!(text.contains("SAVED"), "expected SAVED, got: {text:?}");
-        assert!(!text.contains("EDITED"), "should not show EDITED, got: {text:?}");
+        assert!(
+            !text.contains("EDITED"),
+            "should not show EDITED, got: {text:?}"
+        );
     }
 
     #[test]
@@ -256,7 +298,10 @@ mod tests {
         assert!(app.dirty());
         let text = render(&app);
         assert!(text.contains("EDITED"), "expected EDITED, got: {text:?}");
-        assert!(!text.contains("SAVED"), "should not show SAVED, got: {text:?}");
+        assert!(
+            !text.contains("SAVED"),
+            "should not show SAVED, got: {text:?}"
+        );
     }
 
     #[test]
@@ -264,7 +309,10 @@ mod tests {
         let mut app = make_app();
         app.status = "Saved".to_string();
         let text = render(&app);
-        assert!(text.contains("Saved"), "expected toast 'Saved', got: {text:?}");
+        assert!(
+            text.contains("Saved"),
+            "expected toast 'Saved', got: {text:?}"
+        );
     }
 
     #[test]

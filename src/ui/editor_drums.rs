@@ -21,18 +21,22 @@ fn hit_vel(steps: &[Vec<crate::pattern::model::DrumHit>], step: usize, note: u8)
 }
 
 /// The DrumHit on `note` at `step`, if any.
-fn hit_at<'a>(
-    steps: &'a [Vec<crate::pattern::model::DrumHit>],
+fn hit_at(
+    steps: &[Vec<crate::pattern::model::DrumHit>],
     step: usize,
     note: u8,
-) -> Option<&'a crate::pattern::model::DrumHit> {
-    steps.get(step).and_then(|s| s.iter().find(|h| h.note == note))
+) -> Option<&crate::pattern::model::DrumHit> {
+    steps
+        .get(step)
+        .and_then(|s| s.iter().find(|h| h.note == note))
 }
 
 /// Combined style when cursor and playhead coincide: keep playhead bg, add cursor modifiers.
 fn combined_cursor_playhead_style() -> Style {
     // Fall back to DarkGray if the theme ever drops the playhead bg, so we never panic.
-    let bg = playhead_style().bg.unwrap_or(ratatui::style::Color::DarkGray);
+    let bg = playhead_style()
+        .bg
+        .unwrap_or(ratatui::style::Color::DarkGray);
     cursor_style().bg(bg)
 }
 
@@ -105,8 +109,10 @@ pub fn render_drum_editor(f: &mut Frame, area: Rect, app: &App) {
     for (ri, voice) in voices.iter().enumerate() {
         let focused_row = ri == app.cur_row;
         let marker = if focused_row { "▸" } else { " " };
-        let mut spans: Vec<Span> =
-            vec![Span::raw(format!("{marker}{:<3} {:>2} │ ", voice.label, voice.note))];
+        let mut spans: Vec<Span> = vec![Span::raw(format!(
+            "{marker}{:<3} {:>2} │ ",
+            voice.label, voice.note
+        ))];
 
         for col in visible_cols.clone() {
             let vel = hit_vel(steps, col, voice.note);
@@ -147,10 +153,7 @@ pub fn render_drum_editor(f: &mut Frame, area: Rect, app: &App) {
     ))));
 
     // Feature #4: cursor detail line with exact format.
-    let focused_voice_label = voices
-        .get(app.cur_row)
-        .map(|v| v.label)
-        .unwrap_or("?");
+    let focused_voice_label = voices.get(app.cur_row).map(|v| v.label).unwrap_or("?");
     let detail = match hit_at(steps, app.cur_col, focused_note) {
         Some(h) => format!(
             "Step {} · {} · Velocity {} [-/+] · Probability {}% [p/P] · Ratchet x{} [y/Y]",
@@ -189,7 +192,11 @@ mod tests {
     use ratatui::Terminal;
 
     fn empty_library() -> Library {
-        Library { drums: GenreMap::new(), bass: GenreMap::new(), synth: GenreMap::new() }
+        Library {
+            drums: GenreMap::new(),
+            bass: GenreMap::new(),
+            synth: GenreMap::new(),
+        }
     }
 
     fn row_string(buf: &Buffer, area: Rect, y: u16) -> String {
@@ -204,7 +211,12 @@ mod tests {
     fn drum_editor_shows_voice_label_and_hit_glyph() {
         let mut set = Set::default_set(default_profiles());
         let mut steps: Vec<Vec<DrumHit>> = vec![Vec::new(); 16];
-        steps[0] = vec![DrumHit { note: 36, vel: 127, prob: 1.0, ratchet: 1 }];
+        steps[0] = vec![DrumHit {
+            note: 36,
+            vel: 127,
+            prob: 1.0,
+            ratchet: 1,
+        }];
         set.lanes[0].pattern = Pattern {
             name: "test".to_string(),
             desc: String::new(),
@@ -221,17 +233,32 @@ mod tests {
 
         let buf = term.backend().buffer();
         let whole: String = buf.content().iter().map(|c| c.symbol()).collect();
-        assert!(whole.contains("BD"), "expected BD voice label, got: {whole:?}");
+        assert!(
+            whole.contains("BD"),
+            "expected BD voice label, got: {whole:?}"
+        );
 
         let bd_row = (0..16)
             .map(|y| row_string(buf, area, y))
             .find(|r| r.contains("BD"))
             .expect("BD row");
-        assert!(bd_row.contains('█'), "expected hit glyph on BD row: {bd_row:?}");
+        assert!(
+            bd_row.contains('█'),
+            "expected hit glyph on BD row: {bd_row:?}"
+        );
 
-        assert!(whole.contains("E("), "expected euclid indicator E(...), got: {whole:?}");
-        assert!(whole.contains("Probability"), "expected cursor detail Probability, got: {whole:?}");
-        assert!(whole.contains("Ratchet"), "expected cursor detail Ratchet, got: {whole:?}");
+        assert!(
+            whole.contains("E("),
+            "expected euclid indicator E(...), got: {whole:?}"
+        );
+        assert!(
+            whole.contains("Probability"),
+            "expected cursor detail Probability, got: {whole:?}"
+        );
+        assert!(
+            whole.contains("Ratchet"),
+            "expected cursor detail Ratchet, got: {whole:?}"
+        );
     }
 
     #[test]
@@ -239,7 +266,12 @@ mod tests {
         use crate::app::Action;
         let mut set = Set::default_set(default_profiles());
         let mut steps: Vec<Vec<DrumHit>> = vec![Vec::new(); 32];
-        steps[20] = vec![DrumHit { note: 36, vel: 127, prob: 1.0, ratchet: 1 }];
+        steps[20] = vec![DrumHit {
+            note: 36,
+            vel: 127,
+            prob: 1.0,
+            ratchet: 1,
+        }];
         set.lanes[0].pattern = Pattern {
             name: "test32".to_string(),
             desc: String::new(),
@@ -259,8 +291,14 @@ mod tests {
 
         let buf = term.backend().buffer();
         let whole: String = buf.content().iter().map(|c| c.symbol()).collect();
-        assert!(whole.contains("steps "), "expected scroll indicator, got: {whole:?}");
-        assert!(whole.contains("21"), "expected step 21 label visible after scroll, got: {whole:?}");
+        assert!(
+            whole.contains("steps "),
+            "expected scroll indicator, got: {whole:?}"
+        );
+        assert!(
+            whole.contains("21"),
+            "expected step 21 label visible after scroll, got: {whole:?}"
+        );
     }
 
     #[test]
@@ -279,10 +317,12 @@ mod tests {
 
         let buf = term.backend().buffer();
         let want_bg = playhead_style().bg.expect("playhead style has a bg");
-        let highlighted = (0..16u16).any(|y| {
-            (area.left()..area.right()).any(|x| buf[(x, y)].style().bg == Some(want_bg))
-        });
-        assert!(highlighted, "expected the local playhead column (4) highlighted under polymeter");
+        let highlighted = (0..16u16)
+            .any(|y| (area.left()..area.right()).any(|x| buf[(x, y)].style().bg == Some(want_bg)));
+        assert!(
+            highlighted,
+            "expected the local playhead column (4) highlighted under polymeter"
+        );
     }
 
     #[test]
@@ -290,7 +330,12 @@ mod tests {
         use crate::app::Action;
         let mut set = Set::default_set(default_profiles());
         let mut steps: Vec<Vec<DrumHit>> = vec![Vec::new(); 32];
-        steps[20] = vec![DrumHit { note: 36, vel: 100, prob: 1.0, ratchet: 1 }];
+        steps[20] = vec![DrumHit {
+            note: 36,
+            vel: 100,
+            prob: 1.0,
+            ratchet: 1,
+        }];
         set.lanes[0].pattern = Pattern {
             name: "hdr".to_string(),
             desc: String::new(),
@@ -306,7 +351,13 @@ mod tests {
         let mut term = Terminal::new(backend).unwrap();
         let area = Rect::new(0, 0, 120, 20);
         term.draw(|f| render_drum_editor(f, area, &app)).unwrap();
-        let whole: String = term.backend().buffer().content().iter().map(|c| c.symbol()).collect();
+        let whole: String = term
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
         assert!(whole.contains("Steps"), "header must contain 'Steps'");
         assert!(whole.contains("Cursor"), "header must contain 'Cursor'");
         assert!(whole.contains("Playhead"), "header must contain 'Playhead'");
@@ -338,14 +389,22 @@ mod tests {
         let want_bg = playhead_style().bg.expect("playhead style has bg");
         let has_playhead_bg = (0..16u16)
             .any(|y| (area.left()..area.right()).any(|x| buf[(x, y)].style().bg == Some(want_bg)));
-        assert!(has_playhead_bg, "coincident cursor+playhead must show playhead bg");
+        assert!(
+            has_playhead_bg,
+            "coincident cursor+playhead must show playhead bg"
+        );
     }
 
     #[test]
     fn drum_detail_line_contains_velocity_probability_ratchet() {
         let mut set = Set::default_set(default_profiles());
         let mut steps: Vec<Vec<DrumHit>> = vec![Vec::new(); 16];
-        steps[0] = vec![DrumHit { note: 36, vel: 80, prob: 0.75, ratchet: 2 }];
+        steps[0] = vec![DrumHit {
+            note: 36,
+            vel: 80,
+            prob: 0.75,
+            ratchet: 2,
+        }];
         set.lanes[0].pattern = Pattern {
             name: "det".to_string(),
             desc: String::new(),
@@ -359,9 +418,18 @@ mod tests {
         let mut term = Terminal::new(backend).unwrap();
         let area = Rect::new(0, 0, 120, 16);
         term.draw(|f| render_drum_editor(f, area, &app)).unwrap();
-        let whole: String = term.backend().buffer().content().iter().map(|c| c.symbol()).collect();
+        let whole: String = term
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
         assert!(whole.contains("Velocity"), "detail must contain 'Velocity'");
-        assert!(whole.contains("Probability"), "detail must contain 'Probability'");
+        assert!(
+            whole.contains("Probability"),
+            "detail must contain 'Probability'"
+        );
         assert!(whole.contains("Ratchet"), "detail must contain 'Ratchet'");
     }
 }

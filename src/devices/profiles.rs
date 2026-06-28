@@ -8,9 +8,9 @@ pub struct DrumVoice {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DeviceProfile {
-    pub id: &'static str,                  // "t8-drums" | "t8-bass" | "s1"
-    pub label: &'static str,               // "T-8 DRUM" | "T-8 BASS" | "S-1 SYNTH"
-    pub port_match: &'static str,          // "T-8" | "S-1"
+    pub id: &'static str,         // "t8-drums" | "t8-bass" | "s1"
+    pub label: &'static str,      // "T-8 DRUM" | "T-8 BASS" | "S-1 SYNTH"
+    pub port_match: &'static str, // "T-8" | "S-1"
     pub kind: LaneKind,
     pub channel: u8,                       // 0-indexed
     pub root_note: u8,                     // melodic base (45); 0 for drums
@@ -22,16 +22,46 @@ pub struct DeviceProfile {
 
 /// Standard T-8 kit voices, in editor-row order, derived from notes present in the library.
 pub const DRUM_VOICES: &[DrumVoice] = &[
-    DrumVoice { label: "BD", note: 36 },
-    DrumVoice { label: "RS", note: 37 },
-    DrumVoice { label: "SD", note: 38 },
-    DrumVoice { label: "CH", note: 42 },
-    DrumVoice { label: "OH", note: 46 },
-    DrumVoice { label: "MT", note: 47 },
-    DrumVoice { label: "CC", note: 49 },
-    DrumVoice { label: "HT", note: 50 },
-    DrumVoice { label: "RC", note: 51 },
-    DrumVoice { label: "CB", note: 56 },
+    DrumVoice {
+        label: "BD",
+        note: 36,
+    },
+    DrumVoice {
+        label: "RS",
+        note: 37,
+    },
+    DrumVoice {
+        label: "SD",
+        note: 38,
+    },
+    DrumVoice {
+        label: "CH",
+        note: 42,
+    },
+    DrumVoice {
+        label: "OH",
+        note: 46,
+    },
+    DrumVoice {
+        label: "MT",
+        note: 47,
+    },
+    DrumVoice {
+        label: "CC",
+        note: 49,
+    },
+    DrumVoice {
+        label: "HT",
+        note: 50,
+    },
+    DrumVoice {
+        label: "RC",
+        note: 51,
+    },
+    DrumVoice {
+        label: "CB",
+        note: 56,
+    },
 ];
 
 pub const T8_DRUMS: DeviceProfile = DeviceProfile {
@@ -83,8 +113,7 @@ pub fn profile_by_id(id: &str) -> Option<DeviceProfile> {
 
 /// Playback pitch for a melodic note: root + semi + transpose + 12*octave, clamped 0..=127.
 pub fn resolve_melodic_pitch(root: u8, semi: i8, transpose: i8, octave: i8) -> u8 {
-    let pitch =
-        root as i32 + semi as i32 + transpose as i32 + 12 * octave as i32;
+    let pitch = root as i32 + semi as i32 + transpose as i32 + 12 * octave as i32;
     pitch.clamp(0, 127) as u8
 }
 
@@ -135,7 +164,7 @@ mod tests {
         assert_eq!(S1.root_note, 45);
         assert_eq!(S1.gate_fraction, 0.9);
 
-        assert!(T8_DRUMS.send_clock && T8_BASS.send_clock && S1.send_clock);
+        const { assert!(T8_DRUMS.send_clock && T8_BASS.send_clock && S1.send_clock) }
     }
 
     #[test]
@@ -169,7 +198,7 @@ mod tests {
         assert_eq!(melodic_velocity(0.5), 50);
         assert_eq!(melodic_velocity(1.0), 100);
         assert_eq!(melodic_velocity(1.3), 127); // round(130) clamps to 127
-        assert_eq!(melodic_velocity(0.0), 1);   // floor clamps up to 1
+        assert_eq!(melodic_velocity(0.0), 1); // floor clamps up to 1
     }
 
     #[test]

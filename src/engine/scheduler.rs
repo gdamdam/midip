@@ -19,7 +19,7 @@ pub fn step_dur_micros(bpm: f64) -> u64 {
 /// steps are delayed by `(swing - 0.5) * step_dur * 2`. Signed so off-steps can be
 /// pulled earlier if `swing < 0.5`.
 pub fn swing_offset_micros(step_index: usize, swing: f32, step_dur: u64) -> i64 {
-    if step_index % 2 == 0 {
+    if step_index.is_multiple_of(2) {
         0
     } else {
         ((swing as f64 - 0.5) * step_dur as f64 * 2.0).round() as i64
@@ -153,7 +153,10 @@ impl Sequencer {
         for slot in self.active.iter_mut() {
             if let Some(active) = slot.take() {
                 sink.send(
-                    MidiMessage::NoteOff { channel: active.channel, note: active.note },
+                    MidiMessage::NoteOff {
+                        channel: active.channel,
+                        note: active.note,
+                    },
                     at_micros,
                 );
             }
@@ -177,11 +180,19 @@ impl Sequencer {
             }
             sent.push(ch);
             sink.send(
-                MidiMessage::ControlChange { channel: ch, controller: 123, value: 0 },
+                MidiMessage::ControlChange {
+                    channel: ch,
+                    controller: 123,
+                    value: 0,
+                },
                 at_micros,
             );
             sink.send(
-                MidiMessage::ControlChange { channel: ch, controller: 120, value: 0 },
+                MidiMessage::ControlChange {
+                    channel: ch,
+                    controller: 120,
+                    value: 0,
+                },
                 at_micros,
             );
         }
@@ -189,7 +200,10 @@ impl Sequencer {
         for slot in self.active.iter_mut() {
             if let Some(active) = slot.take() {
                 sink.send(
-                    MidiMessage::NoteOff { channel: active.channel, note: active.note },
+                    MidiMessage::NoteOff {
+                        channel: active.channel,
+                        note: active.note,
+                    },
                     at_micros,
                 );
             }
@@ -251,7 +265,10 @@ impl Sequencer {
             if !self.lane_audible(lane_idx, any_solo) {
                 if let Some(held) = self.active[lane_idx].take() {
                     sink.send(
-                        MidiMessage::NoteOff { channel: held.channel, note: held.note },
+                        MidiMessage::NoteOff {
+                            channel: held.channel,
+                            note: held.note,
+                        },
                         now_micros,
                     );
                 }
@@ -269,8 +286,8 @@ impl Sequencer {
             let dur = step_dur_micros(self.set.bpm);
             // Compute when the upcoming step is due.
             let step_due = match self.last_step_at {
-                None => self.origin_micros,          // step 0 due at play origin
-                Some(prev) => prev + dur,            // subsequent steps
+                None => self.origin_micros, // step 0 due at play origin
+                Some(prev) => prev + dur,   // subsequent steps
             };
             if step_due > now_micros {
                 break;
@@ -338,9 +355,8 @@ impl Sequencer {
         // recomputed from origin + step * dur, so tempo changes don't shift
         // already-queued steps.
         let step_start = step_at;
-        let swung = (step_start as i64
-            + swing_offset_micros(step, self.set.swing, dur))
-        .max(0) as u64;
+        let swung =
+            (step_start as i64 + swing_offset_micros(step, self.set.swing, dur)).max(0) as u64;
 
         let any_solo = self.set.lanes.iter().any(|l| l.solo);
 
@@ -396,7 +412,11 @@ impl Sequencer {
                     ScheduledEvent {
                         at_micros: on_at,
                         lane: lane_idx,
-                        msg: MidiMessage::NoteOn { channel, note: hit.note, vel: hit.vel },
+                        msg: MidiMessage::NoteOn {
+                            channel,
+                            note: hit.note,
+                            vel: hit.vel,
+                        },
                     },
                 );
                 Self::enqueue(
@@ -404,7 +424,10 @@ impl Sequencer {
                     ScheduledEvent {
                         at_micros: on_at + gate,
                         lane: lane_idx,
-                        msg: MidiMessage::NoteOff { channel, note: hit.note },
+                        msg: MidiMessage::NoteOff {
+                            channel,
+                            note: hit.note,
+                        },
                     },
                 );
             }
@@ -473,7 +496,11 @@ impl Sequencer {
             ScheduledEvent {
                 at_micros: on_at,
                 lane: lane_idx,
-                msg: MidiMessage::NoteOn { channel, note: pitch, vel },
+                msg: MidiMessage::NoteOn {
+                    channel,
+                    note: pitch,
+                    vel,
+                },
             },
         );
 
@@ -485,7 +512,10 @@ impl Sequencer {
                 ScheduledEvent {
                     at_micros: on_at + ratchet_gate,
                     lane: lane_idx,
-                    msg: MidiMessage::NoteOff { channel, note: pitch },
+                    msg: MidiMessage::NoteOff {
+                        channel,
+                        note: pitch,
+                    },
                 },
             );
             for i in 1..r {
@@ -495,7 +525,11 @@ impl Sequencer {
                     ScheduledEvent {
                         at_micros: at,
                         lane: lane_idx,
-                        msg: MidiMessage::NoteOn { channel, note: pitch, vel },
+                        msg: MidiMessage::NoteOn {
+                            channel,
+                            note: pitch,
+                            vel,
+                        },
                     },
                 );
                 Self::enqueue(
@@ -503,7 +537,10 @@ impl Sequencer {
                     ScheduledEvent {
                         at_micros: at + ratchet_gate,
                         lane: lane_idx,
-                        msg: MidiMessage::NoteOff { channel, note: pitch },
+                        msg: MidiMessage::NoteOff {
+                            channel,
+                            note: pitch,
+                        },
                     },
                 );
             }
@@ -534,7 +571,10 @@ impl Sequencer {
                 ScheduledEvent {
                     at_micros: off_at,
                     lane: lane_idx,
-                    msg: MidiMessage::NoteOff { channel, note: pitch },
+                    msg: MidiMessage::NoteOff {
+                        channel,
+                        note: pitch,
+                    },
                 },
             );
             self.active[lane_idx] = Some(ActiveNote {
@@ -617,7 +657,7 @@ mod tests {
     #[test]
     fn swing_above_half_delays_odd_steps() {
         let dur = step_dur_micros(120.0); // 125_000
-        // (0.6 - 0.5) * 125_000 * 2 = 25_000
+                                          // (0.6 - 0.5) * 125_000 * 2 = 25_000
         assert_eq!(swing_offset_micros(1, 0.6, dur), 25_000);
         assert_eq!(swing_offset_micros(3, 0.6, dur), 25_000);
         assert!(swing_offset_micros(1, 0.6, dur) > 0);
@@ -657,9 +697,7 @@ mod sequencer_tests {
     use crate::devices::profiles::{S1, T8_BASS, T8_DRUMS};
     use crate::midi::ports::RecordingSink;
     use crate::midi::MidiMessage;
-    use crate::pattern::model::{
-        DrumHit, Lane, MelodicNote, Pattern, PatternData, Set,
-    };
+    use crate::pattern::model::{DrumHit, Lane, MelodicNote, Pattern, PatternData, Set};
 
     // --- helpers ---------------------------------------------------------
 
@@ -667,7 +705,12 @@ mod sequencer_tests {
         // kick (note 36) on steps 0,4,8,12; 16 steps.
         let mut steps: Vec<Vec<DrumHit>> = vec![Vec::new(); 16];
         for &s in &[0usize, 4, 8, 12] {
-            steps[s].push(DrumHit { note: 36, vel: 100, prob: 1.0, ratchet: 1 });
+            steps[s].push(DrumHit {
+                note: 36,
+                vel: 100,
+                prob: 1.0,
+                ratchet: 1,
+            });
         }
         Lane {
             profile: T8_DRUMS,
@@ -736,7 +779,13 @@ mod sequencer_tests {
         let ons: Vec<u64> = sink
             .events
             .iter()
-            .filter(|(_, m)| *m == MidiMessage::NoteOn { channel: 9, note: 36, vel: 100 })
+            .filter(|(_, m)| {
+                *m == MidiMessage::NoteOn {
+                    channel: 9,
+                    note: 36,
+                    vel: 100,
+                }
+            })
             .map(|(t, _)| *t)
             .collect();
         assert_eq!(ons, vec![0, 4 * dur, 8 * dur, 12 * dur]);
@@ -746,10 +795,18 @@ mod sequencer_tests {
         let offs: Vec<u64> = sink
             .events
             .iter()
-            .filter(|(_, m)| *m == MidiMessage::NoteOff { channel: 9, note: 36 })
+            .filter(|(_, m)| {
+                *m == MidiMessage::NoteOff {
+                    channel: 9,
+                    note: 36,
+                }
+            })
             .map(|(t, _)| *t)
             .collect();
-        assert_eq!(offs, vec![gate, 4 * dur + gate, 8 * dur + gate, 12 * dur + gate]);
+        assert_eq!(
+            offs,
+            vec![gate, 4 * dur + gate, 8 * dur + gate, 12 * dur + gate]
+        );
     }
 
     // --- (b) melodic pitch + velocity -----------------------------------
@@ -759,7 +816,14 @@ mod sequencer_tests {
         let dur = step_dur_micros(120.0);
         // single note at step 0: semi +7, vel mult 1.0, no slide, len 1.0.
         let notes = vec![
-            Some(MelodicNote { semi: 7, vel: 1.0, slide: false, len: 1.0, prob: 1.0, ratchet: 1 }),
+            Some(MelodicNote {
+                semi: 7,
+                vel: 1.0,
+                slide: false,
+                len: 1.0,
+                prob: 1.0,
+                ratchet: 1,
+            }),
             None,
             None,
             None,
@@ -771,11 +835,20 @@ mod sequencer_tests {
 
         // root 45 + semi 7 + transpose 0 + 12*0 = 52; vel = round(1.0*100)=100.
         assert!(sink.events.iter().any(|(t, m)| *t == 0
-            && *m == MidiMessage::NoteOn { channel: 1, note: 52, vel: 100 }));
+            && *m
+                == MidiMessage::NoteOn {
+                    channel: 1,
+                    note: 52,
+                    vel: 100
+                }));
         // NoteOff at len 1.0 * step_dur.
         let off_at = note_len_micros(1.0, dur);
         assert!(sink.events.iter().any(|(t, m)| *t == off_at
-            && *m == MidiMessage::NoteOff { channel: 1, note: 52 }));
+            && *m
+                == MidiMessage::NoteOff {
+                    channel: 1,
+                    note: 52
+                }));
     }
 
     // --- (c) slide overlap ----------------------------------------------
@@ -787,8 +860,22 @@ mod sequencer_tests {
         // The slide on B must hold A until *after* B's NoteOn (legato overlap),
         // so A's NoteOff time > B's NoteOn time.
         let notes = vec![
-            Some(MelodicNote { semi: 0, vel: 1.0, slide: false, len: 1.0, prob: 1.0, ratchet: 1 }),
-            Some(MelodicNote { semi: 5, vel: 1.0, slide: true, len: 1.0, prob: 1.0, ratchet: 1 }),
+            Some(MelodicNote {
+                semi: 0,
+                vel: 1.0,
+                slide: false,
+                len: 1.0,
+                prob: 1.0,
+                ratchet: 1,
+            }),
+            Some(MelodicNote {
+                semi: 5,
+                vel: 1.0,
+                slide: true,
+                len: 1.0,
+                prob: 1.0,
+                ratchet: 1,
+            }),
             None,
             None,
         ];
@@ -802,17 +889,33 @@ mod sequencer_tests {
         let a_off = sink
             .events
             .iter()
-            .find(|(_, m)| *m == MidiMessage::NoteOff { channel: 1, note: note_a })
+            .find(|(_, m)| {
+                *m == MidiMessage::NoteOff {
+                    channel: 1,
+                    note: note_a,
+                }
+            })
             .map(|(t, _)| *t)
             .expect("A must have a NoteOff");
         let b_on = sink
             .events
             .iter()
-            .find(|(_, m)| *m == MidiMessage::NoteOn { channel: 1, note: note_b, vel: 100 })
+            .find(|(_, m)| {
+                *m == MidiMessage::NoteOn {
+                    channel: 1,
+                    note: note_b,
+                    vel: 100,
+                }
+            })
             .map(|(t, _)| *t)
             .expect("B must have a NoteOn");
         // legato: A is released only after B sounds.
-        assert!(a_off >= b_on, "expected A off ({}) >= B on ({})", a_off, b_on);
+        assert!(
+            a_off >= b_on,
+            "expected A off ({}) >= B on ({})",
+            a_off,
+            b_on
+        );
     }
 
     // --- (d) mute silences a lane ---------------------------------------
@@ -829,9 +932,7 @@ mod sequencer_tests {
         let note_events = sink
             .events
             .iter()
-            .filter(|(_, m)| {
-                matches!(m, MidiMessage::NoteOn { .. } | MidiMessage::NoteOff { .. })
-            })
+            .filter(|(_, m)| matches!(m, MidiMessage::NoteOn { .. } | MidiMessage::NoteOff { .. }))
             .count();
         assert_eq!(note_events, 0);
     }
@@ -843,7 +944,19 @@ mod sequencer_tests {
         let dur = step_dur_micros(120.0);
         let drums = drum_lane_four_on_floor(); // not soloed
         let mut bass = melodic_lane(
-            vec![Some(MelodicNote { semi: 0, vel: 1.0, slide: false, len: 1.0, prob: 1.0, ratchet: 1 }), None, None, None],
+            vec![
+                Some(MelodicNote {
+                    semi: 0,
+                    vel: 1.0,
+                    slide: false,
+                    len: 1.0,
+                    prob: 1.0,
+                    ratchet: 1,
+                }),
+                None,
+                None,
+                None,
+            ],
             true,
         );
         bass.solo = true;
@@ -856,14 +969,20 @@ mod sequencer_tests {
         let drum_events = sink
             .events
             .iter()
-            .filter(|(_, m)| matches!(m,
-                MidiMessage::NoteOn { channel: 9, .. } | MidiMessage::NoteOff { channel: 9, .. }))
+            .filter(|(_, m)| {
+                matches!(
+                    m,
+                    MidiMessage::NoteOn { channel: 9, .. }
+                        | MidiMessage::NoteOff { channel: 9, .. }
+                )
+            })
             .count();
         assert_eq!(drum_events, 0);
         // bass (channel 1) must still sound.
-        let bass_on = sink.events.iter().any(|(_, m)| {
-            matches!(m, MidiMessage::NoteOn { channel: 1, .. })
-        });
+        let bass_on = sink
+            .events
+            .iter()
+            .any(|(_, m)| matches!(m, MidiMessage::NoteOn { channel: 1, .. }));
         assert!(bass_on);
     }
 
@@ -871,7 +990,14 @@ mod sequencer_tests {
     fn stop_releases_active_notes_and_halts() {
         let dur = step_dur_micros(120.0);
         // a long note still sounding when we stop.
-        let notes = vec![Some(MelodicNote { semi: 0, vel: 1.0, slide: false, len: 4.0, prob: 1.0, ratchet: 1 })];
+        let notes = vec![Some(MelodicNote {
+            semi: 0,
+            vel: 1.0,
+            slide: false,
+            len: 4.0,
+            prob: 1.0,
+            ratchet: 1,
+        })];
         let mut seq = Sequencer::new(set_with(vec![melodic_lane(notes, true)]));
         let mut sink = RecordingSink::new();
         seq.play(0);
@@ -881,7 +1007,11 @@ mod sequencer_tests {
         assert!(!seq.is_playing());
         // there is a NoteOff for the still-active note at/after stop time.
         assert!(sink.events.iter().any(|(t, m)| *t >= 1_000
-            && *m == MidiMessage::NoteOff { channel: 1, note: 45 }));
+            && *m
+                == MidiMessage::NoteOff {
+                    channel: 1,
+                    note: 45
+                }));
         let _ = dur;
     }
 
@@ -905,7 +1035,12 @@ mod sequencer_tests {
     /// A drum lane of `length` steps with a kick (note 36) on LOCAL step 0 only.
     fn drum_lane_hit_on_step0(length: usize) -> Lane {
         let mut steps: Vec<Vec<DrumHit>> = vec![Vec::new(); length];
-        steps[0].push(DrumHit { note: 36, vel: 100, prob: 1.0, ratchet: 1 });
+        steps[0].push(DrumHit {
+            note: 36,
+            vel: 100,
+            prob: 1.0,
+            ratchet: 1,
+        });
         Lane {
             profile: T8_DRUMS,
             pattern: Pattern {
@@ -959,20 +1094,35 @@ mod sequencer_tests {
         let fired_abs: Vec<u64> = sink
             .events
             .iter()
-            .filter(|(_, m)| *m == MidiMessage::NoteOn { channel: 9, note: 36, vel: 100 })
+            .filter(|(_, m)| {
+                *m == MidiMessage::NoteOn {
+                    channel: 9,
+                    note: 36,
+                    vel: 100,
+                }
+            })
             .map(|(t, _)| *t / dur)
             .collect();
         // lane 0 onsets present.
         for s in [0u64, 12, 24, 36] {
-            assert!(fired_abs.contains(&s), "lane0 onset {s} missing in {fired_abs:?}");
+            assert!(
+                fired_abs.contains(&s),
+                "lane0 onset {s} missing in {fired_abs:?}"
+            );
         }
         // lane 2 onsets present (independent 7-step wrap).
         for s in [0u64, 7, 14, 21, 28, 35, 42] {
-            assert!(fired_abs.contains(&s), "lane2 onset {s} missing in {fired_abs:?}");
+            assert!(
+                fired_abs.contains(&s),
+                "lane2 onset {s} missing in {fired_abs:?}"
+            );
         }
         // lane 1 (16) onsets at 0,16,32 also present.
         for s in [0u64, 16, 32] {
-            assert!(fired_abs.contains(&s), "lane1 onset {s} missing in {fired_abs:?}");
+            assert!(
+                fired_abs.contains(&s),
+                "lane1 onset {s} missing in {fired_abs:?}"
+            );
         }
     }
 
@@ -983,7 +1133,19 @@ mod sequencer_tests {
         // Two lanes on distinct channels (drums ch9, bass ch1).
         let drums = drum_lane_four_on_floor();
         let bass = melodic_lane(
-            vec![Some(MelodicNote { semi: 0, vel: 1.0, slide: false, len: 4.0, prob: 1.0, ratchet: 1 }), None, None, None],
+            vec![
+                Some(MelodicNote {
+                    semi: 0,
+                    vel: 1.0,
+                    slide: false,
+                    len: 4.0,
+                    prob: 1.0,
+                    ratchet: 1,
+                }),
+                None,
+                None,
+                None,
+            ],
             true,
         );
         let mut seq = Sequencer::new(set_with(vec![drums, bass]));
@@ -997,14 +1159,22 @@ mod sequencer_tests {
         // CC 123 (All Notes Off) on each distinct channel.
         for ch in [9u8, 1u8] {
             assert!(
-                sink.events.iter().any(|(_, m)|
-                    *m == MidiMessage::ControlChange { channel: ch, controller: 123, value: 0 }),
+                sink.events.iter().any(|(_, m)| *m
+                    == MidiMessage::ControlChange {
+                        channel: ch,
+                        controller: 123,
+                        value: 0
+                    }),
                 "expected CC123 on channel {ch}"
             );
             // CC 120 (All Sound Off) on each distinct channel.
             assert!(
-                sink.events.iter().any(|(_, m)|
-                    *m == MidiMessage::ControlChange { channel: ch, controller: 120, value: 0 }),
+                sink.events.iter().any(|(_, m)| *m
+                    == MidiMessage::ControlChange {
+                        channel: ch,
+                        controller: 120,
+                        value: 0
+                    }),
                 "expected CC120 on channel {ch}"
             );
         }
@@ -1017,7 +1187,12 @@ mod sequencer_tests {
     /// A single-step drum lane with the kick hit on step 0 only, prob `p`, ratchet `r`.
     fn drum_lane_one_hit(prob: f32, ratchet: u8) -> Lane {
         let mut steps: Vec<Vec<DrumHit>> = vec![Vec::new(); 16];
-        steps[0].push(DrumHit { note: 36, vel: 100, prob, ratchet });
+        steps[0].push(DrumHit {
+            note: 36,
+            vel: 100,
+            prob,
+            ratchet,
+        });
         Lane {
             profile: T8_DRUMS,
             pattern: Pattern {
@@ -1036,7 +1211,13 @@ mod sequencer_tests {
     fn kick_on_count(sink: &RecordingSink) -> usize {
         sink.events
             .iter()
-            .filter(|(_, m)| *m == MidiMessage::NoteOn { channel: 9, note: 36, vel: 100 })
+            .filter(|(_, m)| {
+                *m == MidiMessage::NoteOn {
+                    channel: 9,
+                    note: 36,
+                    vel: 100,
+                }
+            })
             .count()
     }
 
@@ -1066,13 +1247,26 @@ mod sequencer_tests {
         // 16 steps, kick on EVERY step, each prob = 0.5. With a fixed seed the fired
         // set is deterministic — pin it so a PRNG change is caught.
         let mut steps: Vec<Vec<DrumHit>> = vec![Vec::new(); 16];
-        for s in 0..16 {
-            steps[s].push(DrumHit { note: 36, vel: 100, prob: 0.5, ratchet: 1 });
+        for step in steps.iter_mut() {
+            step.push(DrumHit {
+                note: 36,
+                vel: 100,
+                prob: 0.5,
+                ratchet: 1,
+            });
         }
         let lane = Lane {
             profile: T8_DRUMS,
-            pattern: Pattern { name: "row".to_string(), desc: String::new(), length: 16, data: PatternData::Drums(steps) },
-            mute: false, solo: false, transpose: 0, octave: 0,
+            pattern: Pattern {
+                name: "row".to_string(),
+                desc: String::new(),
+                length: 16,
+                data: PatternData::Drums(steps),
+            },
+            mute: false,
+            solo: false,
+            transpose: 0,
+            octave: 0,
         };
         let run_once = |seed: u64| -> Vec<u64> {
             let mut seq = Sequencer::new(set_with(vec![lane.clone()]));
@@ -1082,7 +1276,13 @@ mod sequencer_tests {
             run(&mut seq, &mut sink, 16 * dur, 1_000);
             sink.events
                 .iter()
-                .filter(|(_, m)| *m == MidiMessage::NoteOn { channel: 9, note: 36, vel: 100 })
+                .filter(|(_, m)| {
+                    *m == MidiMessage::NoteOn {
+                        channel: 9,
+                        note: 36,
+                        vel: 100,
+                    }
+                })
                 .map(|(t, _)| *t / dur)
                 .collect()
         };
@@ -1107,7 +1307,13 @@ mod sequencer_tests {
         let ons: Vec<u64> = sink
             .events
             .iter()
-            .filter(|(_, m)| *m == MidiMessage::NoteOn { channel: 9, note: 36, vel: 100 })
+            .filter(|(_, m)| {
+                *m == MidiMessage::NoteOn {
+                    channel: 9,
+                    note: 36,
+                    vel: 100,
+                }
+            })
             .map(|(t, _)| *t)
             .collect();
         assert_eq!(ons, vec![0, sub, 2 * sub]);
@@ -1117,7 +1323,12 @@ mod sequencer_tests {
         let offs: Vec<u64> = sink
             .events
             .iter()
-            .filter(|(_, m)| *m == MidiMessage::NoteOff { channel: 9, note: 36 })
+            .filter(|(_, m)| {
+                *m == MidiMessage::NoteOff {
+                    channel: 9,
+                    note: 36,
+                }
+            })
             .map(|(t, _)| *t)
             .collect();
         assert_eq!(offs, vec![gate, sub + gate, 2 * sub + gate]);
@@ -1132,7 +1343,7 @@ mod sequencer_tests {
     #[test]
     fn step_at_exact_tick_boundary_is_not_deferred() {
         let dur = step_dur_micros(120.0); // 125_000
-        // Four-on-floor kick at steps 0, 4, 8, 12 — gives us clear NoteOn timestamps.
+                                          // Four-on-floor kick at steps 0, 4, 8, 12 — gives us clear NoteOn timestamps.
         let mut seq = Sequencer::new(set_with(vec![drum_lane_four_on_floor()]));
         let mut sink = RecordingSink::new();
         let origin = 1_000_000u64; // non-zero origin to test general case
@@ -1150,13 +1361,22 @@ mod sequencer_tests {
         let ons: Vec<u64> = sink
             .events
             .iter()
-            .filter(|(_, m)| *m == MidiMessage::NoteOn { channel: 9, note: 36, vel: 100 })
+            .filter(|(_, m)| {
+                *m == MidiMessage::NoteOn {
+                    channel: 9,
+                    note: 36,
+                    vel: 100,
+                }
+            })
             .map(|(t, _)| *t)
             .collect();
 
         // Step 0 (at origin) must appear exactly once — not zero (deferred) and not twice (double-emit).
         let step0_count = ons.iter().filter(|&&t| t == origin).count();
-        assert_eq!(step0_count, 1, "step 0 must be emitted exactly once, got {step0_count}");
+        assert_eq!(
+            step0_count, 1,
+            "step 0 must be emitted exactly once, got {step0_count}"
+        );
 
         // Steps 0 and 4 fall on exact boundaries (steps 1,2,3 have no kick hit).
         // Step 0 NoteOn must be at origin, step 4 NoteOn at origin + 4*dur.
@@ -1181,7 +1401,13 @@ mod sequencer_tests {
         let ons: Vec<u64> = sink
             .events
             .iter()
-            .filter(|(_, m)| *m == MidiMessage::NoteOn { channel: 9, note: 36, vel: 100 })
+            .filter(|(_, m)| {
+                *m == MidiMessage::NoteOn {
+                    channel: 9,
+                    note: 36,
+                    vel: 100,
+                }
+            })
             .map(|(t, _)| *t)
             .collect();
         assert_eq!(ons, vec![0]);
@@ -1189,7 +1415,12 @@ mod sequencer_tests {
         let offs: Vec<u64> = sink
             .events
             .iter()
-            .filter(|(_, m)| *m == MidiMessage::NoteOff { channel: 9, note: 36 })
+            .filter(|(_, m)| {
+                *m == MidiMessage::NoteOff {
+                    channel: 9,
+                    note: 36,
+                }
+            })
             .map(|(t, _)| *t)
             .collect();
         assert_eq!(offs, vec![gate]);
@@ -1204,8 +1435,13 @@ mod sequencer_tests {
     /// A drum lane with a kick on every step, so we can measure inter-step gaps.
     fn drum_lane_every_step(length: usize) -> Lane {
         let mut steps: Vec<Vec<DrumHit>> = vec![Vec::new(); length];
-        for s in 0..length {
-            steps[s].push(DrumHit { note: 36, vel: 100, prob: 1.0, ratchet: 1 });
+        for step in steps.iter_mut() {
+            step.push(DrumHit {
+                note: 36,
+                vel: 100,
+                prob: 1.0,
+                ratchet: 1,
+            });
         }
         Lane {
             profile: T8_DRUMS,
@@ -1230,7 +1466,7 @@ mod sequencer_tests {
         // not a burst of catch-up notes (old distortion: gap would be near 0)
         // or a huge pause (retroactive recalculation).
         let dur_120 = step_dur_micros(120.0); // 125_000
-        let dur_60 = step_dur_micros(60.0);   // 250_000
+        let dur_60 = step_dur_micros(60.0); // 250_000
 
         let mut seq = Sequencer::new(set_with(vec![drum_lane_every_step(16)]));
         let mut sink = RecordingSink::new();
@@ -1244,10 +1480,20 @@ mod sequencer_tests {
         let early_ons: Vec<u64> = sink
             .events
             .iter()
-            .filter(|(_, m)| *m == MidiMessage::NoteOn { channel: 9, note: 36, vel: 100 })
+            .filter(|(_, m)| {
+                *m == MidiMessage::NoteOn {
+                    channel: 9,
+                    note: 36,
+                    vel: 100,
+                }
+            })
             .map(|(t, _)| *t)
             .collect();
-        assert_eq!(early_ons, vec![0, dur_120], "steps 0 and 1 must fire at 120 bpm intervals");
+        assert_eq!(
+            early_ons,
+            vec![0, dur_120],
+            "steps 0 and 1 must fire at 120 bpm intervals"
+        );
 
         // Change tempo mid-play.
         seq.set_bpm(60.0);
@@ -1261,7 +1507,13 @@ mod sequencer_tests {
         let all_ons: Vec<u64> = sink
             .events
             .iter()
-            .filter(|(_, m)| *m == MidiMessage::NoteOn { channel: 9, note: 36, vel: 100 })
+            .filter(|(_, m)| {
+                *m == MidiMessage::NoteOn {
+                    channel: 9,
+                    note: 36,
+                    vel: 100,
+                }
+            })
             .map(|(t, _)| *t)
             .collect();
 
@@ -1309,7 +1561,13 @@ mod sequencer_tests {
         let kick_ons: Vec<u64> = sink
             .events
             .iter()
-            .filter(|(_, m)| *m == MidiMessage::NoteOn { channel: 9, note: 36, vel: 100 })
+            .filter(|(_, m)| {
+                *m == MidiMessage::NoteOn {
+                    channel: 9,
+                    note: 36,
+                    vel: 100,
+                }
+            })
             .map(|(t, _)| *t)
             .collect();
 
@@ -1330,7 +1588,13 @@ mod sequencer_tests {
         let kick_ons2: Vec<u64> = sink
             .events
             .iter()
-            .filter(|(_, m)| *m == MidiMessage::NoteOn { channel: 9, note: 36, vel: 100 })
+            .filter(|(_, m)| {
+                *m == MidiMessage::NoteOn {
+                    channel: 9,
+                    note: 36,
+                    vel: 100,
+                }
+            })
             .map(|(t, _)| *t)
             .collect();
 
@@ -1353,7 +1617,14 @@ mod sequencer_tests {
         // is on step 0 itself so the active note is held until step 1 materializes.
         // We want the note HELD after step 0 fires.
         let notes = vec![
-            Some(MelodicNote { semi: 0, vel: 1.0, slide: true, len: 1.0, prob: 1.0, ratchet: 1 }),
+            Some(MelodicNote {
+                semi: 0,
+                vel: 1.0,
+                slide: true,
+                len: 1.0,
+                prob: 1.0,
+                ratchet: 1,
+            }),
             None,
             None,
             None,
@@ -1390,9 +1661,12 @@ mod sequencer_tests {
         // Confirm the NoteOn fired.
         let note_pitch = 45u8; // T8_BASS root 45 + semi 0 = 45
         assert!(
-            sink.events
-                .iter()
-                .any(|(_, m)| *m == MidiMessage::NoteOn { channel: 1, note: note_pitch, vel: 100 }),
+            sink.events.iter().any(|(_, m)| *m
+                == MidiMessage::NoteOn {
+                    channel: 1,
+                    note: note_pitch,
+                    vel: 100
+                }),
             "NoteOn for held note must have fired"
         );
 
@@ -1400,7 +1674,12 @@ mod sequencer_tests {
         let noteoff_before = sink
             .events
             .iter()
-            .filter(|(_, m)| *m == MidiMessage::NoteOff { channel: 1, note: note_pitch })
+            .filter(|(_, m)| {
+                *m == MidiMessage::NoteOff {
+                    channel: 1,
+                    note: note_pitch,
+                }
+            })
             .count();
         assert_eq!(noteoff_before, 0, "held note must not have a NoteOff yet");
 
@@ -1416,7 +1695,12 @@ mod sequencer_tests {
         let noteoff_after = sink
             .events
             .iter()
-            .filter(|(_, m)| *m == MidiMessage::NoteOff { channel: 1, note: note_pitch })
+            .filter(|(_, m)| {
+                *m == MidiMessage::NoteOff {
+                    channel: 1,
+                    note: note_pitch,
+                }
+            })
             .count();
         assert_eq!(
             noteoff_after, 1,
@@ -1440,9 +1724,12 @@ mod sequencer_tests {
 
         let note_pitch = 45u8;
         assert!(
-            sink.events
-                .iter()
-                .any(|(_, m)| *m == MidiMessage::NoteOn { channel: 1, note: note_pitch, vel: 100 }),
+            sink.events.iter().any(|(_, m)| *m
+                == MidiMessage::NoteOn {
+                    channel: 1,
+                    note: note_pitch,
+                    vel: 100
+                }),
             "NoteOn for held note must have fired"
         );
 
@@ -1458,7 +1745,12 @@ mod sequencer_tests {
         let noteoff_count = sink
             .events
             .iter()
-            .filter(|(_, m)| *m == MidiMessage::NoteOff { channel: 1, note: note_pitch })
+            .filter(|(_, m)| {
+                *m == MidiMessage::NoteOff {
+                    channel: 1,
+                    note: note_pitch,
+                }
+            })
             .count();
         assert_eq!(
             noteoff_count, 1,
@@ -1473,7 +1765,12 @@ mod sequencer_tests {
     fn drum_lane_distinct_per_step() -> Lane {
         let mut steps: Vec<Vec<DrumHit>> = vec![Vec::new(); 4];
         for (i, step) in steps.iter_mut().enumerate() {
-            step.push(DrumHit { note: 36 + i as u8, vel: 100, prob: 1.0, ratchet: 1 });
+            step.push(DrumHit {
+                note: 36 + i as u8,
+                vel: 100,
+                prob: 1.0,
+                ratchet: 1,
+            });
         }
         Lane {
             profile: T8_DRUMS,
@@ -1558,7 +1855,11 @@ mod sequencer_tests {
             })
             .collect();
         // Every step's note must appear exactly once, in order.
-        assert_eq!(fired_notes, vec![36, 37, 38, 39], "step-by-step must fire all steps");
+        assert_eq!(
+            fired_notes,
+            vec![36, 37, 38, 39],
+            "step-by-step must fire all steps"
+        );
     }
 
     #[test]

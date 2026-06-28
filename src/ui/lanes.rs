@@ -15,9 +15,9 @@ use crate::ui::theme::{lane_color, playhead_style};
 fn short_label(profile_id: &str) -> &'static str {
     match profile_id {
         "t8-drums" => "DRUM",
-        "t8-bass"  => "BASS",
-        "s1"       => "SYNTH",
-        _          => "?",
+        "t8-bass" => "BASS",
+        "s1" => "SYNTH",
+        _ => "?",
     }
 }
 
@@ -113,7 +113,9 @@ fn lane_line(idx: usize, app: &App) -> Line<'static> {
 
 /// Render the lane overview into `area`.
 pub fn render_lanes(f: &mut Frame, area: Rect, app: &App) {
-    let lines: Vec<Line> = (0..app.set.lanes.len()).map(|i| lane_line(i, app)).collect();
+    let lines: Vec<Line> = (0..app.set.lanes.len())
+        .map(|i| lane_line(i, app))
+        .collect();
     let block = Block::default().borders(Borders::ALL).title(" LANES ");
     let para = Paragraph::new(lines).block(block);
     f.render_widget(para, area);
@@ -132,7 +134,11 @@ mod tests {
     use ratatui::Terminal;
 
     fn empty_library() -> Library {
-        Library { drums: GenreMap::new(), bass: GenreMap::new(), synth: GenreMap::new() }
+        Library {
+            drums: GenreMap::new(),
+            bass: GenreMap::new(),
+            synth: GenreMap::new(),
+        }
     }
 
     fn make_app() -> App {
@@ -184,13 +190,22 @@ mod tests {
         let buf = term.backend().buffer();
         let rows = all_rows(buf, area);
         let whole: String = rows.join("");
-        assert!(whole.contains("DRUM"),  "expected DRUM in: {whole:?}");
-        assert!(whole.contains("BASS"),  "expected BASS in: {whole:?}");
+        assert!(whole.contains("DRUM"), "expected DRUM in: {whole:?}");
+        assert!(whole.contains("BASS"), "expected BASS in: {whole:?}");
         assert!(whole.contains("SYNTH"), "expected SYNTH in: {whole:?}");
         // full labels must NOT appear (we show compact forms)
-        assert!(!whole.contains("T-8 DRUM"),  "must not show full label: {whole:?}");
-        assert!(!whole.contains("T-8 BASS"),  "must not show full label: {whole:?}");
-        assert!(!whole.contains("S-1 SYNTH"), "must not show full label: {whole:?}");
+        assert!(
+            !whole.contains("T-8 DRUM"),
+            "must not show full label: {whole:?}"
+        );
+        assert!(
+            !whole.contains("T-8 BASS"),
+            "must not show full label: {whole:?}"
+        );
+        assert!(
+            !whole.contains("S-1 SYNTH"),
+            "must not show full label: {whole:?}"
+        );
     }
 
     // --- focus marker test -----------------------------------------------
@@ -206,11 +221,17 @@ mod tests {
 
         // Find the row containing BASS and confirm it has ▸
         let bass_row = rows.iter().find(|r| r.contains("BASS")).expect("BASS row");
-        assert!(bass_row.contains('▸'), "focus marker on BASS row: {bass_row:?}");
+        assert!(
+            bass_row.contains('▸'),
+            "focus marker on BASS row: {bass_row:?}"
+        );
 
         // The other rows must not have ▸
         for row in rows.iter().filter(|r| !r.contains("BASS")) {
-            assert!(!row.contains('▸'), "no focus marker on non-focused row: {row:?}");
+            assert!(
+                !row.contains('▸'),
+                "no focus marker on non-focused row: {row:?}"
+            );
         }
     }
 
@@ -225,7 +246,10 @@ mod tests {
         let buf = term.backend().buffer();
         let rows = all_rows(buf, area);
         let drum_row = rows.iter().find(|r| r.contains("DRUM")).expect("DRUM row");
-        assert!(drum_row.contains("M–"), "unmuted should show M–: {drum_row:?}");
+        assert!(
+            drum_row.contains("M–"),
+            "unmuted should show M–: {drum_row:?}"
+        );
     }
 
     #[test]
@@ -237,7 +261,10 @@ mod tests {
         let buf = term.backend().buffer();
         let rows = all_rows(buf, area);
         let drum_row = rows.iter().find(|r| r.contains("DRUM")).expect("DRUM row");
-        assert!(drum_row.contains("M●"), "muted should show M●: {drum_row:?}");
+        assert!(
+            drum_row.contains("M●"),
+            "muted should show M●: {drum_row:?}"
+        );
     }
 
     #[test]
@@ -249,7 +276,10 @@ mod tests {
         let buf = term.backend().buffer();
         let rows = all_rows(buf, area);
         let bass_row = rows.iter().find(|r| r.contains("BASS")).expect("BASS row");
-        assert!(bass_row.contains("S–"), "unsoloed should show S–: {bass_row:?}");
+        assert!(
+            bass_row.contains("S–"),
+            "unsoloed should show S–: {bass_row:?}"
+        );
     }
 
     #[test]
@@ -261,7 +291,10 @@ mod tests {
         let buf = term.backend().buffer();
         let rows = all_rows(buf, area);
         let bass_row = rows.iter().find(|r| r.contains("BASS")).expect("BASS row");
-        assert!(bass_row.contains("S●"), "soloed should show S●: {bass_row:?}");
+        assert!(
+            bass_row.contains("S●"),
+            "soloed should show S●: {bass_row:?}"
+        );
     }
 
     // --- connection indicator tests ---------------------------------------
@@ -275,7 +308,10 @@ mod tests {
         let buf = term.backend().buffer();
         let rows = all_rows(buf, area);
         let drum_row = rows.iter().find(|r| r.contains("DRUM")).expect("DRUM row");
-        assert!(drum_row.contains('●'), "connected should show ●: {drum_row:?}");
+        assert!(
+            drum_row.contains('●'),
+            "connected should show ●: {drum_row:?}"
+        );
     }
 
     #[test]
@@ -286,8 +322,14 @@ mod tests {
         let (term, area) = render(&app, 80, 5);
         let buf = term.backend().buffer();
         let rows = all_rows(buf, area);
-        let synth_row = rows.iter().find(|r| r.contains("SYNTH")).expect("SYNTH row");
-        assert!(synth_row.contains('○'), "disconnected should show ○: {synth_row:?}");
+        let synth_row = rows
+            .iter()
+            .find(|r| r.contains("SYNTH"))
+            .expect("SYNTH row");
+        assert!(
+            synth_row.contains('○'),
+            "disconnected should show ○: {synth_row:?}"
+        );
     }
 
     // --- color test (kept from original) ---------------------------------
@@ -304,8 +346,8 @@ mod tests {
         let bass_y = (0..5)
             .find(|&y| row_string(buf, area, y).contains("BASS"))
             .expect("bass row");
-        let colored = (area.left()..area.right())
-            .any(|x| buf[(x, bass_y)].style().fg == Some(want));
+        let colored =
+            (area.left()..area.right()).any(|x| buf[(x, bass_y)].style().fg == Some(want));
         assert!(colored, "bass row should use the t8-bass lane color");
     }
 }

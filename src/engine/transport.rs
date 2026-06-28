@@ -130,12 +130,19 @@ mod tests {
         // This should reset the tap ring.
         t.tap(5_000_000);
         // After the reset + 1 new tap, we only have 1 tap, so BPM doesn't update yet.
-        assert!((t.manual_bpm - 120.0).abs() < 1.0, "unchanged after first post-gap tap");
+        assert!(
+            (t.manual_bpm - 120.0).abs() < 1.0,
+            "unchanged after first post-gap tap"
+        );
 
         // Now tap again at ~140 BPM intervals (428_571 µs).
         t.tap(5_428_571);
         t.tap(5_857_142);
         // Should see ~140 BPM, not something skewed by the old 120 BPM taps.
-        assert!((t.manual_bpm - 140.0).abs() < 2.0, "new tempo after gap, got {}", t.manual_bpm);
+        assert!(
+            (t.manual_bpm - 140.0).abs() < 2.0,
+            "new tempo after gap, got {}",
+            t.manual_bpm
+        );
     }
 }

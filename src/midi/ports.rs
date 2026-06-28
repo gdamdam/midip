@@ -62,7 +62,10 @@ pub struct MidirSink {
 
 impl MidirSink {
     pub fn new(conn: MidiOutputConnection) -> Self {
-        MidirSink { conn, healthy: true }
+        MidirSink {
+            conn,
+            healthy: true,
+        }
     }
 }
 
@@ -151,14 +154,40 @@ mod tests {
     #[test]
     fn recording_sink_records_in_order() {
         let mut sink = RecordingSink::new();
-        sink.send(MidiMessage::NoteOn { channel: 0, note: 60, vel: 100 }, 1000);
-        sink.send(MidiMessage::NoteOff { channel: 0, note: 60 }, 1500);
+        sink.send(
+            MidiMessage::NoteOn {
+                channel: 0,
+                note: 60,
+                vel: 100,
+            },
+            1000,
+        );
+        sink.send(
+            MidiMessage::NoteOff {
+                channel: 0,
+                note: 60,
+            },
+            1500,
+        );
         sink.send(MidiMessage::Clock, 1600);
         assert_eq!(
             sink.events,
             vec![
-                (1000, MidiMessage::NoteOn { channel: 0, note: 60, vel: 100 }),
-                (1500, MidiMessage::NoteOff { channel: 0, note: 60 }),
+                (
+                    1000,
+                    MidiMessage::NoteOn {
+                        channel: 0,
+                        note: 60,
+                        vel: 100
+                    }
+                ),
+                (
+                    1500,
+                    MidiMessage::NoteOff {
+                        channel: 0,
+                        note: 60
+                    }
+                ),
                 (1600, MidiMessage::Clock),
             ]
         );
@@ -199,7 +228,10 @@ mod tests {
 
     #[test]
     fn sink_test_double_starts_healthy_and_flips_on_error() {
-        let mut sink = FailingSink { healthy: true, should_fail: false };
+        let mut sink = FailingSink {
+            healthy: true,
+            should_fail: false,
+        };
         assert!(sink.health(), "should start healthy");
         sink.send(MidiMessage::Clock, 0);
         assert!(sink.health(), "still healthy when send succeeds");

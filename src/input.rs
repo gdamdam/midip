@@ -39,18 +39,18 @@ pub fn key_to_action(key: KeyEvent, mode: Mode, kind: LaneKind) -> Action {
 
     match mode {
         Mode::Library => match key.code {
-            KeyCode::Left  => return Action::LibNav(-1, 0),  // switch to Genre column
-            KeyCode::Right => return Action::LibNav(1, 0),   // switch to Pattern column
-            KeyCode::Up    => return Action::LibNav(0, -1),  // move up in focused list
-            KeyCode::Down  => return Action::LibNav(0, 1),   // move down in focused list
+            KeyCode::Left => return Action::LibNav(-1, 0), // switch to Genre column
+            KeyCode::Right => return Action::LibNav(1, 0), // switch to Pattern column
+            KeyCode::Up => return Action::LibNav(0, -1),   // move up in focused list
+            KeyCode::Down => return Action::LibNav(0, 1),  // move down in focused list
             KeyCode::Enter => return Action::LibLoad,
-            KeyCode::Char('a') => return Action::Audition,   // cue/audition selected pattern
+            KeyCode::Char('a') => return Action::Audition, // cue/audition selected pattern
             KeyCode::Char('l') | KeyCode::Esc => return Action::CloseLibrary,
             _ => {}
         },
         Mode::SetBrowser => match key.code {
-            KeyCode::Up    => return Action::SetBrowserNav(-1),
-            KeyCode::Down  => return Action::SetBrowserNav(1),
+            KeyCode::Up => return Action::SetBrowserNav(-1),
+            KeyCode::Down => return Action::SetBrowserNav(1),
             KeyCode::Enter => return Action::SetBrowserLoad,
             KeyCode::Esc | KeyCode::Char('o') => return Action::CloseSetBrowser,
             _ => {}
@@ -191,22 +191,36 @@ mod tests {
 
     #[test]
     fn space_is_toggle_play_in_all_modes() {
-        for mode in [Mode::Edit, Mode::Library, Mode::Help, Mode::TempoEntry, Mode::SetBrowser] {
+        for mode in [
+            Mode::Edit,
+            Mode::Library,
+            Mode::Help,
+            Mode::TempoEntry,
+            Mode::SetBrowser,
+        ] {
             assert_eq!(
                 key_to_action(k(KeyCode::Char(' ')), mode, LaneKind::Drums),
                 Action::TogglePlay,
-                "Space should be TogglePlay in {:?}", mode
+                "Space should be TogglePlay in {:?}",
+                mode
             );
         }
     }
 
     #[test]
     fn exclamation_is_panic_in_all_modes() {
-        for mode in [Mode::Edit, Mode::Library, Mode::Help, Mode::TempoEntry, Mode::SetBrowser] {
+        for mode in [
+            Mode::Edit,
+            Mode::Library,
+            Mode::Help,
+            Mode::TempoEntry,
+            Mode::SetBrowser,
+        ] {
             assert_eq!(
                 key_to_action(k(KeyCode::Char('!')), mode, LaneKind::Drums),
                 Action::Panic,
-                "! should be Panic in {:?}", mode
+                "! should be Panic in {:?}",
+                mode
             );
         }
     }

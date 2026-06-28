@@ -1,7 +1,7 @@
 use midip::devices::profiles;
 use midip::devices::profiles::resolve_melodic_pitch;
-use midip::engine::{run_engine_headless, EngineEvent, UiCommand};
 use midip::engine::scheduler::step_dur_micros;
+use midip::engine::{run_engine_headless, EngineEvent, UiCommand};
 use midip::link::{step_from_beat, FakeLink};
 use midip::midi::message::MidiMessage;
 use midip::midi::ports::RecordingSink;
@@ -18,7 +18,12 @@ fn three_lane_set() -> Set {
 
     let mut drum_steps: Vec<DrumStep> = vec![Vec::new(); 16];
     for &s in &[0usize, 4, 8, 12] {
-        drum_steps[s] = vec![DrumHit { note: 36, vel: 100, prob: 1.0, ratchet: 1 }];
+        drum_steps[s] = vec![DrumHit {
+            note: 36,
+            vel: 100,
+            prob: 1.0,
+            ratchet: 1,
+        }];
     }
     let drums = Pattern {
         name: "kick".into(),
@@ -28,8 +33,22 @@ fn three_lane_set() -> Set {
     };
 
     let mut bass_steps: Vec<MelodicStep> = vec![None; 16];
-    bass_steps[0] = Some(MelodicNote { semi: 0, vel: 1.0, slide: false, len: 0.5, prob: 1.0, ratchet: 1 });
-    bass_steps[8] = Some(MelodicNote { semi: 0, vel: 1.0, slide: false, len: 0.5, prob: 1.0, ratchet: 1 });
+    bass_steps[0] = Some(MelodicNote {
+        semi: 0,
+        vel: 1.0,
+        slide: false,
+        len: 0.5,
+        prob: 1.0,
+        ratchet: 1,
+    });
+    bass_steps[8] = Some(MelodicNote {
+        semi: 0,
+        vel: 1.0,
+        slide: false,
+        len: 0.5,
+        prob: 1.0,
+        ratchet: 1,
+    });
     let bass = Pattern {
         name: "bass".into(),
         desc: String::new(),
@@ -38,7 +57,14 @@ fn three_lane_set() -> Set {
     };
 
     let mut synth_steps: Vec<MelodicStep> = vec![None; 16];
-    synth_steps[4] = Some(MelodicNote { semi: 12, vel: 1.0, slide: false, len: 0.9, prob: 1.0, ratchet: 1 });
+    synth_steps[4] = Some(MelodicNote {
+        semi: 12,
+        vel: 1.0,
+        slide: false,
+        len: 0.9,
+        prob: 1.0,
+        ratchet: 1,
+    });
     let synth = Pattern {
         name: "synth".into(),
         desc: String::new(),
@@ -47,11 +73,37 @@ fn three_lane_set() -> Set {
     };
 
     let lanes = vec![
-        Lane { profile: profs[0], pattern: drums, mute: false, solo: false, transpose: 0, octave: 0 },
-        Lane { profile: profs[1], pattern: bass,  mute: false, solo: false, transpose: 0, octave: 0 },
-        Lane { profile: profs[2], pattern: synth, mute: false, solo: false, transpose: 0, octave: 0 },
+        Lane {
+            profile: profs[0],
+            pattern: drums,
+            mute: false,
+            solo: false,
+            transpose: 0,
+            octave: 0,
+        },
+        Lane {
+            profile: profs[1],
+            pattern: bass,
+            mute: false,
+            solo: false,
+            transpose: 0,
+            octave: 0,
+        },
+        Lane {
+            profile: profs[2],
+            pattern: synth,
+            mute: false,
+            solo: false,
+            transpose: 0,
+            octave: 0,
+        },
     ];
-    Set { name: "test".into(), bpm: 120.0, swing: 0.5, lanes }
+    Set {
+        name: "test".into(),
+        bpm: 120.0,
+        swing: 0.5,
+        lanes,
+    }
 }
 
 fn note_ons(sink: &RecordingSink) -> Vec<(u64, u8, u8, u8)> {
@@ -83,13 +135,22 @@ fn play_one_bar_emits_expected_noteons_and_playhead_advances() {
 
     let ons = note_ons(&sink);
     // Drum BD on ch 9 (note 36) at steps 0,4,8,12 -> 4 hits.
-    let bd: Vec<_> = ons.iter().filter(|(_, ch, n, _)| *ch == 9 && *n == 36).collect();
+    let bd: Vec<_> = ons
+        .iter()
+        .filter(|(_, ch, n, _)| *ch == 9 && *n == 36)
+        .collect();
     assert_eq!(bd.len(), 4, "expected 4 BD hits, got {:?}", bd);
     // Bass on ch 1, root 45 + semi 0 = 45, at steps 0 and 8 -> 2 hits.
-    let bass: Vec<_> = ons.iter().filter(|(_, ch, n, _)| *ch == 1 && *n == 45).collect();
+    let bass: Vec<_> = ons
+        .iter()
+        .filter(|(_, ch, n, _)| *ch == 1 && *n == 45)
+        .collect();
     assert_eq!(bass.len(), 2, "expected 2 bass hits, got {:?}", bass);
     // Synth on ch 0, root 45 + semi 12 = 57, at step 4 -> 1 hit.
-    let synth: Vec<_> = ons.iter().filter(|(_, ch, n, _)| *ch == 0 && *n == 57).collect();
+    let synth: Vec<_> = ons
+        .iter()
+        .filter(|(_, ch, n, _)| *ch == 0 && *n == 57)
+        .collect();
     assert_eq!(synth.len(), 1, "expected 1 synth hit, got {:?}", synth);
 
     // Playhead events should cover steps 0..=15 (each step visited at least once).
@@ -100,7 +161,11 @@ fn play_one_bar_emits_expected_noteons_and_playhead_advances() {
             seen[*step] = true;
         }
     }
-    assert!(seen.iter().all(|s| *s), "not all steps were reported: {:?}", seen);
+    assert!(
+        seen.iter().all(|s| *s),
+        "not all steps were reported: {:?}",
+        seen
+    );
 }
 
 #[test]
@@ -187,7 +252,12 @@ fn link_enabled_sync_drives_step_from_beat() {
         EngineEvent::Playhead { step, .. } => Some(*step),
         _ => None,
     });
-    assert_eq!(first_step, Some(expected), "Link sync should place playhead at step {}", expected);
+    assert_eq!(
+        first_step,
+        Some(expected),
+        "Link sync should place playhead at step {}",
+        expected
+    );
 }
 
 #[test]
@@ -205,7 +275,11 @@ fn play_with_link_enabled_requests_quantized_start() {
         1_000,
     );
     // With Link enabled, Play must request a quantized (next-bar) start.
-    assert_eq!(link.started_at, Some(0), "Play under Link should call request_start");
+    assert_eq!(
+        link.started_at,
+        Some(0),
+        "Play under Link should call request_start"
+    );
 }
 
 #[test]
@@ -230,13 +304,21 @@ fn panic_emits_all_notes_off_without_stopping_playback() {
     // CC 123 (All Notes Off) appears on each distinct lane channel (9, 1, 0).
     for ch in [9u8, 1u8, 0u8] {
         assert!(
-            sink.events.iter().any(|(_, m)|
-                *m == MidiMessage::ControlChange { channel: ch, controller: 123, value: 0 }),
+            sink.events.iter().any(|(_, m)| *m
+                == MidiMessage::ControlChange {
+                    channel: ch,
+                    controller: 123,
+                    value: 0
+                }),
             "expected CC123 on channel {ch} after panic"
         );
         assert!(
-            sink.events.iter().any(|(_, m)|
-                *m == MidiMessage::ControlChange { channel: ch, controller: 120, value: 0 }),
+            sink.events.iter().any(|(_, m)| *m
+                == MidiMessage::ControlChange {
+                    channel: ch,
+                    controller: 120,
+                    value: 0
+                }),
             "expected CC120 on channel {ch} after panic"
         );
     }
@@ -245,7 +327,10 @@ fn panic_emits_all_notes_off_without_stopping_playback() {
         .into_iter()
         .filter(|(at, ch, n, _)| *at > panic_at && *ch == 9 && *n == 36)
         .count();
-    assert!(bd_after > 0, "panic must not stop playback (expected BD hits after panic)");
+    assert!(
+        bd_after > 0,
+        "panic must not stop playback (expected BD hits after panic)"
+    );
 }
 
 // --- Fix #3: undo/redo must reach playback ------------------------------------
@@ -258,7 +343,14 @@ fn undo_synclanes_updates_engine_pattern_without_resetting_playhead() {
     let mut set = three_lane_set();
     // Modify lane 1 in the "edited" state: add an extra note at step 4.
     if let PatternData::Melodic(ref mut steps) = set.lanes[1].pattern.data {
-        steps[4] = Some(MelodicNote { semi: 0, vel: 1.0, slide: false, len: 0.5, prob: 1.0, ratchet: 1 });
+        steps[4] = Some(MelodicNote {
+            semi: 0,
+            vel: 1.0,
+            slide: false,
+            len: 0.5,
+            prob: 1.0,
+            ratchet: 1,
+        });
     }
 
     // The "undone" lanes have note only at steps 0 and 8 (original three_lane_set).
@@ -299,7 +391,11 @@ fn undo_synclanes_updates_engine_pattern_without_resetting_playhead() {
     let step4_fires_after_sync = bass_ons.iter().any(|(at, _, _, _)| {
         *at >= step4_time.saturating_sub(step4_margin) && *at <= step4_time + step4_margin
     });
-    assert!(!step4_fires_after_sync, "after SyncLanes (undo), edited step-4 note must not fire; got {:?}", bass_ons);
+    assert!(
+        !step4_fires_after_sync,
+        "after SyncLanes (undo), edited step-4 note must not fire; got {:?}",
+        bass_ons
+    );
 }
 
 // --- Fix #4: octave must reach playback --------------------------------------
@@ -315,8 +411,11 @@ fn set_octave_shifts_emitted_note_pitch() {
     let octave_before: i8 = 0;
     let octave_after: i8 = 1;
     let pitch_before = resolve_melodic_pitch(root, 12, 0, octave_before);
-    let pitch_after  = resolve_melodic_pitch(root, 12, 0, octave_after);
-    assert_ne!(pitch_before, pitch_after, "test precondition: octave shift must change pitch");
+    let pitch_after = resolve_melodic_pitch(root, 12, 0, octave_after);
+    assert_ne!(
+        pitch_before, pitch_after,
+        "test precondition: octave shift must change pitch"
+    );
 
     let mut link = FakeLink::new();
     let mut sink = RecordingSink::new();
@@ -329,7 +428,13 @@ fn set_octave_shifts_emitted_note_pitch() {
         &mut link,
         &mut sink,
         vec![
-            (0, UiCommand::SetOctave { lane: 2, octave: octave_after }),
+            (
+                0,
+                UiCommand::SetOctave {
+                    lane: 2,
+                    octave: octave_after,
+                },
+            ),
             (0, UiCommand::Play),
         ],
         total,
@@ -341,14 +446,21 @@ fn set_octave_shifts_emitted_note_pitch() {
         .into_iter()
         .filter(|(_, ch, _, _)| *ch == 0)
         .collect();
-    assert!(!synth_ons.is_empty(), "expected synth NoteOns after SetOctave");
     assert!(
-        synth_ons.iter().all(|(_, _, note, _)| *note == pitch_after),
-        "all synth NoteOns must use shifted pitch {pitch_after}, got {:?}", synth_ons
+        !synth_ons.is_empty(),
+        "expected synth NoteOns after SetOctave"
     );
     assert!(
-        synth_ons.iter().all(|(_, _, note, _)| *note != pitch_before),
-        "no synth NoteOn should use unshifted pitch {pitch_before}, got {:?}", synth_ons
+        synth_ons.iter().all(|(_, _, note, _)| *note == pitch_after),
+        "all synth NoteOns must use shifted pitch {pitch_after}, got {:?}",
+        synth_ons
+    );
+    assert!(
+        synth_ons
+            .iter()
+            .all(|(_, _, note, _)| *note != pitch_before),
+        "no synth NoteOn should use unshifted pitch {pitch_before}, got {:?}",
+        synth_ons
     );
 }
 
@@ -376,15 +488,23 @@ fn quit_emits_all_notes_off_before_stopping() {
     // CC 123 (All Notes Off) must appear on each lane channel at/after quit_at.
     for ch in [9u8, 1u8, 0u8] {
         assert!(
-            sink.events.iter().any(|(at, m)|
-                *at >= quit_at &&
-                *m == MidiMessage::ControlChange { channel: ch, controller: 123, value: 0 }),
+            sink.events.iter().any(|(at, m)| *at >= quit_at
+                && *m
+                    == MidiMessage::ControlChange {
+                        channel: ch,
+                        controller: 123,
+                        value: 0
+                    }),
             "expected CC123 on channel {ch} at/after Quit"
         );
         assert!(
-            sink.events.iter().any(|(at, m)|
-                *at >= quit_at &&
-                *m == MidiMessage::ControlChange { channel: ch, controller: 120, value: 0 }),
+            sink.events.iter().any(|(at, m)| *at >= quit_at
+                && *m
+                    == MidiMessage::ControlChange {
+                        channel: ch,
+                        controller: 120,
+                        value: 0
+                    }),
             "expected CC120 on channel {ch} at/after Quit"
         );
     }
@@ -403,7 +523,11 @@ fn status_string_appears_in_transport() {
     use ratatui::Terminal;
 
     fn empty_library() -> Library {
-        Library { drums: GenreMap::new(), bass: GenreMap::new(), synth: GenreMap::new() }
+        Library {
+            drums: GenreMap::new(),
+            bass: GenreMap::new(),
+            synth: GenreMap::new(),
+        }
     }
 
     let set = Set::default_set(default_profiles());
@@ -413,6 +537,15 @@ fn status_string_appears_in_transport() {
     let backend = TestBackend::new(120, 4);
     let mut term = Terminal::new(backend).unwrap();
     term.draw(|f| render_transport(f, f.area(), &app)).unwrap();
-    let text: String = term.backend().buffer().content().iter().map(|c| c.symbol()).collect();
-    assert!(text.contains("library loaded"), "status must appear in transport, got: {text:?}");
+    let text: String = term
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|c| c.symbol())
+        .collect();
+    assert!(
+        text.contains("library loaded"),
+        "status must appear in transport, got: {text:?}"
+    );
 }

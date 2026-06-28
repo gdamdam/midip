@@ -25,14 +25,29 @@ pub enum UiCommand {
     Tap,
     SetSwing(f32),
     ToggleLink(bool),
-    LoadPattern { lane: usize, pattern: Pattern },
-    Mute { lane: usize, on: bool },
-    Solo { lane: usize, on: bool },
-    Transpose { lane: usize, semis: i8 },
+    LoadPattern {
+        lane: usize,
+        pattern: Pattern,
+    },
+    Mute {
+        lane: usize,
+        on: bool,
+    },
+    Solo {
+        lane: usize,
+        on: bool,
+    },
+    Transpose {
+        lane: usize,
+        semis: i8,
+    },
     /// Sync all lane state after undo/redo. Does NOT rebuild the Sequencer or reset the clock/playhead.
     SyncLanes(Vec<Lane>),
     /// Update a single lane's octave shift without touching anything else.
-    SetOctave { lane: usize, octave: i8 },
+    SetOctave {
+        lane: usize,
+        octave: i8,
+    },
     SetSet(Set),
     /// All-notes-off / all-sound-off live recovery; does not stop transport.
     Panic,
@@ -42,9 +57,22 @@ pub enum UiCommand {
 /// Events sent engine -> UI.
 #[derive(Clone, Debug, PartialEq)]
 pub enum EngineEvent {
-    Playhead { step: usize, bar: u32, beat: u32, phase: f32 },
-    LinkStatus { enabled: bool, tempo: f64, peers: u64 },
-    DeviceStatus { lane: usize, connected: bool, port: String },
+    Playhead {
+        step: usize,
+        bar: u32,
+        beat: u32,
+        phase: f32,
+    },
+    LinkStatus {
+        enabled: bool,
+        tempo: f64,
+        peers: u64,
+    },
+    DeviceStatus {
+        lane: usize,
+        connected: bool,
+        port: String,
+    },
 }
 
 /// Handle returned by `spawn_engine`.
@@ -227,7 +255,11 @@ fn step_engine(
     //    `ToggleLink` keeps `transport.source` in sync (Manual ↔ Link), so this call is
     //    the single authoritative BPM resolution path for both headless tests and the real
     //    engine thread.
-    let link_tempo = if st.link_enabled { Some(link.tempo()) } else { None };
+    let link_tempo = if st.link_enabled {
+        Some(link.tempo())
+    } else {
+        None
+    };
     let bpm = st.transport.effective_bpm(link_tempo);
 
     if st.link_enabled {
@@ -257,7 +289,7 @@ fn step_engine(
     }
 
     // 5. Periodic Link status.
-    if st.tick_count % LINK_STATUS_EVERY == 0 {
+    if st.tick_count.is_multiple_of(LINK_STATUS_EVERY) {
         events.push(EngineEvent::LinkStatus {
             enabled: st.link_enabled,
             tempo: link.tempo(),
@@ -362,11 +394,7 @@ fn port_display_name(available: &[String], port_match: &str) -> String {
 /// Emit a `DeviceStatus` for every lane, derived from its mapped port's current state.
 /// Both lanes sharing a port report the SAME connected/port — consistent with the single
 /// underlying connection.
-fn emit_lane_status(
-    ports: &[PortSink],
-    lane_to_port: &[usize; 3],
-    events: &mut Vec<EngineEvent>,
-) {
+fn emit_lane_status(ports: &[PortSink], lane_to_port: &[usize; 3], events: &mut Vec<EngineEvent>) {
     for (lane, &port_idx) in lane_to_port.iter().enumerate() {
         let ps = &ports[port_idx];
         events.push(EngineEvent::DeviceStatus {
@@ -497,9 +525,17 @@ pub fn spawn_engine(
             }
 
             // Fan out once per PORT (a shared port gets each message — incl. clock — ONCE).
-            let mut fanout = PortFanoutSink { ports: &mut port_sinks };
-            let quit =
-                step_engine(&mut st, now, &mut pending, link.as_mut(), &mut fanout, &mut events);
+            let mut fanout = PortFanoutSink {
+                ports: &mut port_sinks,
+            };
+            let quit = step_engine(
+                &mut st,
+                now,
+                &mut pending,
+                link.as_mut(),
+                &mut fanout,
+                &mut events,
+            );
 
             // Forward any events to the UI; drop on disconnect.
             for ev in events.drain(..) {
@@ -512,7 +548,7 @@ pub fn spawn_engine(
             }
 
             // Periodic hot-plug rescan: check health + port presence every ~1 s.
-            if st.tick_count % HOTPLUG_CHECK_EVERY == 0 && st.tick_count > 0 {
+            if st.tick_count.is_multiple_of(HOTPLUG_CHECK_EVERY) && st.tick_count > 0 {
                 rescan_port_sinks(&mut port_sinks, &lane_to_port, &mut events);
                 for ev in events.drain(..) {
                     if evt_tx.send(ev).is_err() {
@@ -526,7 +562,11 @@ pub fn spawn_engine(
         }
     });
 
-    EngineHandle { tx: cmd_tx, rx: evt_rx, join }
+    EngineHandle {
+        tx: cmd_tx,
+        rx: evt_rx,
+        join,
+    }
 }
 
 /// Fans a single `send` out to every distinct-port sink — ONCE per physical port.
@@ -573,17 +613,25 @@ mod tests {
         assert_eq!(distinct, vec!["T-8", "S-1"]);
 
         // Both T-8 lanes map to the SAME port index (one shared connection).
-        assert_eq!(lane_to_port[0], lane_to_port[1], "T-8 drums + bass share one port");
+        assert_eq!(
+            lane_to_port[0], lane_to_port[1],
+            "T-8 drums + bass share one port"
+        );
         // S-1 maps to a different port.
         assert_ne!(lane_to_port[2], lane_to_port[0], "S-1 is a distinct port");
 
         // The number of distinct ports == number of connections the engine will open:
         // one per unique port_match. With two T-8 lanes that is ONE T-8 connection.
-        let t8_connections = lane_to_port.iter().filter(|&&p| distinct[p] == "T-8").count();
+        let t8_connections = lane_to_port
+            .iter()
+            .filter(|&&p| distinct[p] == "T-8")
+            .count();
         assert_eq!(t8_connections, 2, "two lanes target T-8");
-        let t8_distinct_ports =
-            distinct.iter().filter(|m| **m == "T-8").count();
-        assert_eq!(t8_distinct_ports, 1, "but only ONE T-8 connection is opened");
+        let t8_distinct_ports = distinct.iter().filter(|m| **m == "T-8").count();
+        assert_eq!(
+            t8_distinct_ports, 1,
+            "but only ONE T-8 connection is opened"
+        );
     }
 
     /// effective_bpm: when link is disabled, Transport::effective_bpm(None) == manual_bpm.
@@ -620,9 +668,9 @@ mod tests {
         let mut link = FakeLink::new();
         let mut sink = RecordingSink::new();
         let events = run_engine_headless(set, &mut link, &mut sink, vec![], 1_000, 100);
-        let found = events.iter().any(|ev| {
-            matches!(ev, EngineEvent::LinkStatus { enabled: false, .. })
-        });
+        let found = events
+            .iter()
+            .any(|ev| matches!(ev, EngineEvent::LinkStatus { enabled: false, .. }));
         assert!(found, "expected at least one LinkStatus{{enabled:false}}");
     }
 
@@ -640,9 +688,12 @@ mod tests {
             1_000,
             100,
         );
-        let enabled_ev = events.iter().any(|ev| {
-            matches!(ev, EngineEvent::LinkStatus { enabled: true, .. })
-        });
-        assert!(enabled_ev, "expected LinkStatus{{enabled:true}} after ToggleLink");
+        let enabled_ev = events
+            .iter()
+            .any(|ev| matches!(ev, EngineEvent::LinkStatus { enabled: true, .. }));
+        assert!(
+            enabled_ev,
+            "expected LinkStatus{{enabled:true}} after ToggleLink"
+        );
     }
 }

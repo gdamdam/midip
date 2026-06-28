@@ -88,7 +88,10 @@ mod tests {
         gen.start(0);
         gen.tick(20_833, 120.0, &mut sink); // some Clock ticks while running
         gen.stop();
-        assert!(!sink.events.is_empty(), "expected Clock ticks while running");
+        assert!(
+            !sink.events.is_empty(),
+            "expected Clock ticks while running"
+        );
         assert!(
             sink.events.iter().all(|(_, m)| *m == MidiMessage::Clock),
             "only Clock may be sent; found a transport/realtime message"

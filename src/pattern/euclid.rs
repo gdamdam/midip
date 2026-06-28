@@ -91,14 +91,24 @@ mod tests {
     fn bjorklund_4_16_gives_quarter_notes() {
         let mask = bjorklund(4, 16, 0);
         assert_eq!(mask.len(), 16);
-        let on: Vec<usize> = mask.iter().enumerate().filter(|(_, &b)| b).map(|(i, _)| i).collect();
+        let on: Vec<usize> = mask
+            .iter()
+            .enumerate()
+            .filter(|(_, &b)| b)
+            .map(|(i, _)| i)
+            .collect();
         assert_eq!(on, vec![0, 4, 8, 12]);
     }
 
     #[test]
     fn bjorklund_1_16_gives_single_onset_at_zero() {
         let mask = bjorklund(1, 16, 0);
-        let on: Vec<usize> = mask.iter().enumerate().filter(|(_, &b)| b).map(|(i, _)| i).collect();
+        let on: Vec<usize> = mask
+            .iter()
+            .enumerate()
+            .filter(|(_, &b)| b)
+            .map(|(i, _)| i)
+            .collect();
         assert_eq!(on, vec![0]);
     }
 
@@ -106,7 +116,12 @@ mod tests {
     fn bjorklund_rotation_shifts_left() {
         // 4 pulses in 16, rotation 1: {0,4,8,12} -> {3,7,11,15}
         let mask = bjorklund(4, 16, 1);
-        let on: Vec<usize> = mask.iter().enumerate().filter(|(_, &b)| b).map(|(i, _)| i).collect();
+        let on: Vec<usize> = mask
+            .iter()
+            .enumerate()
+            .filter(|(_, &b)| b)
+            .map(|(i, _)| i)
+            .collect();
         assert_eq!(on, vec![3, 7, 11, 15]);
     }
 
@@ -114,7 +129,12 @@ mod tests {
     fn e3_8_is_the_tresillo() {
         // Tresillo: 3 pulses in 8 steps → {0, 3, 6}
         let mask = bjorklund(3, 8, 0);
-        let on: Vec<usize> = mask.iter().enumerate().filter(|(_, &b)| b).map(|(i, _)| i).collect();
+        let on: Vec<usize> = mask
+            .iter()
+            .enumerate()
+            .filter(|(_, &b)| b)
+            .map(|(i, _)| i)
+            .collect();
         assert_eq!(on, vec![0, 3, 6]);
     }
 
@@ -122,11 +142,13 @@ mod tests {
     fn e5_8_is_the_standard_cinquillo() {
         // Toussaint's canonical E(5,8): x.xx.xx.
         let p = bjorklund(5, 8, 0);
-        assert_eq!(
-            p,
-            vec![true, false, true, true, false, true, true, false]
-        );
-        let on: Vec<usize> = p.iter().enumerate().filter(|(_, &b)| b).map(|(i, _)| i).collect();
+        assert_eq!(p, vec![true, false, true, true, false, true, true, false]);
+        let on: Vec<usize> = p
+            .iter()
+            .enumerate()
+            .filter(|(_, &b)| b)
+            .map(|(i, _)| i)
+            .collect();
         assert_eq!(on, vec![0, 2, 3, 5, 6]);
     }
 

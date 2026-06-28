@@ -9,7 +9,9 @@ use ratatui::Frame;
 fn header(title: &'static str) -> Line<'static> {
     Line::from(Span::styled(
         title,
-        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
     ))
 }
 
@@ -65,9 +67,10 @@ pub fn render_help(f: &mut Frame, area: Rect) {
     ];
     // Clear behind the overlay so it sits on top of the editor.
     f.render_widget(Clear, area);
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(Span::styled(" CONTROLS ", Style::default().add_modifier(Modifier::BOLD)));
+    let block = Block::default().borders(Borders::ALL).title(Span::styled(
+        " CONTROLS ",
+        Style::default().add_modifier(Modifier::BOLD),
+    ));
     f.render_widget(Paragraph::new(lines).block(block), area);
 }
 
@@ -81,7 +84,12 @@ mod tests {
         let backend = TestBackend::new(w, h);
         let mut term = Terminal::new(backend).unwrap();
         term.draw(|f| render_help(f, f.area())).unwrap();
-        term.backend().buffer().content().iter().map(|c| c.symbol()).collect()
+        term.backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect()
     }
 
     #[test]
@@ -90,11 +98,26 @@ mod tests {
         let whole = render_help_to_string(110, 40);
         assert!(whole.contains("play"), "expected play hint, got: {whole:?}");
         // New bindings are listed in the help overlay.
-        assert!(whole.contains("probability"), "expected prob hint, got: {whole:?}");
-        assert!(whole.contains("ratchet"), "expected ratchet hint, got: {whole:?}");
-        assert!(whole.contains("euclid"), "expected euclid hint, got: {whole:?}");
-        assert!(whole.contains("ctrl+z"), "expected ctrl+z undo hint, got: {whole:?}");
-        assert!(whole.contains("panic"), "expected esc panic hint, got: {whole:?}");
+        assert!(
+            whole.contains("probability"),
+            "expected prob hint, got: {whole:?}"
+        );
+        assert!(
+            whole.contains("ratchet"),
+            "expected ratchet hint, got: {whole:?}"
+        );
+        assert!(
+            whole.contains("euclid"),
+            "expected euclid hint, got: {whole:?}"
+        );
+        assert!(
+            whole.contains("ctrl+z"),
+            "expected ctrl+z undo hint, got: {whole:?}"
+        );
+        assert!(
+            whole.contains("panic"),
+            "expected esc panic hint, got: {whole:?}"
+        );
     }
 
     #[test]
@@ -102,7 +125,10 @@ mod tests {
         // Must be wide/tall enough to show all grouped content.
         let whole = render_help_to_string(110, 40);
         // Transport group
-        assert!(whole.contains("Transport"), "expected Transport group header");
+        assert!(
+            whole.contains("Transport"),
+            "expected Transport group header"
+        );
         assert!(whole.contains("panic"), "expected panic in Transport group");
         // Edit/Drums group
         assert!(whole.contains("Drums"), "expected Drums group header");
@@ -112,7 +138,10 @@ mod tests {
         assert!(whole.contains("slide"), "expected slide in Melodic group");
         // Per-step group
         assert!(whole.contains("Per-step"), "expected Per-step group header");
-        assert!(whole.contains("probability"), "expected probability in Per-step");
+        assert!(
+            whole.contains("probability"),
+            "expected probability in Per-step"
+        );
         assert!(whole.contains("ratchet"), "expected ratchet in Per-step");
         // Global/misc group
         assert!(whole.contains("Global"), "expected Global group header");

@@ -14,7 +14,9 @@ use crate::ui::theme::{cursor_style, lane_color, note_name, playhead_style, vel_
 /// Combined style when cursor and playhead coincide: keep playhead bg, add cursor modifiers.
 fn combined_cursor_playhead_style() -> Style {
     // Fall back to DarkGray if the theme ever drops the playhead bg, so we never panic.
-    let bg = playhead_style().bg.unwrap_or(ratatui::style::Color::DarkGray);
+    let bg = playhead_style()
+        .bg
+        .unwrap_or(ratatui::style::Color::DarkGray);
     cursor_style().bg(bg)
 }
 
@@ -126,7 +128,11 @@ pub fn render_melodic_editor(f: &mut Frame, area: Rect, app: &App) {
                 } else {
                     // Sub-step: partial head, no sustain from this note.
                     // Don't extend sustain_end.
-                    if note.slide { "──▷ ".to_string() } else { "▷   ".to_string() }
+                    if note.slide {
+                        "──▷ ".to_string()
+                    } else {
+                        "▷   ".to_string()
+                    }
                 };
                 len_spans.push(Span::raw(note_head));
 
@@ -201,7 +207,11 @@ mod tests {
     use ratatui::Terminal;
 
     fn empty_library() -> Library {
-        Library { drums: GenreMap::new(), bass: GenreMap::new(), synth: GenreMap::new() }
+        Library {
+            drums: GenreMap::new(),
+            bass: GenreMap::new(),
+            synth: GenreMap::new(),
+        }
     }
 
     #[test]
@@ -210,7 +220,12 @@ mod tests {
         let mut set = Set::default_set(default_profiles());
         let mut steps: Vec<Option<MelodicNote>> = vec![None; 32];
         steps[20] = Some(MelodicNote {
-            semi: 5, vel: 1.0, slide: false, len: 1.0, prob: 1.0, ratchet: 1,
+            semi: 5,
+            vel: 1.0,
+            slide: false,
+            len: 1.0,
+            prob: 1.0,
+            ratchet: 1,
         });
         set.lanes[1].pattern = Pattern {
             name: "test32".to_string(),
@@ -226,12 +241,24 @@ mod tests {
 
         let backend = TestBackend::new(120, 8);
         let mut term = Terminal::new(backend).unwrap();
-        term.draw(|f| render_melodic_editor(f, f.area(), &app)).unwrap();
+        term.draw(|f| render_melodic_editor(f, f.area(), &app))
+            .unwrap();
 
-        let whole: String =
-            term.backend().buffer().content().iter().map(|c| c.symbol()).collect();
-        assert!(whole.contains("steps "), "expected scroll indicator, got: {whole:?}");
-        assert!(whole.contains("21"), "expected step 21 visible after scroll, got: {whole:?}");
+        let whole: String = term
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(
+            whole.contains("steps "),
+            "expected scroll indicator, got: {whole:?}"
+        );
+        assert!(
+            whole.contains("21"),
+            "expected step 21 visible after scroll, got: {whole:?}"
+        );
     }
 
     #[test]
@@ -239,10 +266,20 @@ mod tests {
         let mut set = Set::default_set(default_profiles());
         let mut steps: Vec<Option<MelodicNote>> = vec![None; 16];
         steps[0] = Some(MelodicNote {
-            semi: 0, vel: 1.0, slide: false, len: 1.0, prob: 1.0, ratchet: 1,
+            semi: 0,
+            vel: 1.0,
+            slide: false,
+            len: 1.0,
+            prob: 1.0,
+            ratchet: 1,
         });
         steps[4] = Some(MelodicNote {
-            semi: 7, vel: 1.0, slide: true, len: 1.0, prob: 1.0, ratchet: 1,
+            semi: 7,
+            vel: 1.0,
+            slide: true,
+            len: 1.0,
+            prob: 1.0,
+            ratchet: 1,
         });
         set.lanes[1].pattern = Pattern {
             name: "test".to_string(),
@@ -256,14 +293,32 @@ mod tests {
 
         let backend = TestBackend::new(92, 8);
         let mut term = Terminal::new(backend).unwrap();
-        term.draw(|f| render_melodic_editor(f, f.area(), &app)).unwrap();
+        term.draw(|f| render_melodic_editor(f, f.area(), &app))
+            .unwrap();
 
-        let whole: String =
-            term.backend().buffer().content().iter().map(|c| c.symbol()).collect();
-        assert!(whole.contains("A2"), "expected note name A2, got: {whole:?}");
-        assert!(whole.contains('~'), "expected slide marker ~, got: {whole:?}");
-        assert!(whole.contains("Probability"), "expected detail Probability, got: {whole:?}");
-        assert!(whole.contains("Ratchet"), "expected detail Ratchet, got: {whole:?}");
+        let whole: String = term
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(
+            whole.contains("A2"),
+            "expected note name A2, got: {whole:?}"
+        );
+        assert!(
+            whole.contains('~'),
+            "expected slide marker ~, got: {whole:?}"
+        );
+        assert!(
+            whole.contains("Probability"),
+            "expected detail Probability, got: {whole:?}"
+        );
+        assert!(
+            whole.contains("Ratchet"),
+            "expected detail Ratchet, got: {whole:?}"
+        );
     }
 
     #[test]
@@ -272,7 +327,12 @@ mod tests {
         let mut set = Set::default_set(default_profiles());
         let mut steps: Vec<Option<MelodicNote>> = vec![None; 32];
         steps[20] = Some(MelodicNote {
-            semi: 0, vel: 1.0, slide: false, len: 1.0, prob: 1.0, ratchet: 1,
+            semi: 0,
+            vel: 1.0,
+            slide: false,
+            len: 1.0,
+            prob: 1.0,
+            ratchet: 1,
         });
         set.lanes[1].pattern = Pattern {
             name: "hdr".to_string(),
@@ -287,9 +347,15 @@ mod tests {
         app.playhead = 24;
         let backend = TestBackend::new(120, 10);
         let mut term = Terminal::new(backend).unwrap();
-        term.draw(|f| render_melodic_editor(f, f.area(), &app)).unwrap();
-        let whole: String =
-            term.backend().buffer().content().iter().map(|c| c.symbol()).collect();
+        term.draw(|f| render_melodic_editor(f, f.area(), &app))
+            .unwrap();
+        let whole: String = term
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
         assert!(whole.contains("Steps"), "header must contain 'Steps'");
         assert!(whole.contains("Cursor"), "header must contain 'Cursor'");
         assert!(whole.contains("Playhead"), "header must contain 'Playhead'");
@@ -301,7 +367,12 @@ mod tests {
         let mut set = Set::default_set(default_profiles());
         let mut steps: Vec<Option<MelodicNote>> = vec![None; 16];
         steps[3] = Some(MelodicNote {
-            semi: 0, vel: 1.0, slide: false, len: 1.0, prob: 1.0, ratchet: 1,
+            semi: 0,
+            vel: 1.0,
+            slide: false,
+            len: 1.0,
+            prob: 1.0,
+            ratchet: 1,
         });
         set.lanes[1].pattern = Pattern {
             name: "co".to_string(),
@@ -316,12 +387,16 @@ mod tests {
         app.playhead = 3; // 3 % 16 == 3 == cur_col
         let backend = TestBackend::new(92, 10);
         let mut term = Terminal::new(backend).unwrap();
-        term.draw(|f| render_melodic_editor(f, f.area(), &app)).unwrap();
+        term.draw(|f| render_melodic_editor(f, f.area(), &app))
+            .unwrap();
         let buf = term.backend().buffer();
         let want_bg = playhead_style().bg.expect("playhead style has bg");
         let has_playhead_bg =
             (0..10u16).any(|y| (0..92u16).any(|x| buf[(x, y)].style().bg == Some(want_bg)));
-        assert!(has_playhead_bg, "coincident cursor+playhead must show playhead bg");
+        assert!(
+            has_playhead_bg,
+            "coincident cursor+playhead must show playhead bg"
+        );
     }
 
     #[test]
@@ -329,7 +404,12 @@ mod tests {
         let mut set1 = Set::default_set(default_profiles());
         let mut steps1: Vec<Option<MelodicNote>> = vec![None; 16];
         steps1[0] = Some(MelodicNote {
-            semi: 0, vel: 1.0, slide: false, len: 1.0, prob: 1.0, ratchet: 1,
+            semi: 0,
+            vel: 1.0,
+            slide: false,
+            len: 1.0,
+            prob: 1.0,
+            ratchet: 1,
         });
         set1.lanes[1].pattern = Pattern {
             name: "short".to_string(),
@@ -341,14 +421,26 @@ mod tests {
         app1.focus = 1;
         let backend1 = TestBackend::new(120, 8);
         let mut term1 = Terminal::new(backend1).unwrap();
-        term1.draw(|f| render_melodic_editor(f, f.area(), &app1)).unwrap();
-        let whole1: String =
-            term1.backend().buffer().content().iter().map(|c| c.symbol()).collect();
+        term1
+            .draw(|f| render_melodic_editor(f, f.area(), &app1))
+            .unwrap();
+        let whole1: String = term1
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
 
         let mut set2 = Set::default_set(default_profiles());
         let mut steps2: Vec<Option<MelodicNote>> = vec![None; 16];
         steps2[0] = Some(MelodicNote {
-            semi: 0, vel: 1.0, slide: false, len: 8.0, prob: 1.0, ratchet: 1,
+            semi: 0,
+            vel: 1.0,
+            slide: false,
+            len: 8.0,
+            prob: 1.0,
+            ratchet: 1,
         });
         set2.lanes[1].pattern = Pattern {
             name: "long".to_string(),
@@ -360,9 +452,16 @@ mod tests {
         app2.focus = 1;
         let backend2 = TestBackend::new(120, 8);
         let mut term2 = Terminal::new(backend2).unwrap();
-        term2.draw(|f| render_melodic_editor(f, f.area(), &app2)).unwrap();
-        let whole2: String =
-            term2.backend().buffer().content().iter().map(|c| c.symbol()).collect();
+        term2
+            .draw(|f| render_melodic_editor(f, f.area(), &app2))
+            .unwrap();
+        let whole2: String = term2
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
 
         assert_ne!(whole1, whole2, "len=1 and len=8 must render differently");
     }
@@ -375,10 +474,20 @@ mod tests {
         let mut set = Set::default_set(default_profiles());
         let mut steps: Vec<Option<MelodicNote>> = vec![None; 16];
         steps[0] = Some(MelodicNote {
-            semi: 0, vel: 1.0, slide: false, len: 1.0, prob: 1.0, ratchet: 1,
+            semi: 0,
+            vel: 1.0,
+            slide: false,
+            len: 1.0,
+            prob: 1.0,
+            ratchet: 1,
         });
         steps[1] = Some(MelodicNote {
-            semi: 2, vel: 1.0, slide: true, len: 1.0, prob: 1.0, ratchet: 1,
+            semi: 2,
+            vel: 1.0,
+            slide: true,
+            len: 1.0,
+            prob: 1.0,
+            ratchet: 1,
         });
         set.lanes[1].pattern = Pattern {
             name: "sl".to_string(),
@@ -391,9 +500,15 @@ mod tests {
         app.cur_col = 1;
         let backend = TestBackend::new(120, 10);
         let mut term = Terminal::new(backend).unwrap();
-        term.draw(|f| render_melodic_editor(f, f.area(), &app)).unwrap();
-        let whole: String =
-            term.backend().buffer().content().iter().map(|c| c.symbol()).collect();
+        term.draw(|f| render_melodic_editor(f, f.area(), &app))
+            .unwrap();
+        let whole: String = term
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
         // The connecting line glyph bridges the two adjacent notes (distinct from `~`).
         assert!(
             whole.contains('─'),
@@ -412,7 +527,12 @@ mod tests {
         let mut set = Set::default_set(default_profiles());
         let mut steps: Vec<Option<MelodicNote>> = vec![None; 16];
         steps[2] = Some(MelodicNote {
-            semi: 2, vel: 1.0, slide: true, len: 1.0, prob: 1.0, ratchet: 1,
+            semi: 2,
+            vel: 1.0,
+            slide: true,
+            len: 1.0,
+            prob: 1.0,
+            ratchet: 1,
         });
         set.lanes[1].pattern = Pattern {
             name: "lone".to_string(),
@@ -425,10 +545,19 @@ mod tests {
         app.cur_col = 2;
         let backend = TestBackend::new(120, 10);
         let mut term = Terminal::new(backend).unwrap();
-        term.draw(|f| render_melodic_editor(f, f.area(), &app)).unwrap();
-        let whole: String =
-            term.backend().buffer().content().iter().map(|c| c.symbol()).collect();
-        assert!(whole.contains('~'), "lone slide note must show ~ marker, got: {whole:?}");
+        term.draw(|f| render_melodic_editor(f, f.area(), &app))
+            .unwrap();
+        let whole: String = term
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(
+            whole.contains('~'),
+            "lone slide note must show ~ marker, got: {whole:?}"
+        );
     }
 
     #[test]
@@ -447,13 +576,31 @@ mod tests {
         app.focus = 1;
         let backend = TestBackend::new(120, 10);
         let mut term = Terminal::new(backend).unwrap();
-        term.draw(|f| render_melodic_editor(f, f.area(), &app)).unwrap();
-        let whole: String =
-            term.backend().buffer().content().iter().map(|c| c.symbol()).collect();
-        assert!(whole.contains("Oct"), "header must contain 'Oct', got: {whole:?}");
-        assert!(whole.contains("+2"), "header must show octave +2, got: {whole:?}");
-        assert!(whole.contains("Transpose"), "header must contain 'Transpose', got: {whole:?}");
-        assert!(whole.contains("-3"), "header must show transpose -3 st, got: {whole:?}");
+        term.draw(|f| render_melodic_editor(f, f.area(), &app))
+            .unwrap();
+        let whole: String = term
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(
+            whole.contains("Oct"),
+            "header must contain 'Oct', got: {whole:?}"
+        );
+        assert!(
+            whole.contains("+2"),
+            "header must show octave +2, got: {whole:?}"
+        );
+        assert!(
+            whole.contains("Transpose"),
+            "header must contain 'Transpose', got: {whole:?}"
+        );
+        assert!(
+            whole.contains("-3"),
+            "header must show transpose -3 st, got: {whole:?}"
+        );
     }
 
     #[test]
@@ -461,7 +608,12 @@ mod tests {
         let mut set = Set::default_set(default_profiles());
         let mut steps: Vec<Option<MelodicNote>> = vec![None; 16];
         steps[0] = Some(MelodicNote {
-            semi: 5, vel: 0.8, slide: false, len: 2.0, prob: 0.5, ratchet: 3,
+            semi: 5,
+            vel: 0.8,
+            slide: false,
+            len: 2.0,
+            prob: 0.5,
+            ratchet: 3,
         });
         set.lanes[1].pattern = Pattern {
             name: "det".to_string(),
@@ -474,10 +626,19 @@ mod tests {
         app.cur_col = 0;
         let backend = TestBackend::new(120, 10);
         let mut term = Terminal::new(backend).unwrap();
-        term.draw(|f| render_melodic_editor(f, f.area(), &app)).unwrap();
-        let whole: String =
-            term.backend().buffer().content().iter().map(|c| c.symbol()).collect();
-        assert!(whole.contains("Probability"), "detail must contain 'Probability'");
+        term.draw(|f| render_melodic_editor(f, f.area(), &app))
+            .unwrap();
+        let whole: String = term
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(
+            whole.contains("Probability"),
+            "detail must contain 'Probability'"
+        );
         assert!(whole.contains("Ratchet"), "detail must contain 'Ratchet'");
     }
 }

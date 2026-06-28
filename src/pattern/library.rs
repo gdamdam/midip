@@ -46,8 +46,7 @@ type RawMelodicFile = IndexMap<String, Vec<Vec<Option<RawMelodicNote>>>>;
 
 /// Parse a drums library JSON into a GenreMap. Steps are lists of `{note,vel}` hits.
 pub fn parse_drum_file(json: &str) -> anyhow::Result<GenreMap> {
-    let raw: RawDrumFile =
-        serde_json::from_str(json).context("parsing drum pattern file")?;
+    let raw: RawDrumFile = serde_json::from_str(json).context("parsing drum pattern file")?;
     let mut out: GenreMap = IndexMap::new();
     for (genre, patterns) in raw {
         let mut parsed = Vec::with_capacity(patterns.len());
@@ -57,7 +56,12 @@ pub fn parse_drum_file(json: &str) -> anyhow::Result<GenreMap> {
                 .into_iter()
                 .map(|hits| {
                     hits.into_iter()
-                        .map(|h| DrumHit { note: h.note, vel: h.vel, prob: 1.0, ratchet: 1 })
+                        .map(|h| DrumHit {
+                            note: h.note,
+                            vel: h.vel,
+                            prob: 1.0,
+                            ratchet: 1,
+                        })
                         .collect::<Vec<DrumHit>>()
                 })
                 .collect();
@@ -76,8 +80,7 @@ pub fn parse_drum_file(json: &str) -> anyhow::Result<GenreMap> {
 /// Parse a melodic (bass/synth) library JSON into a GenreMap. Steps are `null` (rest) or
 /// `{semi,vel,slide}`. Each note's `len` is initialized to `gate_fraction` (authoring default).
 pub fn parse_melodic_file(json: &str, gate_fraction: f32) -> anyhow::Result<GenreMap> {
-    let raw: RawMelodicFile =
-        serde_json::from_str(json).context("parsing melodic pattern file")?;
+    let raw: RawMelodicFile = serde_json::from_str(json).context("parsing melodic pattern file")?;
     let mut out: GenreMap = IndexMap::new();
     for (genre, patterns) in raw {
         let mut parsed = Vec::with_capacity(patterns.len());
@@ -141,7 +144,10 @@ struct CatalogRoot {
 
 /// Parse catalog.json and return genre → [(name, desc)] for the given role.
 /// Returns an empty map on any parse error (non-fatal).
-pub fn parse_catalog(json: &str, role: LibRole) -> anyhow::Result<HashMap<String, Vec<(String, String)>>> {
+pub fn parse_catalog(
+    json: &str,
+    role: LibRole,
+) -> anyhow::Result<HashMap<String, Vec<(String, String)>>> {
     let root: CatalogRoot = serde_json::from_str(json).context("parsing catalog.json")?;
     let genres: Vec<CatalogGenre> = match role {
         LibRole::Drums => root.t8.drum_genres,
@@ -165,7 +171,10 @@ fn sort_genres(map: GenreMap) -> GenreMap {
 
 /// Overlay catalog names+descs onto a GenreMap. Patterns not found in catalog keep their
 /// fallback name and an empty desc.
-fn overlay_catalog(mut map: GenreMap, catalog: &HashMap<String, Vec<(String, String)>>) -> GenreMap {
+fn overlay_catalog(
+    mut map: GenreMap,
+    catalog: &HashMap<String, Vec<(String, String)>>,
+) -> GenreMap {
     for (genre, patterns) in map.iter_mut() {
         if let Some(entries) = catalog.get(genre) {
             for (i, pat) in patterns.iter_mut().enumerate() {
@@ -205,15 +214,25 @@ impl Library {
             .unwrap_or_default();
 
         let drums = sort_genres(overlay_catalog(parse_drum_file(&drums_json)?, &drums_cat));
-        let bass = sort_genres(overlay_catalog(parse_melodic_file(&bass_json, T8_BASS.gate_fraction)?, &bass_cat));
-        let synth = sort_genres(overlay_catalog(parse_melodic_file(&synth_json, S1.gate_fraction)?, &synth_cat));
+        let bass = sort_genres(overlay_catalog(
+            parse_melodic_file(&bass_json, T8_BASS.gate_fraction)?,
+            &bass_cat,
+        ));
+        let synth = sort_genres(overlay_catalog(
+            parse_melodic_file(&synth_json, S1.gate_fraction)?,
+            &synth_cat,
+        ));
 
         Ok(Library { drums, bass, synth })
     }
 
     /// Construct an empty library (no patterns in any role).
     pub fn empty() -> Library {
-        Library { drums: GenreMap::new(), bass: GenreMap::new(), synth: GenreMap::new() }
+        Library {
+            drums: GenreMap::new(),
+            bass: GenreMap::new(),
+            synth: GenreMap::new(),
+        }
     }
 
     /// Genre names in file order for a given role.
@@ -258,8 +277,24 @@ mod tests {
             PatternData::Drums(steps) => {
                 assert_eq!(steps.len(), 2);
                 assert_eq!(steps[0].len(), 2);
-                assert_eq!(steps[0][0], DrumHit { note: 36, vel: 120, prob: 1.0, ratchet: 1 });
-                assert_eq!(steps[0][1], DrumHit { note: 42, vel: 100, prob: 1.0, ratchet: 1 });
+                assert_eq!(
+                    steps[0][0],
+                    DrumHit {
+                        note: 36,
+                        vel: 120,
+                        prob: 1.0,
+                        ratchet: 1
+                    }
+                );
+                assert_eq!(
+                    steps[0][1],
+                    DrumHit {
+                        note: 42,
+                        vel: 100,
+                        prob: 1.0,
+                        ratchet: 1
+                    }
+                );
                 assert!(steps[1].is_empty());
             }
             _ => panic!("expected drums"),
@@ -332,14 +367,26 @@ mod tests {
             "octave_max": 2
         }"#;
         let drums = parse_catalog(json, LibRole::Drums).unwrap();
-        assert_eq!(drums["techno"][0], ("Four on Floor".to_string(), "4/4 kick".to_string()));
+        assert_eq!(
+            drums["techno"][0],
+            ("Four on Floor".to_string(), "4/4 kick".to_string())
+        );
 
         let bass = parse_catalog(json, LibRole::Bass).unwrap();
-        assert_eq!(bass["techno"][0], ("Bass Walk".to_string(), "walking".to_string()));
+        assert_eq!(
+            bass["techno"][0],
+            ("Bass Walk".to_string(), "walking".to_string())
+        );
 
         let synth = parse_catalog(json, LibRole::Synth).unwrap();
-        assert_eq!(synth["techno"][0], ("Iron Grid".to_string(), "relentless".to_string()));
-        assert_eq!(synth["techno"][1], ("Acid Drive".to_string(), "squelchy".to_string()));
+        assert_eq!(
+            synth["techno"][0],
+            ("Iron Grid".to_string(), "relentless".to_string())
+        );
+        assert_eq!(
+            synth["techno"][1],
+            ("Acid Drive".to_string(), "squelchy".to_string())
+        );
     }
 
     #[test]
@@ -360,7 +407,10 @@ mod tests {
         // Catalog names applied: drums techno[0] == "Four on Floor".
         let drums_techno = &lib.drums["techno"];
         assert_eq!(drums_techno[0].name, "Four on Floor");
-        assert!(!drums_techno[0].desc.is_empty(), "desc should be non-empty from catalog");
+        assert!(
+            !drums_techno[0].desc.is_empty(),
+            "desc should be non-empty from catalog"
+        );
 
         // Synth techno[0] == "Iron Grid".
         let synth_techno = &lib.synth["techno"];

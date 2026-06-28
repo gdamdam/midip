@@ -1,4 +1,4 @@
-pub mod model;
-pub mod library;
-pub mod store;
 pub mod euclid;
+pub mod library;
+pub mod model;
+pub mod store;

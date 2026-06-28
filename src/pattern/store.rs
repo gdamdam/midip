@@ -83,8 +83,8 @@ pub fn save_set(dir: &Path, set: &Set) -> anyhow::Result<PathBuf> {
 
 /// Load a set from a JSON file, rehydrating each lane's static profile via its id.
 pub fn load_set(path: &Path) -> anyhow::Result<Set> {
-    let json = std::fs::read_to_string(path)
-        .with_context(|| format!("reading {}", path.display()))?;
+    let json =
+        std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     let dto: SetDto = serde_json::from_str(&json).context("deserializing set")?;
     let mut lanes = Vec::with_capacity(dto.lanes.len());
     for l in dto.lanes {
@@ -149,7 +149,14 @@ mod tests {
         set.swing = 0.56;
         // Make lane 1 (melodic) non-trivial so we exercise note serialization.
         if let PatternData::Melodic(steps) = &mut set.lanes[1].pattern.data {
-            steps[0] = Some(MelodicNote { semi: 7, vel: 1.3, slide: true, len: 0.5, prob: 1.0, ratchet: 1 });
+            steps[0] = Some(MelodicNote {
+                semi: 7,
+                vel: 1.3,
+                slide: true,
+                len: 0.5,
+                prob: 1.0,
+                ratchet: 1,
+            });
         }
         set.lanes[0].mute = true;
         set.lanes[2].transpose = 3;
@@ -172,7 +179,9 @@ mod tests {
 
         let listed = list_sets(&dir).unwrap();
         assert!(listed.iter().any(|p| p == &path));
-        assert!(listed.iter().all(|p| p.extension().and_then(|e| e.to_str()) == Some("json")));
+        assert!(listed
+            .iter()
+            .all(|p| p.extension().and_then(|e| e.to_str()) == Some("json")));
 
         std::fs::remove_dir_all(&dir).ok();
     }

@@ -12,7 +12,7 @@ use crate::pattern::library::{GenreMap, LibRole};
 use crate::pattern::model::{Pattern, PatternData};
 use crate::ui::theme;
 
-fn map_for_role<'a>(app: &'a App, role: LibRole) -> &'a GenreMap {
+fn map_for_role(app: &App, role: LibRole) -> &GenreMap {
     match role {
         LibRole::Drums => &app.library.drums,
         LibRole::Bass => &app.library.bass,
@@ -38,7 +38,11 @@ fn truncate(s: &str, max_chars: usize) -> &str {
         end = i;
     }
     // advance past the last counted char
-    &s[..s[end..].char_indices().nth(1).map(|(j, _)| end + j).unwrap_or(s.len())]
+    &s[..s[end..]
+        .char_indices()
+        .nth(1)
+        .map(|(j, _)| end + j)
+        .unwrap_or(s.len())]
 }
 
 /// Build detailed preview lines for the selected pattern.
@@ -55,7 +59,9 @@ fn build_preview_lines(pattern: &Pattern, width: usize, max_height: usize) -> Ve
 
     // Desc (truncate to width)
     if !pattern.desc.is_empty() {
-        lines.push(Line::from(Span::raw(truncate(&pattern.desc, w).to_string())));
+        lines.push(Line::from(Span::raw(
+            truncate(&pattern.desc, w).to_string(),
+        )));
     }
 
     // Length
@@ -88,7 +94,9 @@ fn build_preview_lines(pattern: &Pattern, width: usize, max_height: usize) -> Ve
                 let label = drum_label(&T8_DRUMS, *note);
                 let mut strip = String::new();
                 for i in 0..strip_len {
-                    let hit = steps.get(i).and_then(|st| st.iter().find(|h| h.note == *note));
+                    let hit = steps
+                        .get(i)
+                        .and_then(|st| st.iter().find(|h| h.note == *note));
                     if let Some(h) = hit {
                         strip.push(theme::vel_glyph(h.vel));
                     } else {
@@ -149,8 +157,16 @@ pub fn render_library(f: &mut Frame, area: Rect, app: &App) {
     let map = map_for_role(app, app.lib_role);
 
     let genre_focused = app.lib_col == LibCol::Genre;
-    let genre_title = if genre_focused { " ▸GENRE " } else { " GENRE " };
-    let pattern_title = if !genre_focused { " ▸PATTERN " } else { " PATTERN " };
+    let genre_title = if genre_focused {
+        " ▸GENRE "
+    } else {
+        " GENRE "
+    };
+    let pattern_title = if !genre_focused {
+        " ▸PATTERN "
+    } else {
+        " PATTERN "
+    };
 
     let outer = Block::default()
         .borders(Borders::ALL)
@@ -170,11 +186,21 @@ pub fn render_library(f: &mut Frame, area: Rect, app: &App) {
     // Column 1: genre list with counts + scroll window + position indicator.
     let genres: Vec<(&String, &Vec<crate::pattern::model::Pattern>)> = map.iter().collect();
     let genre_total = genres.len();
-    let genre_scroll = app.lib_genre.saturating_sub(VISIBLE_HEIGHT / 2)
+    let genre_scroll = app
+        .lib_genre
+        .saturating_sub(VISIBLE_HEIGHT / 2)
         .min(genre_total.saturating_sub(VISIBLE_HEIGHT));
     let mut genre_lines: Vec<Line> = Vec::new();
-    genre_lines.push(Line::from(Span::styled(genre_title, Style::default().add_modifier(Modifier::BOLD))));
-    for (i, (name, pats)) in genres.iter().enumerate().skip(genre_scroll).take(VISIBLE_HEIGHT) {
+    genre_lines.push(Line::from(Span::styled(
+        genre_title,
+        Style::default().add_modifier(Modifier::BOLD),
+    )));
+    for (i, (name, pats)) in genres
+        .iter()
+        .enumerate()
+        .skip(genre_scroll)
+        .take(VISIBLE_HEIGHT)
+    {
         let marker = if i == app.lib_genre { "▸" } else { " " };
         let style = if i == app.lib_genre {
             Style::default().add_modifier(Modifier::BOLD)
@@ -187,7 +213,11 @@ pub fn render_library(f: &mut Frame, area: Rect, app: &App) {
         )));
     }
     if genre_total > 0 {
-        genre_lines.push(Line::from(Span::raw(format!("{}/{}", app.lib_genre + 1, genre_total))));
+        genre_lines.push(Line::from(Span::raw(format!(
+            "{}/{}",
+            app.lib_genre + 1,
+            genre_total
+        ))));
     }
     f.render_widget(Paragraph::new(genre_lines), cols[0]);
 
@@ -197,21 +227,38 @@ pub fn render_library(f: &mut Frame, area: Rect, app: &App) {
         .map(|(_, pats)| pats.as_slice())
         .unwrap_or(&[]);
     let pat_total = selected_patterns.len();
-    let pat_scroll = app.lib_pattern.saturating_sub(VISIBLE_HEIGHT / 2)
+    let pat_scroll = app
+        .lib_pattern
+        .saturating_sub(VISIBLE_HEIGHT / 2)
         .min(pat_total.saturating_sub(VISIBLE_HEIGHT));
     let mut pattern_lines: Vec<Line> = Vec::new();
-    pattern_lines.push(Line::from(Span::styled(pattern_title, Style::default().add_modifier(Modifier::BOLD))));
-    for (i, p) in selected_patterns.iter().enumerate().skip(pat_scroll).take(VISIBLE_HEIGHT) {
+    pattern_lines.push(Line::from(Span::styled(
+        pattern_title,
+        Style::default().add_modifier(Modifier::BOLD),
+    )));
+    for (i, p) in selected_patterns
+        .iter()
+        .enumerate()
+        .skip(pat_scroll)
+        .take(VISIBLE_HEIGHT)
+    {
         let marker = if i == app.lib_pattern { "▸" } else { " " };
         let style = if i == app.lib_pattern {
             Style::default().add_modifier(Modifier::BOLD)
         } else {
             Style::default()
         };
-        pattern_lines.push(Line::from(Span::styled(format!("{marker}{:02} {}", i + 1, p.name), style)));
+        pattern_lines.push(Line::from(Span::styled(
+            format!("{marker}{:02} {}", i + 1, p.name),
+            style,
+        )));
     }
     if pat_total > 0 {
-        pattern_lines.push(Line::from(Span::raw(format!("{}/{}", app.lib_pattern + 1, pat_total))));
+        pattern_lines.push(Line::from(Span::raw(format!(
+            "{}/{}",
+            app.lib_pattern + 1,
+            pat_total
+        ))));
     }
     f.render_widget(Paragraph::new(pattern_lines), cols[1]);
 
@@ -229,20 +276,22 @@ pub fn render_library(f: &mut Frame, area: Rect, app: &App) {
     if auditioning {
         preview_lines.push(Line::from(Span::styled(
             "[ AUDITION ]",
-            Style::default().add_modifier(Modifier::BOLD).add_modifier(Modifier::REVERSED),
+            Style::default()
+                .add_modifier(Modifier::BOLD)
+                .add_modifier(Modifier::REVERSED),
         )));
         preview_lines.push(Line::from(Span::raw("[enter] keep  [esc] revert")));
     } else {
-        preview_lines.push(Line::from(Span::raw("[a] audition  [enter] load → focused lane")));
+        preview_lines.push(Line::from(Span::raw(
+            "[a] audition  [enter] load → focused lane",
+        )));
     }
     f.render_widget(Paragraph::new(preview_lines), cols[2]);
 }
 
 /// Render the saved-set browser into `area`.
 pub fn render_set_browser(f: &mut Frame, area: Rect, app: &App) {
-    let outer = Block::default()
-        .borders(Borders::ALL)
-        .title(" OPEN SET ");
+    let outer = Block::default().borders(Borders::ALL).title(" OPEN SET ");
     let inner = outer.inner(area);
     f.render_widget(outer, area);
 
@@ -252,10 +301,18 @@ pub fn render_set_browser(f: &mut Frame, area: Rect, app: &App) {
         lines.push(Line::from(Span::raw("No saved sets — press s to save")));
     } else {
         let total = app.set_files.len();
-        let scroll = app.set_sel.saturating_sub(VISIBLE_HEIGHT / 2)
+        let scroll = app
+            .set_sel
+            .saturating_sub(VISIBLE_HEIGHT / 2)
             .min(total.saturating_sub(VISIBLE_HEIGHT));
 
-        for (i, path) in app.set_files.iter().enumerate().skip(scroll).take(VISIBLE_HEIGHT) {
+        for (i, path) in app
+            .set_files
+            .iter()
+            .enumerate()
+            .skip(scroll)
+            .take(VISIBLE_HEIGHT)
+        {
             let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("?");
             let marker = if i == app.set_sel { "▸" } else { " " };
             let style = if i == app.set_sel {
@@ -265,7 +322,11 @@ pub fn render_set_browser(f: &mut Frame, area: Rect, app: &App) {
             };
             lines.push(Line::from(Span::styled(format!("{marker}{}", stem), style)));
         }
-        lines.push(Line::from(Span::raw(format!("{}/{}", app.set_sel + 1, total))));
+        lines.push(Line::from(Span::raw(format!(
+            "{}/{}",
+            app.set_sel + 1,
+            total
+        ))));
     }
     lines.push(Line::from(Span::raw("[enter] load  [esc/o] cancel")));
     f.render_widget(Paragraph::new(lines), inner);
@@ -276,7 +337,7 @@ mod tests {
     use super::*;
     use crate::app::App;
     use crate::devices::profiles::default_profiles;
-    use crate::pattern::library::{GenreMap, Library, LibRole};
+    use crate::pattern::library::{GenreMap, LibRole, Library};
     use crate::pattern::model::{DrumHit, MelodicNote, Pattern, PatternData, Set};
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
@@ -287,18 +348,44 @@ mod tests {
             name: "Four on Floor".to_string(),
             desc: "Classic 4/4 kick, snare on 2&4, 8th closed hats".to_string(),
             length: 16,
-            data: PatternData::Drums(vec![vec![DrumHit { note: 36, vel: 127, prob: 1.0, ratchet: 1 }]; 16]),
+            data: PatternData::Drums(vec![
+                vec![DrumHit {
+                    note: 36,
+                    vel: 127,
+                    prob: 1.0,
+                    ratchet: 1
+                }];
+                16
+            ]),
         };
         drums.insert("techno".to_string(), vec![pat]);
-        Library { drums, bass: GenreMap::new(), synth: GenreMap::new() }
+        Library {
+            drums,
+            bass: GenreMap::new(),
+            synth: GenreMap::new(),
+        }
     }
 
     fn library_with_melodic() -> Library {
         let mut synth = GenreMap::new();
         let steps = vec![
-            Some(MelodicNote { semi: 0, vel: 1.0, slide: false, len: 0.9, prob: 1.0, ratchet: 1 }),
+            Some(MelodicNote {
+                semi: 0,
+                vel: 1.0,
+                slide: false,
+                len: 0.9,
+                prob: 1.0,
+                ratchet: 1,
+            }),
             None,
-            Some(MelodicNote { semi: 7, vel: 1.0, slide: true, len: 0.9, prob: 1.0, ratchet: 1 }),
+            Some(MelodicNote {
+                semi: 7,
+                vel: 1.0,
+                slide: true,
+                len: 0.9,
+                prob: 1.0,
+                ratchet: 1,
+            }),
         ];
         let pat = Pattern {
             name: "Iron Grid".to_string(),
@@ -307,14 +394,23 @@ mod tests {
             data: PatternData::Melodic(steps),
         };
         synth.insert("techno".to_string(), vec![pat]);
-        Library { drums: GenreMap::new(), bass: GenreMap::new(), synth }
+        Library {
+            drums: GenreMap::new(),
+            bass: GenreMap::new(),
+            synth,
+        }
     }
 
     fn render_to_string(app: &App) -> String {
         let backend = TestBackend::new(120, 20);
         let mut term = Terminal::new(backend).unwrap();
         term.draw(|f| render_library(f, f.area(), app)).unwrap();
-        term.backend().buffer().content().iter().map(|c| c.symbol()).collect()
+        term.backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect()
     }
 
     #[test]
@@ -326,8 +422,14 @@ mod tests {
         app.lib_pattern = 0;
 
         let whole = render_to_string(&app);
-        assert!(whole.contains("techno"), "expected genre techno in: {whole:?}");
-        assert!(whole.contains('▸'), "expected selection marker in: {whole:?}");
+        assert!(
+            whole.contains("techno"),
+            "expected genre techno in: {whole:?}"
+        );
+        assert!(
+            whole.contains('▸'),
+            "expected selection marker in: {whole:?}"
+        );
     }
 
     #[test]
@@ -339,16 +441,30 @@ mod tests {
         app.lib_pattern = 0;
 
         let whole = render_to_string(&app);
-        assert!(whole.contains("Four on Floor"), "expected pattern name in: {whole:?}");
-        assert!(whole.contains("Classic"), "expected desc text in: {whole:?}");
-        assert!(whole.contains("BD"), "expected BD voice label in: {whole:?}");
+        assert!(
+            whole.contains("Four on Floor"),
+            "expected pattern name in: {whole:?}"
+        );
+        assert!(
+            whole.contains("Classic"),
+            "expected desc text in: {whole:?}"
+        );
+        assert!(
+            whole.contains("BD"),
+            "expected BD voice label in: {whole:?}"
+        );
     }
 
     fn render_set_browser_to_string(app: &App) -> String {
         let backend = TestBackend::new(120, 20);
         let mut term = Terminal::new(backend).unwrap();
         term.draw(|f| render_set_browser(f, f.area(), app)).unwrap();
-        term.backend().buffer().content().iter().map(|c| c.symbol()).collect()
+        term.backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect()
     }
 
     #[test]
@@ -361,7 +477,10 @@ mod tests {
 
         let whole = render_to_string(&app);
         // With 1 genre and 1 pattern, position indicators "1/1" should appear.
-        assert!(whole.contains("1/1"), "expected position indicator '1/1' in: {whole:?}");
+        assert!(
+            whole.contains("1/1"),
+            "expected position indicator '1/1' in: {whole:?}"
+        );
     }
 
     #[test]
@@ -376,7 +495,10 @@ mod tests {
 
         let whole = render_set_browser_to_string(&app);
         assert!(whole.contains("my-set"), "expected file stem in: {whole:?}");
-        assert!(whole.contains("1/2"), "expected position indicator '1/2' in: {whole:?}");
+        assert!(
+            whole.contains("1/2"),
+            "expected position indicator '1/2' in: {whole:?}"
+        );
     }
 
     #[test]
@@ -401,8 +523,14 @@ mod tests {
         app.lib_pattern = 0;
 
         let whole = render_to_string(&app);
-        assert!(whole.contains("Iron Grid"), "expected pattern name in: {whole:?}");
-        assert!(whole.contains("8th-note"), "expected desc text in: {whole:?}");
+        assert!(
+            whole.contains("Iron Grid"),
+            "expected pattern name in: {whole:?}"
+        );
+        assert!(
+            whole.contains("8th-note"),
+            "expected desc text in: {whole:?}"
+        );
         // root=45 (A2), semi=0 → A2; semi=7 → E3
         assert!(whole.contains("A2"), "expected note name A2 in: {whole:?}");
     }
@@ -416,10 +544,22 @@ mod tests {
             name: "Test Beat".to_string(),
             desc: String::new(),
             length: 16,
-            data: PatternData::Drums(vec![vec![DrumHit { note: 36, vel: 100, prob: 1.0, ratchet: 1 }]; 16]),
+            data: PatternData::Drums(vec![
+                vec![DrumHit {
+                    note: 36,
+                    vel: 100,
+                    prob: 1.0,
+                    ratchet: 1
+                }];
+                16
+            ]),
         };
         drums.insert("techno".to_string(), vec![pat]);
-        let library = Library { drums, bass: GenreMap::new(), synth: GenreMap::new() };
+        let library = Library {
+            drums,
+            bass: GenreMap::new(),
+            synth: GenreMap::new(),
+        };
 
         let set = Set::default_set(default_profiles());
         let mut app = App::new(set, library);
@@ -429,8 +569,14 @@ mod tests {
 
         // Without audition: no badge, shows the standard hint.
         let whole = render_to_string(&app);
-        assert!(!whole.contains("AUDITION"), "no badge before audition: {whole:?}");
-        assert!(whole.contains("[a] audition"), "standard hint before audition: {whole:?}");
+        assert!(
+            !whole.contains("AUDITION"),
+            "no badge before audition: {whole:?}"
+        );
+        assert!(
+            whole.contains("[a] audition"),
+            "standard hint before audition: {whole:?}"
+        );
 
         // Simulate audition active by setting the field directly.
         use crate::pattern::model::PatternData as PD;
@@ -442,8 +588,17 @@ mod tests {
         });
 
         let whole = render_to_string(&app);
-        assert!(whole.contains("AUDITION"), "badge must appear when auditioning: {whole:?}");
-        assert!(whole.contains("[enter] keep"), "keep hint must appear: {whole:?}");
-        assert!(whole.contains("[esc] revert"), "revert hint must appear: {whole:?}");
+        assert!(
+            whole.contains("AUDITION"),
+            "badge must appear when auditioning: {whole:?}"
+        );
+        assert!(
+            whole.contains("[enter] keep"),
+            "keep hint must appear: {whole:?}"
+        );
+        assert!(
+            whole.contains("[esc] revert"),
+            "revert hint must appear: {whole:?}"
+        );
     }
 }

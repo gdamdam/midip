@@ -1,8 +1,12 @@
 use crate::devices::profiles::DeviceProfile;
 
 /// serde defaults for the per-step fields absent from the vendored library data.
-fn default_prob() -> f32 { 1.0 }
-fn default_ratchet() -> u8 { 1 }
+fn default_prob() -> f32 {
+    1.0
+}
+fn default_ratchet() -> u8 {
+    1
+}
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct DrumHit {
@@ -177,7 +181,20 @@ mod tests {
             desc: "a cool pattern".to_string(),
             length: 2,
             data: PatternData::Drums(vec![
-                vec![DrumHit { note: 36, vel: 120, prob: 1.0, ratchet: 1 }, DrumHit { note: 42, vel: 100, prob: 1.0, ratchet: 1 }],
+                vec![
+                    DrumHit {
+                        note: 36,
+                        vel: 120,
+                        prob: 1.0,
+                        ratchet: 1,
+                    },
+                    DrumHit {
+                        note: 42,
+                        vel: 100,
+                        prob: 1.0,
+                        ratchet: 1,
+                    },
+                ],
                 vec![],
             ]),
         };
@@ -193,7 +210,14 @@ mod tests {
             desc: "another pattern".to_string(),
             length: 2,
             data: PatternData::Melodic(vec![
-                Some(MelodicNote { semi: 0, vel: 1.0, slide: false, len: 0.5, prob: 1.0, ratchet: 1 }),
+                Some(MelodicNote {
+                    semi: 0,
+                    vel: 1.0,
+                    slide: false,
+                    len: 0.5,
+                    prob: 1.0,
+                    ratchet: 1,
+                }),
                 None,
             ]),
         };

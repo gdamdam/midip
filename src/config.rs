@@ -10,7 +10,10 @@ pub const DEFAULT_BPM: f64 = 120.0;
 /// Test this directly rather than the env-reading `ascii_mode()` to avoid
 /// parallel-test env-race hazards.
 pub fn ascii_from_env(val: Option<String>) -> bool {
-    matches!(val.as_deref(), Some("1") | Some("true") | Some("True") | Some("TRUE"))
+    matches!(
+        val.as_deref(),
+        Some("1") | Some("true") | Some("True") | Some("TRUE")
+    )
 }
 
 /// Returns true when `MIDIP_ASCII` is set to a truthy value ("1"/"true").

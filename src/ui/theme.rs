@@ -58,7 +58,11 @@ pub fn vel_bar(vel: u8) -> char {
 /// Filled/empty dot glyph — `●`/`○` in Unicode, `#`/`.` in ASCII mode.
 pub fn dot(filled: bool) -> char {
     if config::ascii_mode() {
-        if filled { '#' } else { '.' }
+        if filled {
+            '#'
+        } else {
+            '.'
+        }
     } else if filled {
         '●'
     } else {
@@ -68,7 +72,11 @@ pub fn dot(filled: bool) -> char {
 
 /// Play/cursor marker — `▶` in Unicode, `>` in ASCII mode.
 pub fn marker() -> char {
-    if config::ascii_mode() { '>' } else { '▶' }
+    if config::ascii_mode() {
+        '>'
+    } else {
+        '▶'
+    }
 }
 
 /// MIDI note number -> name, using the MIDI 60 = "C4" convention.
@@ -93,9 +101,9 @@ use ratatui::style::{Color, Modifier, Style};
 /// back to `Color::Gray` so an added profile still renders (just without a custom hue).
 pub fn lane_color(profile_id: &str) -> Color {
     match profile_id {
-        "s1" => Color::Rgb(0x6E, 0xC6, 0xFF),       // S-1 synth: cool cyan-blue
+        "s1" => Color::Rgb(0x6E, 0xC6, 0xFF), // S-1 synth: cool cyan-blue
         "t8-drums" => Color::Rgb(0xFF, 0x8A, 0x3D), // T-8 drums: warm orange
-        "t8-bass" => Color::Rgb(0xB6, 0x8C, 0xFF),  // T-8 bass: violet
+        "t8-bass" => Color::Rgb(0xB6, 0x8C, 0xFF), // T-8 bass: violet
         _ => Color::Gray,
     }
 }
