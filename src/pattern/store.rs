@@ -226,6 +226,85 @@ pub fn load_set(path: &Path) -> anyhow::Result<Set> {
     Ok(set)
 }
 
+/// Clamp and repair all fields in a single `Pattern` to safe ranges.
+///
+/// Returns a list of human-readable notes describing what was changed.
+/// Returns an empty `Vec` (and leaves `p` unchanged) when everything is already in range.
+/// Never panics.
+pub fn validate_and_repair_pattern(p: &mut Pattern) -> Vec<String> {
+    let mut notes: Vec<String> = Vec::new();
+
+    // length
+    let orig_len = p.length;
+    p.length = p.length.clamp(1, 64);
+    if p.length != orig_len {
+        notes.push(format!("length {}→{}", orig_len, p.length));
+    }
+    let target = p.length;
+
+    // data resize + field clamping
+    match &mut p.data {
+        crate::pattern::model::PatternData::Drums(steps) => {
+            if steps.len() != target {
+                steps.resize_with(target, Vec::new);
+                notes.push(format!("data resized to {}", target));
+            }
+            let mut hit_repaired = false;
+            for step in steps.iter_mut() {
+                for hit in step.iter_mut() {
+                    let orig_note = hit.note;
+                    hit.note = hit.note.clamp(0, 127);
+                    let orig_vel = hit.vel;
+                    hit.vel = hit.vel.clamp(1, 127);
+                    let orig_prob = hit.prob;
+                    hit.prob = hit.prob.clamp(0.0, 1.0);
+                    let orig_ratchet = hit.ratchet;
+                    hit.ratchet = hit.ratchet.clamp(1, 8);
+                    if hit.note != orig_note
+                        || hit.vel != orig_vel
+                        || hit.prob != orig_prob
+                        || hit.ratchet != orig_ratchet
+                    {
+                        hit_repaired = true;
+                    }
+                }
+            }
+            if hit_repaired {
+                notes.push("drum hit fields clamped".to_string());
+            }
+        }
+        crate::pattern::model::PatternData::Melodic(steps) => {
+            if steps.len() != target {
+                steps.resize_with(target, || None);
+                notes.push(format!("data resized to {}", target));
+            }
+            let mut note_repaired = false;
+            for step in steps.iter_mut().flatten() {
+                let orig_vel = step.vel;
+                step.vel = step.vel.clamp(0.5, 1.3);
+                let orig_len = step.len;
+                step.len = step.len.clamp(0.0, 64.0);
+                let orig_prob = step.prob;
+                step.prob = step.prob.clamp(0.0, 1.0);
+                let orig_ratchet = step.ratchet;
+                step.ratchet = step.ratchet.clamp(1, 8);
+                if step.vel != orig_vel
+                    || step.len != orig_len
+                    || step.prob != orig_prob
+                    || step.ratchet != orig_ratchet
+                {
+                    note_repaired = true;
+                }
+            }
+            if note_repaired {
+                notes.push("melodic note fields clamped".to_string());
+            }
+        }
+    }
+
+    notes
+}
+
 /// Clamp and repair all fields in `set` to safe ranges.
 ///
 /// Returns a list of human-readable notes describing what was changed.
@@ -249,82 +328,60 @@ pub fn validate_and_repair(set: &mut Set) -> Vec<String> {
 
     // ── per-lane ──────────────────────────────────────────────────────────────
     for (lane_idx, lane) in set.lanes.iter_mut().enumerate() {
-        let pat = &mut lane.pattern;
         let lane_num = lane_idx + 1;
-
-        // length
-        let orig_len = pat.length;
-        pat.length = pat.length.clamp(1, 64);
-        if pat.length != orig_len {
-            notes.push(format!(
-                "lane {} length {}→{}",
-                lane_num, orig_len, pat.length
-            ));
-        }
-        let target = pat.length;
-
-        // data resize + field clamping
-        match &mut pat.data {
-            crate::pattern::model::PatternData::Drums(steps) => {
-                if steps.len() != target {
-                    steps.resize_with(target, Vec::new);
-                    notes.push(format!("lane {} data resized to {}", lane_num, target));
-                }
-                let mut hit_repaired = false;
-                for step in steps.iter_mut() {
-                    for hit in step.iter_mut() {
-                        let orig_note = hit.note;
-                        hit.note = hit.note.clamp(0, 127);
-                        let orig_vel = hit.vel;
-                        hit.vel = hit.vel.clamp(1, 127);
-                        let orig_prob = hit.prob;
-                        hit.prob = hit.prob.clamp(0.0, 1.0);
-                        let orig_ratchet = hit.ratchet;
-                        hit.ratchet = hit.ratchet.clamp(1, 8);
-                        if hit.note != orig_note
-                            || hit.vel != orig_vel
-                            || hit.prob != orig_prob
-                            || hit.ratchet != orig_ratchet
-                        {
-                            hit_repaired = true;
-                        }
-                    }
-                }
-                if hit_repaired {
-                    notes.push(format!("lane {} drum hit fields clamped", lane_num));
-                }
-            }
-            crate::pattern::model::PatternData::Melodic(steps) => {
-                if steps.len() != target {
-                    steps.resize_with(target, || None);
-                    notes.push(format!("lane {} data resized to {}", lane_num, target));
-                }
-                let mut note_repaired = false;
-                for step in steps.iter_mut().flatten() {
-                    let orig_vel = step.vel;
-                    step.vel = step.vel.clamp(0.5, 1.3);
-                    let orig_len = step.len;
-                    step.len = step.len.clamp(0.0, 64.0);
-                    let orig_prob = step.prob;
-                    step.prob = step.prob.clamp(0.0, 1.0);
-                    let orig_ratchet = step.ratchet;
-                    step.ratchet = step.ratchet.clamp(1, 8);
-                    if step.vel != orig_vel
-                        || step.len != orig_len
-                        || step.prob != orig_prob
-                        || step.ratchet != orig_ratchet
-                    {
-                        note_repaired = true;
-                    }
-                }
-                if note_repaired {
-                    notes.push(format!("lane {} melodic note fields clamped", lane_num));
-                }
-            }
+        let pat_notes = validate_and_repair_pattern(&mut lane.pattern);
+        for note in pat_notes {
+            notes.push(format!("lane {} {}", lane_num, note));
         }
     }
 
     notes
+}
+
+/// Serialize `p` to `<dir>/<slug>-<8hex>.json` atomically. Returns the written path.
+///
+/// Mints a stable id for the pattern if it is nil, so it persists back into the
+/// in-memory `Pattern` and remains stable across re-saves.
+pub fn save_user_pattern(dir: &Path, p: &mut Pattern) -> anyhow::Result<PathBuf> {
+    p.ensure_id();
+    std::fs::create_dir_all(dir).context("creating user-pattern store dir")?;
+    let id_suffix = &p.id.as_str()[..8];
+    let path = dir.join(format!("{}-{}.json", slug(&p.name), id_suffix));
+    let json = serde_json::to_string_pretty(p).context("serializing pattern")?;
+    persist::write_atomic(&path, json.as_bytes())
+        .with_context(|| format!("writing {}", path.display()))?;
+    Ok(path)
+}
+
+/// All `*.json` pattern files in `dir` (sorted; empty if dir absent).
+pub fn list_user_patterns(dir: &Path) -> Vec<PathBuf> {
+    if !dir.exists() {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    if let Ok(rd) = std::fs::read_dir(dir) {
+        for entry in rd.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) == Some("json") {
+                out.push(path);
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+/// Read + parse a `Pattern` from `path`, apply `validate_and_repair_pattern`, return the pattern.
+///
+/// The id is whatever was saved — `ensure_id` is NOT called on load. Missing `id` fields
+/// deserialize to `Id::nil()` via the model's `#[serde(default)]`.
+pub fn load_user_pattern(path: &Path) -> anyhow::Result<Pattern> {
+    let json =
+        std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let mut p: Pattern =
+        serde_json::from_str(&json).with_context(|| format!("parsing {}", path.display()))?;
+    validate_and_repair_pattern(&mut p);
+    Ok(p)
 }
 
 /// Returns the path of the autosave recovery file under `dir` (never inside the sets dir).
@@ -1056,5 +1113,182 @@ mod tests {
             !loaded.mirror_on,
             "missing prefs must default to mirror_on=false"
         );
+    }
+
+    // ── Task 4: user-pattern store ───────────────────────────────────────────
+
+    fn make_drum_pattern(name: &str) -> Pattern {
+        Pattern {
+            name: name.to_string(),
+            desc: "test desc".to_string(),
+            length: 4,
+            data: PatternData::Drums(vec![
+                vec![DrumHit {
+                    note: 36,
+                    vel: 100,
+                    prob: 1.0,
+                    ratchet: 1,
+                }],
+                vec![],
+                vec![DrumHit {
+                    note: 42,
+                    vel: 80,
+                    prob: 0.75,
+                    ratchet: 2,
+                }],
+                vec![],
+            ]),
+            id: persist::Id::nil(),
+        }
+    }
+
+    #[test]
+    fn save_load_user_pattern_roundtrip_with_stable_id() {
+        let dir = unique_dir("t4-pat-roundtrip");
+        let mut p = make_drum_pattern("My Beat");
+
+        let path = save_user_pattern(&dir, &mut p).unwrap();
+        assert!(path.exists(), "saved file must exist");
+        assert!(!p.id.is_nil(), "ensure_id must mint a non-nil id");
+
+        let loaded = load_user_pattern(&path).unwrap();
+        assert_eq!(loaded.name, p.name, "name must survive round-trip");
+        assert_eq!(loaded.id, p.id, "id must survive round-trip");
+        assert!(!loaded.id.is_nil(), "loaded id must be non-nil");
+        assert_eq!(loaded.data, p.data, "data must survive round-trip");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn user_pattern_filename_has_id_suffix() {
+        let dir = unique_dir("t4-pat-filename");
+        let mut p = make_drum_pattern("Acid Loop #7!");
+
+        let path = save_user_pattern(&dir, &mut p).unwrap();
+        let fname = path.file_name().unwrap().to_str().unwrap();
+        let id_hex = &p.id.as_str()[..8];
+
+        // slug of "Acid Loop #7!" → "acid-loop-7"
+        assert!(
+            fname.starts_with("acid-loop-7-"),
+            "filename must start with slug 'acid-loop-7-' but was: {fname}"
+        );
+        assert!(
+            fname.contains(id_hex),
+            "filename must contain first 8 hex of id ({id_hex}): {fname}"
+        );
+        assert!(
+            fname.ends_with(".json"),
+            "filename must end with .json: {fname}"
+        );
+
+        // slug prefix + '-' + 8 hex chars + '.json'
+        let hex_part = fname
+            .strip_prefix("acid-loop-7-")
+            .unwrap()
+            .strip_suffix(".json")
+            .unwrap();
+        assert_eq!(
+            hex_part.len(),
+            8,
+            "id suffix must be 8 hex chars but was: {hex_part}"
+        );
+        assert!(
+            hex_part.chars().all(|c| c.is_ascii_hexdigit()),
+            "id suffix must be hex but was: {hex_part}"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn list_user_patterns_finds_saved() {
+        let dir = unique_dir("t4-pat-list");
+        let mut p1 = make_drum_pattern("Alpha");
+        let mut p2 = make_drum_pattern("Beta");
+
+        let path1 = save_user_pattern(&dir, &mut p1).unwrap();
+        let path2 = save_user_pattern(&dir, &mut p2).unwrap();
+
+        // Write a non-JSON file — must NOT appear in the listing.
+        std::fs::write(dir.join("notes.txt"), b"ignore me").unwrap();
+
+        let listed = list_user_patterns(&dir);
+        assert_eq!(listed.len(), 2, "must list exactly 2 .json files");
+        assert!(listed.iter().any(|p| p == &path1), "path1 must be listed");
+        assert!(listed.iter().any(|p| p == &path2), "path2 must be listed");
+        assert!(
+            listed
+                .iter()
+                .all(|p| p.extension().and_then(|e| e.to_str()) == Some("json")),
+            "list must only contain .json files"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn list_user_patterns_empty_when_dir_absent() {
+        // Use a path that definitely doesn't exist.
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let absent = std::env::temp_dir().join(format!("midip-absent-{}", nanos));
+        let listed = list_user_patterns(&absent);
+        assert!(listed.is_empty(), "absent dir must return empty list");
+    }
+
+    #[test]
+    fn load_user_pattern_repairs_bad_fields() {
+        let dir = unique_dir("t4-pat-repair");
+
+        // Craft a JSON with out-of-range fields:
+        // length=2 but data has 4 steps; drum vel=200, prob=5.0, ratchet=99.
+        let bad_json = r#"{
+            "name": "bad pattern",
+            "desc": "",
+            "length": 2,
+            "data": {"Drums": [
+                [{"note": 200, "vel": 200, "prob": 5.0, "ratchet": 99}],
+                [],
+                [],
+                []
+            ]},
+            "id": "0000000000000000"
+        }"#;
+        let path = dir.join("bad-pattern.json");
+        std::fs::write(&path, bad_json).unwrap();
+
+        let loaded = load_user_pattern(&path).unwrap();
+
+        // length stays at 2 (already in range 1..=64)
+        assert_eq!(loaded.length, 2);
+        // data must be resized from 4 steps to 2
+        if let PatternData::Drums(ref steps) = loaded.data {
+            assert_eq!(steps.len(), 2, "data must be resized to match length=2");
+            let hit = &steps[0][0];
+            assert_eq!(hit.note, 127, "note clamped to 127");
+            assert_eq!(hit.vel, 127, "vel clamped to 127");
+            assert_eq!(hit.prob, 1.0, "prob clamped to 1.0");
+            assert_eq!(hit.ratchet, 8, "ratchet clamped to 8");
+        } else {
+            panic!("expected Drums data");
+        }
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn validate_and_repair_pattern_clean_is_noop() {
+        let mut p = make_drum_pattern("Clean");
+        let original = p.clone();
+        let notes = validate_and_repair_pattern(&mut p);
+        assert!(
+            notes.is_empty(),
+            "clean pattern must return no repair notes"
+        );
+        assert_eq!(p, original, "clean pattern must be unchanged");
     }
 }

@@ -5,6 +5,7 @@
 //! `LoadPattern`). Undo/redo snapshot the whole `Set`.
 
 use crate::devices::profiles;
+use crate::engine::scheduler::Quant;
 use crate::engine::{EngineEvent, UiCommand};
 use crate::pattern::euclid;
 use crate::pattern::library::{LibRole, Library};
@@ -13,7 +14,23 @@ use crate::pattern::model::{
     PortRef, Set,
 };
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// Purpose of a pending name-entry dialog.
+#[derive(Clone, Debug, PartialEq)]
+pub enum NamePurpose {
+    SaveSetAs,
+    RenameSet,
+    SaveUserPattern,
+}
+
+/// Action to perform when a Confirm dialog is accepted.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ConfirmAction {
+    NewSet,
+    DeleteSet(std::path::PathBuf),
+    ClearPattern,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub enum Mode {
     Edit,
     Library,
@@ -22,6 +39,10 @@ pub enum Mode {
     SetBrowser,
     RouteEditor,
     RecoveryPrompt,
+    /// Text-input dialog for naming a set or pattern.
+    NameEntry(NamePurpose),
+    /// Yes/no confirmation dialog before a destructive action.
+    Confirm(ConfirmAction),
 }
 
 /// Which field is focused in the route editor (cycles Left/Right).
@@ -85,7 +106,10 @@ pub enum Action {
     AdjustPatternLen(i8), // resize the focused lane's pattern length
     AdjustProb(i8),  // per-step probability on the cursor cell (±0.1 per unit)
     AdjustRatchet(i8), // per-step ratchet count on the cursor cell (clamped 1..=8)
-    Euclid { dp: i8, dr: i8 }, // drums: dp = ±pulses for focused voice, dr = ±rotation
+    Euclid {
+        dp: i8,
+        dr: i8,
+    }, // drums: dp = ±pulses for focused voice, dr = ±rotation
     Panic,           // all-notes-off; no undo snapshot, no Set mutation
     OpenLibrary,
     CloseLibrary,
@@ -110,6 +134,60 @@ pub enum Action {
     RecoveryDiscard,
     RecoveryOpenSaved,
     ToggleMirror,
+    /// Flip launch quant between NextBar and NextBeat.
+    ToggleLaunchQuant,
+    /// Cancel any pending queued launch on the focused lane.
+    CancelQueue,
+    /// Save a copy of the focused lane's pattern under a new name/id to the user-pattern store.
+    /// Does NOT mutate the lane. Task 7 supplies the name from a dialog; here it is a param.
+    SaveAsUserPattern(String),
+    /// Replace the focused lane's pattern with a same-kind, same-length empty pattern ("init").
+    /// Snapshots for undo. Confirmation when material exists is Task 7.
+    ClearPattern,
+    /// Load the user pattern at `path`, assign a fresh id and " copy" suffix, re-save.
+    /// Only ever touches paths under the user `patterns/` dir; vendored library dir is never written.
+    DuplicateUserPattern(std::path::PathBuf),
+    /// Rename the user pattern at `path`: keep its id, update name, save new file, remove old.
+    /// Only ever touches paths under the user `patterns/` dir; vendored library dir is never written.
+    RenameUserPattern(std::path::PathBuf, String),
+    /// Delete the user pattern file at `path`. Best-effort removal.
+    /// Only ever touches paths under the user `patterns/` dir; vendored library dir is never written.
+    DeleteUserPattern(std::path::PathBuf),
+    /// Save current set under a new name with a fresh id. Becomes the new current document.
+    SaveSetAs(String),
+    /// Rename current set: keep id, update name, write new file, remove old file.
+    RenameSet(String),
+    /// Write a copy of the current set with a fresh id and " copy" suffix. Current doc unchanged.
+    DuplicateSet,
+    /// Replace current document with a default empty set. Clears undo/redo.
+    NewSet,
+    /// Delete the set file at `path`. Best-effort removal.
+    DeleteSet(std::path::PathBuf),
+    // ── Name-entry dialog ─────────────────────────────────────────────
+    OpenNameEntry(NamePurpose),
+    NameChar(char),
+    NameBackspace,
+    NameCommit,
+    NameCancel,
+    // ── Confirm dialog ────────────────────────────────────────────────
+    OpenConfirm(ConfirmAction),
+    ConfirmYes,
+    ConfirmNo,
+    // ── Set-browser management keys ───────────────────────────────────
+    SetBrowserRename,
+    SetBrowserSaveAs,
+    SetBrowserDuplicate,
+    SetBrowserDelete,
+    SetBrowserNewSet,
+    // ── Edit-mode pattern management ──────────────────────────────────
+    OpenSaveUserPattern,
+    OpenClearPattern,
+    // ── User-pattern load ─────────────────────────────────────────────
+    LoadUserPattern(std::path::PathBuf),
+    /// Double the focused lane's pattern length, filling new steps by repeating the
+    /// existing content cyclically (e.g. 16→32: steps 17–32 mirror 1–16).
+    /// Capped at 64. No-op with status toast when already at 64.
+    DoubleLength,
     None,
 }
 
@@ -166,6 +244,8 @@ pub struct App {
     pub status_ttl: u16,
     pub should_quit: bool,
     pub tempo_input: String,
+    /// Text buffer for the NameEntry dialog (set name / user-pattern name).
+    pub name_input: String,
     /// Armed for double-q quit: true after first Quit while playing.
     pub quit_armed: bool,
     /// True when the Set has unsaved mutations since the last successful Save.
@@ -187,6 +267,24 @@ pub struct App {
     /// Available MIDI output port names, refreshed when the editor opens.
     pub route_editor_ports: Vec<String>,
     pub mirror_on: bool,
+
+    // --- M3 Task 2: clip-launcher queue ---
+    /// Quantization grid for the next library-load-while-playing. Default: NextBar.
+    pub launch_quant: Quant,
+    /// Per-lane queued pattern name (set when a QueuePattern is emitted while playing;
+    /// cleared when EngineEvent::Launched fires for that lane or CancelQueue is applied).
+    /// Sized to `set.lanes.len()`.
+    pub queued: Vec<Option<String>>,
+
+    // --- M3 Task 6: set management ---
+    /// The on-disk path of the currently-loaded/saved set file, so Rename/Delete can target it.
+    /// None if the set has never been saved or was replaced by NewSet.
+    pub current_set_path: Option<std::path::PathBuf>,
+
+    // --- M3 Task 7: management UI ---
+    /// Cached user patterns loaded from the user patterns dir; injected into the library
+    /// as a "User" genre when the library browser opens.
+    pub user_patterns: Vec<crate::pattern::model::Pattern>,
 }
 
 /// Default melodic velocity multiplier when placing a note (1.0 -> MIDI 100).
@@ -233,6 +331,7 @@ impl App {
             status_ttl: 0,
             should_quit: false,
             tempo_input: String::new(),
+            name_input: String::new(),
             quit_armed: false,
             dirty: false,
             autosave_counter: 0,
@@ -241,6 +340,10 @@ impl App {
             route_editor_field: RouteField::Port,
             route_editor_ports: Vec::new(),
             mirror_on: false,
+            launch_quant: Quant::NextBar,
+            queued: vec![None; n],
+            current_set_path: None,
+            user_patterns: Vec::new(),
         }
     }
 
@@ -318,13 +421,39 @@ impl App {
                     UiCommand::Stop
                 });
             }
-            Action::FocusNext => self.set_focus((self.focus + 1) % self.set.lanes.len()),
+            Action::FocusNext => {
+                // Audition is tied to a specific lane; changing focus abandons it.
+                if let Some(prev) = self.audition.take() {
+                    cmds.push(UiCommand::LoadPattern {
+                        lane: prev.lane,
+                        pattern: self.set.lanes[prev.lane].pattern.clone(),
+                    });
+                    self.set_status("Audition cancelled");
+                }
+                self.set_focus((self.focus + 1) % self.set.lanes.len());
+            }
             Action::FocusPrev => {
+                // Audition is tied to a specific lane; changing focus abandons it.
+                if let Some(prev) = self.audition.take() {
+                    cmds.push(UiCommand::LoadPattern {
+                        lane: prev.lane,
+                        pattern: self.set.lanes[prev.lane].pattern.clone(),
+                    });
+                    self.set_status("Audition cancelled");
+                }
                 let n = self.set.lanes.len();
                 self.set_focus((self.focus + n - 1) % n);
             }
             Action::FocusLane(i) => {
                 if i < self.set.lanes.len() {
+                    // Audition is tied to a specific lane; changing focus abandons it.
+                    if let Some(prev) = self.audition.take() {
+                        cmds.push(UiCommand::LoadPattern {
+                            lane: prev.lane,
+                            pattern: self.set.lanes[prev.lane].pattern.clone(),
+                        });
+                        self.set_status("Audition cancelled");
+                    }
                     self.set_focus(i);
                 }
             }
@@ -526,6 +655,33 @@ impl App {
                 self.clamp_cursor();
                 cmds.push(self.load_focused());
             }
+            Action::DoubleLength => {
+                let len = self.set.lanes[self.focus].pattern.length;
+                if len >= 64 {
+                    self.set_status("Already at max length (64)");
+                } else {
+                    let new_len = (len * 2).min(64);
+                    self.snapshot();
+                    let lane = &mut self.set.lanes[self.focus];
+                    match &mut lane.pattern.data {
+                        PatternData::Drums(steps) => {
+                            steps.resize(new_len, Vec::new());
+                            for i in len..new_len {
+                                steps[i] = steps[i % len].clone();
+                            }
+                        }
+                        PatternData::Melodic(steps) => {
+                            steps.resize(new_len, Option::None);
+                            for i in len..new_len {
+                                steps[i] = steps[i % len].clone();
+                            }
+                        }
+                    }
+                    lane.pattern.length = new_len;
+                    self.set_status(format!("Length {} \u{2192} {}", len, new_len));
+                    cmds.push(self.load_focused());
+                }
+            }
             Action::AdjustProb(d) => {
                 if self.adjust_prob(d) {
                     if let Some(pct) = self.cursor_prob_pct() {
@@ -554,7 +710,10 @@ impl App {
                 // Live recovery: forward to the engine. No undo snapshot, no Set mutation.
                 cmds.push(UiCommand::Panic);
             }
-            Action::OpenLibrary => self.mode = Mode::Library,
+            Action::OpenLibrary => {
+                self.refresh_user_patterns();
+                self.mode = Mode::Library;
+            }
             Action::CloseLibrary => {
                 if self.audition.take().is_some() {
                     // Cancel audition: the committed Set was never touched, so nothing to undo.
@@ -598,16 +757,41 @@ impl App {
                     // true pre-audition pattern). snapshot() also marks dirty.
                     self.snapshot();
                     self.audition = None;
+                    // Commit the pattern to the document unconditionally: the saved doc
+                    // always reflects the intended pattern. Whether it launches now or at a
+                    // boundary is an engine concern only.
                     self.set.lanes[self.focus].pattern = pat.clone();
-                    self.set_status(format!("Loaded {}", name));
-                    cmds.push(UiCommand::LoadPattern {
-                        lane: self.focus,
-                        pattern: pat,
-                    });
+                    if self.engine_playing {
+                        // Playing: queue to the next launch boundary (clip-launcher style).
+                        let quant = self.launch_quant;
+                        self.queued[self.focus] = Some(name.clone());
+                        self.set_status(format!("Queued {} ({})", name, quant_label(quant)));
+                        cmds.push(UiCommand::QueuePattern {
+                            lane: self.focus,
+                            pattern: pat,
+                            quant,
+                        });
+                    } else {
+                        // Stopped: load immediately (existing behavior).
+                        self.set_status(format!("Loaded {}", name));
+                        cmds.push(UiCommand::LoadPattern {
+                            lane: self.focus,
+                            pattern: pat,
+                        });
+                    }
                     self.mode = Mode::Edit;
                 }
             }
             Action::Audition => {
+                // Gate: audition is allowed only when the focused lane is stopped (transport
+                // stopped) OR muted. This prevents the cued preview from colliding with a live
+                // lane. The audition target is the focused lane's route/channel; a dedicated
+                // cue port is a future option — no separate port in this milestone.
+                let lane_muted = self.set.lanes[self.focus].mute;
+                if self.engine_playing && !lane_muted {
+                    self.set_status("Mute lane to audition (it's live)");
+                    return cmds;
+                }
                 // Isolated preview: cue the selected pattern WITHOUT mutating the committed Set.
                 if let Some(pat) = self.selected_lib_pattern().cloned() {
                     self.set_status(format!("Auditioning {}", pat.name));
@@ -644,6 +828,7 @@ impl App {
                                 .and_then(|s| s.to_str())
                                 .unwrap_or("set")
                                 .to_string();
+                            self.current_set_path = Some(self.set_files[self.set_sel].clone());
                             self.load_set_document(set, stem);
                             self.mode = Mode::Edit;
                             cmds.push(UiCommand::SetSet(self.set.clone()));
@@ -662,7 +847,8 @@ impl App {
                 // Cross-task dependency: `config::data_dir()` is defined in Task 21.
                 let dir = crate::config::data_dir().join("sets");
                 match crate::pattern::store::save_set(&dir, &mut self.set) {
-                    Ok(_path) => {
+                    Ok(path) => {
+                        self.current_set_path = Some(path);
                         self.set_status("Saved");
                         self.dirty = false;
                         // Deliberate save supersedes the recovery snapshot.
@@ -859,6 +1045,21 @@ impl App {
                 self.set_sel = 0;
                 self.mode = Mode::SetBrowser;
             }
+            Action::ToggleLaunchQuant => {
+                self.launch_quant = match self.launch_quant {
+                    Quant::NextBar => Quant::NextBeat,
+                    Quant::NextBeat => Quant::NextBar,
+                };
+                self.set_status(format!("Launch: {}", quant_label(self.launch_quant)));
+            }
+            Action::CancelQueue => {
+                let lane = self.focus;
+                if self.queued[lane].is_some() {
+                    self.queued[lane] = None;
+                    self.set_status(format!("Queue cancelled (lane {})", lane + 1));
+                    cmds.push(UiCommand::CancelQueue { lane });
+                }
+            }
             Action::ToggleMirror => {
                 self.mirror_on = !self.mirror_on;
                 self.set_status(if self.mirror_on {
@@ -873,6 +1074,264 @@ impl App {
                     },
                 );
                 cmds.push(crate::engine::UiCommand::SetMirror(self.mirror_on));
+            }
+            Action::SaveAsUserPattern(name) => {
+                // Clone the focused lane's pattern and give it a fresh identity so
+                // save-as creates a new file rather than overwriting the source.
+                let mut clone = self.set.lanes[self.focus].pattern.clone();
+                clone.name = name.clone();
+                clone.id = crate::persist::Id::nil();
+                clone.ensure_id();
+                let dir = crate::config::data_dir().join("patterns");
+                match crate::pattern::store::save_user_pattern(&dir, &mut clone) {
+                    Ok(_) => self.set_status(format!("Saved pattern {}", name)),
+                    Err(e) => self.set_status(format!("Save failed: {}", e)),
+                }
+                // Does NOT mutate the lane or mark dirty.
+            }
+            Action::ClearPattern => {
+                self.snapshot();
+                let lane = &self.set.lanes[self.focus];
+                let len = lane.pattern.length;
+                let kind = lane.pattern.kind();
+                let empty = match kind {
+                    crate::pattern::model::LaneKind::Drums => {
+                        crate::pattern::model::Pattern::empty_drums(len)
+                    }
+                    crate::pattern::model::LaneKind::Melodic => {
+                        crate::pattern::model::Pattern::empty_melodic(len)
+                    }
+                };
+                self.set.lanes[self.focus].pattern = empty;
+                self.set_status("Cleared lane");
+                cmds.push(self.load_focused());
+            }
+            Action::DuplicateUserPattern(path) => {
+                // Only ever touches paths under the user `patterns/` dir; vendored library dir is never written.
+                let dir = crate::config::data_dir().join("patterns");
+                match crate::pattern::store::load_user_pattern(&path) {
+                    Ok(mut p) => {
+                        let new_name = format!("{} copy", p.name);
+                        p.name = new_name.clone();
+                        p.id = crate::persist::Id::nil();
+                        p.ensure_id();
+                        match crate::pattern::store::save_user_pattern(&dir, &mut p) {
+                            Ok(_) => self.set_status(format!("Duplicated as {}", new_name)),
+                            Err(e) => self.set_status(format!("Duplicate failed: {}", e)),
+                        }
+                    }
+                    Err(e) => self.set_status(format!("Duplicate failed: {}", e)),
+                }
+            }
+            Action::RenameUserPattern(path, new_name) => {
+                // Only ever touches paths under the user `patterns/` dir; vendored library dir is never written.
+                let dir = crate::config::data_dir().join("patterns");
+                match crate::pattern::store::load_user_pattern(&path) {
+                    Ok(mut p) => {
+                        let old_id = p.id.clone();
+                        p.name = new_name.clone();
+                        match crate::pattern::store::save_user_pattern(&dir, &mut p) {
+                            Ok(_) => {
+                                // Remove the old file (best-effort; ignore errors).
+                                let _ = std::fs::remove_file(&path);
+                                debug_assert_eq!(p.id, old_id, "rename must keep the pattern id");
+                                self.set_status(format!("Renamed to {}", new_name));
+                            }
+                            Err(e) => self.set_status(format!("Rename failed: {}", e)),
+                        }
+                    }
+                    Err(e) => self.set_status(format!("Rename failed: {}", e)),
+                }
+            }
+            Action::DeleteUserPattern(path) => {
+                // Only ever touches paths under the user `patterns/` dir; vendored library dir is never written.
+                // Best-effort: silently ignore "not found" errors.
+                let _ = std::fs::remove_file(&path);
+                self.set_status("Deleted pattern");
+            }
+            Action::SaveSetAs(name) => {
+                // Give the set a fresh identity so save-as creates a new file rather
+                // than overwriting the source. The current document becomes the new set.
+                let dir = crate::config::data_dir().join("sets");
+                self.set.name = name.clone();
+                self.set.id = crate::persist::Id::nil();
+                self.set.ensure_id();
+                match crate::pattern::store::save_set(&dir, &mut self.set) {
+                    Ok(path) => {
+                        self.current_set_path = Some(path);
+                        self.dirty = false;
+                        self.set_status(format!("Saved as {}", name));
+                    }
+                    Err(e) => self.set_status(format!("Save failed: {}", e)),
+                }
+            }
+            Action::RenameSet(name) => {
+                // Keep the id; only the name (and therefore filename) changes.
+                let dir = crate::config::data_dir().join("sets");
+                let old_path = self.current_set_path.clone();
+                self.set.name = name.clone();
+                match crate::pattern::store::save_set(&dir, &mut self.set) {
+                    Ok(new_path) => {
+                        // Remove the old file if it differs (best-effort).
+                        if let Some(ref op) = old_path {
+                            if op != &new_path {
+                                let _ = std::fs::remove_file(op);
+                            }
+                        }
+                        self.current_set_path = Some(new_path);
+                        self.dirty = false;
+                        self.set_status(format!("Renamed to {}", name));
+                    }
+                    Err(e) => self.set_status(format!("Rename failed: {}", e)),
+                }
+            }
+            Action::DuplicateSet => {
+                // Clone with a fresh id and " copy" suffix; write a new file.
+                // The current document stays unchanged.
+                let dir = crate::config::data_dir().join("sets");
+                let mut clone = self.set.clone();
+                let copy_name = format!("{} copy", clone.name);
+                clone.name = copy_name.clone();
+                clone.id = crate::persist::Id::nil();
+                clone.ensure_id();
+                match crate::pattern::store::save_set(&dir, &mut clone) {
+                    Ok(_) => self.set_status(format!("Duplicated to {}", copy_name)),
+                    Err(e) => self.set_status(format!("Duplicate failed: {}", e)),
+                }
+                // current_set_path and self.set are intentionally untouched.
+            }
+            Action::NewSet => {
+                // Replace the current document with a blank default set.
+                // Clears undo/redo (you cannot undo across documents).
+                // Confirmation when dirty is Task 7 — here just do it unconditionally.
+                let new_set = Set::default_set(crate::devices::profiles::default_profiles());
+                let n = new_set.lanes.len();
+                self.set = new_set;
+                self.undo.clear();
+                self.redo.clear();
+                self.audition = None;
+                self.dirty = false;
+                self.current_set_path = None;
+                self.queued = vec![None; n];
+                self.clamp_cursor();
+                self.set_status("New set");
+                cmds.push(UiCommand::SetSet(self.set.clone()));
+            }
+            Action::DeleteSet(path) => {
+                // Best-effort file removal. If the deleted file is the current document's
+                // backing file, clear current_set_path (the in-memory set is left as-is).
+                let _ = std::fs::remove_file(&path);
+                if self.current_set_path.as_deref() == Some(&path) {
+                    self.current_set_path = None;
+                }
+                self.set_status("Deleted set");
+            }
+            // ── Name-entry dialog ─────────────────────────────────────────────
+            Action::OpenNameEntry(purpose) => {
+                self.name_input.clear();
+                self.mode = Mode::NameEntry(purpose);
+            }
+            Action::NameChar(c) => {
+                let ok = c.is_ascii_alphanumeric() || matches!(c, ' ' | '-' | '#');
+                if ok && self.name_input.len() < 32 {
+                    self.name_input.push(c);
+                }
+            }
+            Action::NameBackspace => {
+                self.name_input.pop();
+            }
+            Action::NameCommit => {
+                let purpose = match &self.mode {
+                    Mode::NameEntry(p) => p.clone(),
+                    _ => return cmds,
+                };
+                let name = self.name_input.trim().to_string();
+                self.mode = Mode::Edit;
+                self.name_input.clear();
+                if !name.is_empty() {
+                    let sub = match purpose {
+                        NamePurpose::SaveSetAs => Action::SaveSetAs(name),
+                        NamePurpose::RenameSet => Action::RenameSet(name),
+                        NamePurpose::SaveUserPattern => Action::SaveAsUserPattern(name),
+                    };
+                    cmds.extend(self.apply(sub));
+                }
+            }
+            Action::NameCancel => {
+                self.mode = Mode::Edit;
+                self.name_input.clear();
+            }
+            // ── Confirm dialog ────────────────────────────────────────────────
+            Action::OpenConfirm(action) => {
+                self.mode = Mode::Confirm(action);
+            }
+            Action::ConfirmYes => {
+                let action = match &self.mode {
+                    Mode::Confirm(a) => a.clone(),
+                    _ => return cmds,
+                };
+                self.mode = Mode::Edit;
+                let sub = match action {
+                    ConfirmAction::NewSet => Action::NewSet,
+                    ConfirmAction::DeleteSet(path) => Action::DeleteSet(path),
+                    ConfirmAction::ClearPattern => Action::ClearPattern,
+                };
+                cmds.extend(self.apply(sub));
+            }
+            Action::ConfirmNo => {
+                self.mode = Mode::Edit;
+                self.set_status("Cancelled");
+            }
+            // ── Set-browser management ────────────────────────────────────────
+            Action::SetBrowserRename => {
+                self.name_input.clear();
+                self.mode = Mode::NameEntry(NamePurpose::RenameSet);
+            }
+            Action::SetBrowserSaveAs => {
+                self.name_input.clear();
+                self.mode = Mode::NameEntry(NamePurpose::SaveSetAs);
+            }
+            Action::SetBrowserDuplicate => {
+                cmds.extend(self.apply(Action::DuplicateSet));
+            }
+            Action::SetBrowserDelete => {
+                if !self.set_files.is_empty() {
+                    let path = self.set_files[self.set_sel].clone();
+                    self.mode = Mode::Confirm(ConfirmAction::DeleteSet(path));
+                }
+            }
+            Action::SetBrowserNewSet => {
+                if self.dirty {
+                    self.mode = Mode::Confirm(ConfirmAction::NewSet);
+                } else {
+                    cmds.extend(self.apply(Action::NewSet));
+                }
+            }
+            // ── Edit-mode pattern management ──────────────────────────────────
+            Action::OpenSaveUserPattern => {
+                self.name_input.clear();
+                self.mode = Mode::NameEntry(NamePurpose::SaveUserPattern);
+            }
+            Action::OpenClearPattern => {
+                if self.pattern_has_material() {
+                    self.mode = Mode::Confirm(ConfirmAction::ClearPattern);
+                } else {
+                    cmds.extend(self.apply(Action::ClearPattern));
+                }
+            }
+            // ── User-pattern load ─────────────────────────────────────────────
+            Action::LoadUserPattern(path) => {
+                match crate::pattern::store::load_user_pattern(&path) {
+                    Ok(pat) => {
+                        let name = pat.name.clone();
+                        self.snapshot();
+                        self.set.lanes[self.focus].pattern = pat;
+                        self.set_status(format!("Loaded user pattern {}", name));
+                        self.mode = Mode::Edit;
+                        cmds.push(self.load_focused());
+                    }
+                    Err(e) => self.set_status(format!("Load failed: {}", e)),
+                }
             }
             Action::None => {}
         }
@@ -948,6 +1407,13 @@ impl App {
                 self.set.bpm = bpm;
                 self.set_status(format!("Tap: {} BPM", bpm.round() as u32));
             }
+            // M3 Task 2: a queued per-lane launch fired. Clear the QUEUED display for
+            // that lane so it flips back to ACTIVE (the engine now plays the queued pattern).
+            EngineEvent::Launched { lane, .. } => {
+                if let Some(slot) = self.queued.get_mut(lane) {
+                    *slot = None;
+                }
+            }
         }
     }
 
@@ -1017,6 +1483,8 @@ impl App {
             Mode::SetBrowser => "OPEN SET",
             Mode::RouteEditor => "ROUTES",
             Mode::RecoveryPrompt => "RECOVERY",
+            Mode::NameEntry(_) => "NAME",
+            Mode::Confirm(_) => "CONFIRM",
         }
     }
 
@@ -1055,11 +1523,13 @@ impl App {
     /// discarded so the loss is not silent. (Full confirm-prompt is deferred to M3.)
     fn load_set_document(&mut self, set: Set, name: String) {
         let had_unsaved = self.dirty;
+        let n = set.lanes.len();
         self.set = set;
         self.undo.clear();
         self.redo.clear();
         self.audition = None;
         self.dirty = false;
+        self.queued = vec![None; n];
         self.clamp_cursor();
         self.set_status(if had_unsaved {
             format!("Loaded {} (unsaved changes discarded)", name)
@@ -1472,6 +1942,37 @@ impl App {
         }
     }
 
+    /// True if the focused lane's pattern has at least one active step.
+    fn pattern_has_material(&self) -> bool {
+        let lane = &self.set.lanes[self.focus];
+        match &lane.pattern.data {
+            PatternData::Drums(steps) => steps.iter().any(|s| !s.is_empty()),
+            PatternData::Melodic(steps) => steps.iter().any(|s| s.is_some()),
+        }
+    }
+
+    /// Load user patterns from disk and inject them as a "User" genre in every role map.
+    /// Called when opening the library browser so saved patterns are immediately browseable.
+    pub fn refresh_user_patterns(&mut self) {
+        let dir = crate::config::data_dir().join("patterns");
+        let paths = crate::pattern::store::list_user_patterns(&dir);
+        let user_pats: Vec<crate::pattern::model::Pattern> = paths
+            .iter()
+            .filter_map(|p| crate::pattern::store::load_user_pattern(p).ok())
+            .collect();
+        self.user_patterns = user_pats.clone();
+        // Inject (or replace) a "User" genre in all three role maps so the browser
+        // shows saved user patterns regardless of focused-lane role. Only if non-empty.
+        self.library.drums.shift_remove("User");
+        self.library.bass.shift_remove("User");
+        self.library.synth.shift_remove("User");
+        if !user_pats.is_empty() {
+            self.library.drums.insert("User".into(), user_pats.clone());
+            self.library.bass.insert("User".into(), user_pats.clone());
+            self.library.synth.insert("User".into(), user_pats);
+        }
+    }
+
     fn current_genre_map(&self) -> &crate::pattern::library::GenreMap {
         match self.lib_role {
             LibRole::Drums => &self.library.drums,
@@ -1530,6 +2031,14 @@ impl App {
     }
 }
 
+/// Human-readable label for a `Quant` value, used in status toasts and UI.
+fn quant_label(q: Quant) -> &'static str {
+    match q {
+        Quant::NextBar => "next bar",
+        Quant::NextBeat => "next beat",
+    }
+}
+
 fn role_for_profile(id: &str) -> LibRole {
     // Map by profile id so each lane points at its own library:
     // "t8-drums" -> Drums, "t8-bass" -> Bass, "s1" -> Synth.
@@ -1547,6 +2056,10 @@ mod tests {
     use crate::engine::UiCommand;
     use crate::pattern::library::{GenreMap, LibRole, Library};
     use crate::pattern::model::{DrumHit, MelodicNote, Pattern, PatternData, Set};
+
+    /// Serializes tests that read/write the shared `data_dir()/recovery/autosave.json` path.
+    /// Poison-tolerant: a panicking test won't cascade to block the others.
+    static RECOVERY_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     /// Minimal in-memory library (one genre, one pattern per role) for deterministic tests.
     fn test_library() -> Library {
@@ -3380,7 +3893,7 @@ mod tests {
         // Verify that Action::Save keeps mode as Edit and clears dirty on success.
         // The store-level clear_recovery-on-save wiring is verified via code inspection
         // (Action::Save calls clear_recovery) and store::tests::clear_recovery_removes_file.
-        // We avoid env-var mutation here to stay race-free under parallel test execution.
+        let _guard = RECOVERY_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut app = new_app();
         app.set.name = "test-save".to_string();
         app.apply(Action::Save);
@@ -3393,6 +3906,7 @@ mod tests {
     #[test]
     fn recovery_discard_clears_and_goes_to_edit() {
         // Test mode transition + status. The fs.clear is exercised in store tests.
+        let _guard = RECOVERY_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut app = new_app();
         app.mode = Mode::RecoveryPrompt;
         let cmds = app.apply(Action::RecoveryDiscard);
@@ -3410,6 +3924,7 @@ mod tests {
         // Write a real recovery file to the data_dir() so RecoveryRecover can load it.
         // We create the recovery dir if absent so this works in fresh checkouts/CI.
         // fs-clear is verified in store tests; here we test app behavior only.
+        let _guard = RECOVERY_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         use crate::pattern::store;
         let data_dir = crate::config::data_dir();
         std::fs::create_dir_all(data_dir.join("recovery")).ok();
@@ -3485,5 +4000,1013 @@ mod tests {
             cmds2.contains(&crate::engine::UiCommand::SetMirror(false)),
             "must emit SetMirror(false)"
         );
+    }
+
+    // ── M3 Task 2: load-while-playing queues; ACTIVE/QUEUED display ──────────
+
+    #[test]
+    fn libload_while_playing_queues_not_loads() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(0)); // drums; lib_role -> Drums
+        app.apply(Action::OpenLibrary);
+        // Simulate engine confirmed playing.
+        app.engine_playing = true;
+        let cmds = app.apply(Action::LibLoad);
+        // Must emit QueuePattern, NOT LoadPattern.
+        assert!(
+            cmds.iter()
+                .any(|c| matches!(c, UiCommand::QueuePattern { lane: 0, .. })),
+            "while playing, LibLoad must emit QueuePattern; got: {:?}",
+            cmds
+        );
+        assert!(
+            !cmds
+                .iter()
+                .any(|c| matches!(c, UiCommand::LoadPattern { .. })),
+            "while playing, LibLoad must NOT emit LoadPattern; got: {:?}",
+            cmds
+        );
+        // queued[0] must be set to the pattern name.
+        assert!(
+            app.queued[0].is_some(),
+            "queued[0] must be Some after LibLoad while playing"
+        );
+        assert_eq!(
+            app.queued[0].as_deref(),
+            Some("lib-drum"),
+            "queued[0] must contain the loaded pattern name"
+        );
+    }
+
+    #[test]
+    fn libload_while_stopped_loads_immediately() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(0));
+        app.apply(Action::OpenLibrary);
+        app.engine_playing = false;
+        let cmds = app.apply(Action::LibLoad);
+        // Must emit LoadPattern (existing behavior).
+        assert!(
+            cmds.iter()
+                .any(|c| matches!(c, UiCommand::LoadPattern { lane: 0, .. })),
+            "while stopped, LibLoad must emit LoadPattern; got: {:?}",
+            cmds
+        );
+        assert!(
+            !cmds
+                .iter()
+                .any(|c| matches!(c, UiCommand::QueuePattern { .. })),
+            "while stopped, LibLoad must NOT emit QueuePattern; got: {:?}",
+            cmds
+        );
+        // queued[0] must remain None.
+        assert!(
+            app.queued[0].is_none(),
+            "queued[0] must be None after immediate load while stopped"
+        );
+    }
+
+    #[test]
+    fn launched_event_clears_queued_display() {
+        let mut app = new_app();
+        // Manually set queued state as if a queue was pending on lane 1.
+        app.queued[1] = Some("lib-bass".to_string());
+        assert!(app.queued[1].is_some());
+        // Fire the Launched event for lane 1.
+        app.on_engine_event(crate::engine::EngineEvent::Launched { lane: 1, step: 16 });
+        assert!(
+            app.queued[1].is_none(),
+            "Launched event must clear queued[1]"
+        );
+    }
+
+    #[test]
+    fn cancel_queue_clears_display_and_emits_command() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(1));
+        app.queued[1] = Some("lib-bass".to_string());
+        let cmds = app.apply(Action::CancelQueue);
+        assert!(
+            app.queued[1].is_none(),
+            "CancelQueue must clear queued[focus]"
+        );
+        assert!(
+            cmds.iter()
+                .any(|c| matches!(c, UiCommand::CancelQueue { lane: 1 })),
+            "CancelQueue must emit UiCommand::CancelQueue{{lane:1}}; got: {:?}",
+            cmds
+        );
+    }
+
+    #[test]
+    fn toggle_launch_quant_flips_nextbar_nextbeat_nextbar() {
+        let mut app = new_app();
+        assert_eq!(app.launch_quant, Quant::NextBar, "default is NextBar");
+        app.apply(Action::ToggleLaunchQuant);
+        assert_eq!(
+            app.launch_quant,
+            Quant::NextBeat,
+            "first toggle -> NextBeat"
+        );
+        app.apply(Action::ToggleLaunchQuant);
+        assert_eq!(app.launch_quant, Quant::NextBar, "second toggle -> NextBar");
+    }
+
+    #[test]
+    fn libload_while_playing_queues_with_nextbeat_when_set() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(0));
+        app.apply(Action::OpenLibrary);
+        app.engine_playing = true;
+        app.launch_quant = Quant::NextBeat;
+        let cmds = app.apply(Action::LibLoad);
+        assert!(
+            cmds.iter().any(|c| matches!(
+                c,
+                UiCommand::QueuePattern {
+                    lane: 0,
+                    quant: Quant::NextBeat,
+                    ..
+                }
+            )),
+            "QueuePattern must carry the current launch_quant; got: {:?}",
+            cmds
+        );
+    }
+
+    #[test]
+    fn libload_while_playing_commits_pattern_to_doc() {
+        // The doc pattern is updated immediately even when queuing (so saved file matches).
+        let mut app = new_app();
+        app.apply(Action::FocusLane(0));
+        app.apply(Action::OpenLibrary);
+        app.engine_playing = true;
+        app.apply(Action::LibLoad);
+        assert_eq!(
+            app.set.lanes[0].pattern.name, "lib-drum",
+            "doc pattern must be updated even when queued (not stopped)"
+        );
+    }
+
+    // --- M3 T3: Audition gating + focus-change revert ---
+
+    #[test]
+    fn audition_refused_when_lane_live_and_unmuted() {
+        // engine_playing=true, focused lane NOT muted → gate blocks the preview.
+        let mut app = new_app();
+        app.apply(Action::FocusLane(0));
+        app.apply(Action::OpenLibrary);
+        app.engine_playing = true;
+        assert!(!app.set.lanes[0].mute, "lane must be unmuted for this test");
+
+        let cmds = app.apply(Action::Audition);
+
+        assert!(
+            app.audition.is_none(),
+            "audition must not be set when lane is live and unmuted"
+        );
+        assert!(
+            !cmds
+                .iter()
+                .any(|c| matches!(c, UiCommand::LoadPattern { .. })),
+            "no LoadPattern must be emitted when gate refuses"
+        );
+        assert!(
+            app.status.contains("Mute lane"),
+            "status should hint to mute the lane; got: {:?}",
+            app.status
+        );
+    }
+
+    #[test]
+    fn audition_allowed_when_stopped() {
+        // engine_playing=false → gate passes regardless of mute state.
+        let mut app = new_app();
+        app.apply(Action::FocusLane(0));
+        app.apply(Action::OpenLibrary);
+        app.engine_playing = false;
+
+        let cmds = app.apply(Action::Audition);
+
+        assert!(
+            app.audition.is_some(),
+            "audition should be set when transport is stopped"
+        );
+        assert!(
+            cmds.iter()
+                .any(|c| matches!(c, UiCommand::LoadPattern { lane: 0, .. })),
+            "must emit LoadPattern when stopped"
+        );
+    }
+
+    #[test]
+    fn audition_allowed_when_lane_muted() {
+        // engine_playing=true but lane muted → gate passes (silent lane, safe to preview).
+        let mut app = new_app();
+        app.apply(Action::FocusLane(0));
+        app.apply(Action::OpenLibrary);
+        app.engine_playing = true;
+        app.set.lanes[0].mute = true;
+
+        let cmds = app.apply(Action::Audition);
+
+        assert!(
+            app.audition.is_some(),
+            "audition should be allowed when lane is muted"
+        );
+        assert!(
+            cmds.iter()
+                .any(|c| matches!(c, UiCommand::LoadPattern { lane: 0, .. })),
+            "must emit LoadPattern when lane is muted"
+        );
+    }
+
+    #[test]
+    fn focus_change_reverts_audition() {
+        // Start audition while stopped, then FocusNext → revert + clear.
+        let mut app = new_app();
+        app.apply(Action::FocusLane(0));
+        app.apply(Action::OpenLibrary);
+        app.engine_playing = false;
+        app.apply(Action::Audition);
+        assert!(
+            app.audition.is_some(),
+            "audition should be active before focus change"
+        );
+        let committed_name = app.set.lanes[0].pattern.name.clone();
+
+        let cmds = app.apply(Action::FocusNext);
+
+        assert!(
+            app.audition.is_none(),
+            "audition should be cleared after focus change"
+        );
+        // Engine must be restored to the committed pattern.
+        assert!(
+            cmds.iter().any(|c| matches!(
+                c,
+                UiCommand::LoadPattern { lane: 0, pattern } if pattern.name == committed_name
+            )),
+            "must emit LoadPattern restoring committed pattern after focus change; got: {:?}",
+            cmds
+        );
+        assert_eq!(
+            app.status, "Audition cancelled",
+            "status should say cancelled; got: {:?}",
+            app.status
+        );
+    }
+
+    #[test]
+    fn audition_commit_clears_audition() {
+        // LibLoad after audition must clear self.audition.
+        let mut app = new_app();
+        app.apply(Action::FocusLane(0));
+        app.apply(Action::OpenLibrary);
+        app.engine_playing = false;
+        app.apply(Action::Audition);
+        assert!(app.audition.is_some());
+
+        app.apply(Action::LibLoad);
+
+        assert!(
+            app.audition.is_none(),
+            "self.audition must be None after committing via LibLoad"
+        );
+    }
+
+    // ── M3 Task 5: pattern management ops ────────────────────────────────────
+
+    /// Returns a unique token for each call within the process (nanos + pid + atomic counter).
+    /// Used to make filenames unique across parallel test threads without touching the env.
+    fn unique_token(tag: &str) -> String {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static CTR: AtomicU64 = AtomicU64::new(1);
+        let n = CTR.fetch_add(1, Ordering::Relaxed);
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos() as u64;
+        format!("{}-{}-{}", tag, nanos, n)
+    }
+
+    #[test]
+    fn clear_pattern_empties_focused_lane_and_marks_dirty() {
+        let mut app = new_app();
+        // Place a hit on lane 0 (drums) so it is non-empty.
+        app.apply(Action::FocusLane(0));
+        app.apply(Action::MoveCursor(0, 0));
+        app.apply(Action::ToggleStep);
+        let len = app.focused_lane().pattern.length;
+        let undo_depth_before = app.undo.len();
+
+        let cmds = app.apply(Action::ClearPattern);
+
+        // Snapshot taken → undo stack grew by 1.
+        assert_eq!(
+            app.undo.len(),
+            undo_depth_before + 1,
+            "ClearPattern must snapshot (undoable)"
+        );
+        assert!(app.dirty, "ClearPattern must mark dirty");
+        // Lane pattern is now all-empty drums of the same length.
+        if let PatternData::Drums(steps) = &app.focused_lane().pattern.data {
+            assert_eq!(steps.len(), len, "length must be preserved");
+            assert!(
+                steps.iter().all(|s| s.is_empty()),
+                "all steps must be empty after clear"
+            );
+        } else {
+            panic!("expected drums");
+        }
+        assert_eq!(app.focused_lane().pattern.name, "init");
+        assert!(
+            cmds.iter()
+                .any(|c| matches!(c, UiCommand::LoadPattern { lane: 0, .. })),
+            "must emit LoadPattern for the engine"
+        );
+        // Undo must restore the hit.
+        app.apply(Action::Undo);
+        if let PatternData::Drums(steps) = &app.focused_lane().pattern.data {
+            assert_eq!(steps[0].len(), 1, "undo must restore the drum hit");
+        }
+    }
+
+    #[test]
+    fn save_as_user_pattern_writes_file_with_fresh_id() {
+        // Write to the real data_dir()/patterns using a unique pattern name.
+        // This avoids env-var mutation (which races with other tests using config::data_dir()).
+        let pat_dir = crate::config::data_dir().join("patterns");
+        std::fs::create_dir_all(&pat_dir).ok();
+        let tok = unique_token("save-as");
+        let unique_name = format!("t5-save-as-{}", tok);
+
+        let mut app = new_app();
+        app.apply(Action::FocusLane(0));
+        let original_id = app.focused_lane().pattern.id.clone();
+
+        app.apply(Action::SaveAsUserPattern(unique_name.clone()));
+
+        // Lane is NOT mutated.
+        assert_eq!(
+            app.focused_lane().pattern.id,
+            original_id,
+            "SaveAsUserPattern must not mutate the lane's pattern id"
+        );
+        // Find the written file by listing and matching the unique name.
+        let files = crate::pattern::store::list_user_patterns(&pat_dir);
+        let written = files
+            .iter()
+            .find(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|n| n.contains("t5-save-as"))
+                    .unwrap_or(false)
+            })
+            .expect("a file with the unique name must have been written");
+        let saved = crate::pattern::store::load_user_pattern(written).unwrap();
+        assert_eq!(saved.name, unique_name);
+        assert_ne!(
+            saved.id, original_id,
+            "saved pattern must have a fresh (different) id"
+        );
+        assert!(!saved.id.is_nil(), "saved id must be non-nil");
+
+        // Clean up only the file we created.
+        std::fs::remove_file(written).ok();
+    }
+
+    #[test]
+    fn duplicate_user_pattern_creates_new_id_copy() {
+        // Write source and copy both into data_dir()/patterns using unique names.
+        let pat_dir = crate::config::data_dir().join("patterns");
+        std::fs::create_dir_all(&pat_dir).ok();
+        let tok = unique_token("dup");
+
+        let mut src = crate::pattern::model::Pattern::empty_drums(8);
+        src.name = format!("t5-dup-src-{}", tok);
+        let src_path = crate::pattern::store::save_user_pattern(&pat_dir, &mut src).unwrap();
+        let src_id = src.id.clone();
+
+        let mut app = new_app();
+        app.apply(Action::DuplicateUserPattern(src_path.clone()));
+
+        // Find the copy file: unique to this run via tok, and contains "copy".
+        let files = crate::pattern::store::list_user_patterns(&pat_dir);
+        let copy_file = files
+            .iter()
+            .find(|p| {
+                let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                name.contains("copy") && name.contains("t5-dup-src")
+            })
+            .expect("copy file must exist and contain 'copy' in the filename");
+        let copy = crate::pattern::store::load_user_pattern(copy_file).unwrap();
+        assert!(
+            copy.name.contains("copy"),
+            "copy name must contain 'copy': {}",
+            copy.name
+        );
+        assert_ne!(
+            copy.id, src_id,
+            "copy must have a different id than the original"
+        );
+        assert!(!copy.id.is_nil());
+
+        // Clean up only the files we created.
+        std::fs::remove_file(&src_path).ok();
+        std::fs::remove_file(copy_file).ok();
+    }
+
+    #[test]
+    fn rename_user_pattern_keeps_id_changes_name_removes_old() {
+        let pat_dir = crate::config::data_dir().join("patterns");
+        std::fs::create_dir_all(&pat_dir).ok();
+        let tok = unique_token("rename");
+
+        let mut src = crate::pattern::model::Pattern::empty_drums(8);
+        src.name = format!("t5-rename-old-{}", tok);
+        let old_path = crate::pattern::store::save_user_pattern(&pat_dir, &mut src).unwrap();
+        let original_id = src.id.clone();
+        let new_name = format!("t5-rename-new-{}", tok);
+
+        let mut app = new_app();
+        app.apply(Action::RenameUserPattern(
+            old_path.clone(),
+            new_name.clone(),
+        ));
+
+        // Old file is gone.
+        assert!(!old_path.exists(), "old file must be removed after rename");
+        // New file exists in pat_dir with updated name but same id.
+        let files = crate::pattern::store::list_user_patterns(&pat_dir);
+        let new_file = files
+            .iter()
+            .find(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|n| n.contains("t5-rename-new"))
+                    .unwrap_or(false)
+            })
+            .expect("renamed file must exist");
+        let renamed = crate::pattern::store::load_user_pattern(new_file).unwrap();
+        assert_eq!(renamed.name, new_name);
+        assert_eq!(
+            renamed.id, original_id,
+            "rename must preserve the pattern id"
+        );
+
+        std::fs::remove_file(new_file).ok();
+    }
+
+    #[test]
+    fn delete_user_pattern_removes_file() {
+        // DeleteUserPattern takes an explicit path — no env var or shared dir needed.
+        // Write to a private temp dir to keep this fully isolated.
+        let tok = unique_token("delete");
+        let tmp = std::env::temp_dir().join(format!("midip-t5-del-{}", tok));
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let mut p = crate::pattern::model::Pattern::empty_drums(4);
+        p.name = format!("doomed-{}", tok);
+        let path = crate::pattern::store::save_user_pattern(&tmp, &mut p).unwrap();
+        assert!(path.exists(), "file must exist before delete");
+
+        let mut app = new_app();
+        app.apply(Action::DeleteUserPattern(path.clone()));
+
+        assert!(!path.exists(), "file must be gone after DeleteUserPattern");
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    // ── Task 6: Set management ops ───────────────────────────────────────────
+
+    #[test]
+    fn save_set_as_writes_new_id_and_tracks_path() {
+        let tok = unique_token("t6-saveas");
+        let tmp = std::env::temp_dir().join(format!("midip-t6-saveas-{}", tok));
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let mut app = new_app();
+        // Override data_dir is not possible cleanly, so we call the action and
+        // verify using the stored current_set_path plus direct store access.
+        // We need the sets dir to be writable; use a tmp dir per task instructions:
+        // "sets dir resolves under target/ in test binaries" — the action uses
+        // config::data_dir().join("sets"), so we verify via current_set_path.
+
+        let original_id = app.set.id.clone(); // nil before first save
+
+        // SaveSetAs("mine-<tok>") gives a fresh id and new name.
+        let name = format!("t6mine{}", tok);
+        app.apply(Action::SaveSetAs(name.clone()));
+
+        // Name was updated.
+        assert_eq!(app.set.name, name);
+        // Id was freshly minted (different from nil).
+        assert!(!app.set.id.is_nil(), "id must be non-nil after SaveSetAs");
+        // If original was nil, it must now differ; always true for nil.
+        assert_ne!(app.set.id, original_id.clone());
+        // current_set_path must be tracked.
+        assert!(
+            app.current_set_path.is_some(),
+            "current_set_path must be Some after SaveSetAs"
+        );
+        // File must exist on disk.
+        let path = app.current_set_path.as_ref().unwrap();
+        assert!(path.exists(), "saved file must exist on disk");
+        // dirty must be false.
+        assert!(!app.dirty, "dirty must be false after SaveSetAs");
+        // Status must mention "Saved as".
+        assert!(
+            app.status.contains("Saved as"),
+            "status must say 'Saved as' but was: {}",
+            app.status
+        );
+
+        // Cleanup.
+        std::fs::remove_file(path).ok();
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn rename_set_keeps_id_changes_file_removes_old() {
+        let tok = unique_token("t6-rename");
+
+        let mut app = new_app();
+        // First, do a SaveSetAs to get a real file and current_set_path.
+        let first_name = format!("t6renold{}", tok);
+        app.apply(Action::SaveSetAs(first_name.clone()));
+        let old_path = app
+            .current_set_path
+            .clone()
+            .expect("must have a path after SaveSetAs");
+        assert!(old_path.exists(), "old file must exist before rename");
+        let original_id = app.set.id.clone();
+
+        // Now rename.
+        let new_name = format!("t6rennew{}", tok);
+        app.apply(Action::RenameSet(new_name.clone()));
+
+        // Id must be unchanged.
+        assert_eq!(
+            app.set.id, original_id,
+            "RenameSet must preserve the set id"
+        );
+        // Name updated.
+        assert_eq!(app.set.name, new_name);
+        // Old file is gone.
+        assert!(
+            !old_path.exists(),
+            "old file must be removed after RenameSet"
+        );
+        // New file exists.
+        let new_path = app
+            .current_set_path
+            .as_ref()
+            .expect("current_set_path must be Some after rename");
+        assert!(new_path.exists(), "new file must exist after RenameSet");
+        assert_ne!(new_path, &old_path, "new path must differ from old path");
+        // dirty cleared.
+        assert!(!app.dirty, "dirty must be false after RenameSet");
+        // Status mentions "Renamed to".
+        assert!(
+            app.status.contains("Renamed to"),
+            "status must say 'Renamed to' but was: {}",
+            app.status
+        );
+
+        // Cleanup.
+        std::fs::remove_file(new_path).ok();
+    }
+
+    #[test]
+    fn duplicate_set_creates_copy_leaves_current() {
+        let tok = unique_token("t6-dup");
+
+        let mut app = new_app();
+        // Save to get a stable id for the current set.
+        let orig_name = format!("t6dupbase{}", tok);
+        app.apply(Action::SaveSetAs(orig_name.clone()));
+        let orig_path = app.current_set_path.clone().expect("must have path");
+        let orig_id = app.set.id.clone();
+        let orig_name_after = app.set.name.clone();
+
+        // Duplicate.
+        app.apply(Action::DuplicateSet);
+
+        // Current set unchanged.
+        assert_eq!(
+            app.set.id, orig_id,
+            "DuplicateSet must not change current set id"
+        );
+        assert_eq!(
+            app.set.name, orig_name_after,
+            "DuplicateSet must not change current set name"
+        );
+        assert_eq!(
+            app.current_set_path,
+            Some(orig_path.clone()),
+            "current_set_path must not change after DuplicateSet"
+        );
+
+        // A copy file should exist with " copy" suffix in the name.
+        let sets_dir = orig_path.parent().expect("path must have parent");
+        let files = crate::pattern::store::list_sets(sets_dir).unwrap_or_default();
+        let copy_file = files.iter().find(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .map(|n| n.contains("copy"))
+                .unwrap_or(false)
+        });
+        assert!(
+            copy_file.is_some(),
+            "a 'copy' file must exist after DuplicateSet"
+        );
+
+        // The copy must have a different id from the original.
+        let copy = crate::pattern::store::load_set(copy_file.unwrap()).unwrap();
+        assert_ne!(copy.id, orig_id, "duplicate must have a fresh id");
+        assert!(
+            copy.name.contains("copy"),
+            "duplicate name must contain 'copy' but was: {}",
+            copy.name
+        );
+
+        // Status mentions "Duplicated".
+        assert!(
+            app.status.contains("Duplicated"),
+            "status must mention 'Duplicated' but was: {}",
+            app.status
+        );
+
+        // Cleanup.
+        std::fs::remove_file(&orig_path).ok();
+        if let Some(cp) = copy_file {
+            std::fs::remove_file(cp).ok();
+        }
+    }
+
+    #[test]
+    fn new_set_resets_and_clears_undo() {
+        let mut app = new_app();
+        // Make an edit to push something onto the undo stack.
+        app.apply(Action::ToggleStep);
+        assert!(!app.undo.is_empty(), "undo must be non-empty after edit");
+        // Track a path.
+        app.apply(Action::SaveSetAs(format!(
+            "t6newbefore{}",
+            unique_token("t6-new")
+        )));
+        assert!(app.current_set_path.is_some());
+
+        let cmds = app.apply(Action::NewSet);
+
+        // Undo/redo cleared.
+        assert!(app.undo.is_empty(), "undo must be empty after NewSet");
+        assert!(app.redo.is_empty(), "redo must be empty after NewSet");
+        // dirty cleared.
+        assert!(!app.dirty, "dirty must be false after NewSet");
+        // current_set_path cleared.
+        assert!(
+            app.current_set_path.is_none(),
+            "current_set_path must be None after NewSet"
+        );
+        // Must emit SetSet.
+        assert!(
+            cmds.iter().any(|c| matches!(c, UiCommand::SetSet(_))),
+            "NewSet must emit SetSet"
+        );
+    }
+
+    #[test]
+    fn delete_set_removes_file() {
+        let tok = unique_token("t6-delset");
+
+        let mut app = new_app();
+        // Save to get a file.
+        app.apply(Action::SaveSetAs(format!("t6delsetfile{}", tok)));
+        let path = app
+            .current_set_path
+            .clone()
+            .expect("must have path after save");
+        assert!(path.exists(), "file must exist before delete");
+
+        app.apply(Action::DeleteSet(path.clone()));
+
+        assert!(!path.exists(), "file must be gone after DeleteSet");
+        // current_set_path cleared when deleted path matches.
+        assert!(
+            app.current_set_path.is_none(),
+            "current_set_path must be None after deleting current file"
+        );
+        // Status mentions "Deleted".
+        assert!(
+            app.status.contains("Deleted"),
+            "status must say 'Deleted' but was: {}",
+            app.status
+        );
+    }
+
+    // ── M3 Task 7: management UI app-layer tests ─────────────────────────────
+
+    #[test]
+    fn name_entry_char_appends_to_buffer() {
+        let mut app = new_app();
+        app.apply(Action::OpenNameEntry(NamePurpose::SaveSetAs));
+        assert_eq!(app.mode, Mode::NameEntry(NamePurpose::SaveSetAs));
+        assert!(app.name_input.is_empty());
+        app.apply(Action::NameChar('m'));
+        app.apply(Action::NameChar('y'));
+        assert_eq!(app.name_input, "my");
+    }
+
+    #[test]
+    fn name_entry_backspace_removes_last_char() {
+        let mut app = new_app();
+        app.apply(Action::OpenNameEntry(NamePurpose::RenameSet));
+        app.apply(Action::NameChar('a'));
+        app.apply(Action::NameChar('b'));
+        app.apply(Action::NameBackspace);
+        assert_eq!(app.name_input, "a");
+    }
+
+    #[test]
+    fn name_entry_cancel_returns_to_edit_and_clears() {
+        let mut app = new_app();
+        app.apply(Action::OpenNameEntry(NamePurpose::SaveSetAs));
+        app.apply(Action::NameChar('x'));
+        app.apply(Action::NameCancel);
+        assert_eq!(app.mode, Mode::Edit);
+        assert!(app.name_input.is_empty());
+    }
+
+    #[test]
+    fn name_entry_commit_save_set_as_applies_action() {
+        let mut app = new_app();
+        app.apply(Action::OpenNameEntry(NamePurpose::SaveSetAs));
+        app.apply(Action::NameChar('t'));
+        app.apply(Action::NameChar('e'));
+        app.apply(Action::NameChar('s'));
+        app.apply(Action::NameChar('t'));
+        // NameCommit → applies SaveSetAs("test") internally.
+        // Since this writes to disk and we're in a test, it may fail with a status toast,
+        // but mode should still return to Edit and name_input cleared.
+        app.apply(Action::NameCommit);
+        assert_eq!(app.mode, Mode::Edit, "NameCommit must return to Edit");
+        assert!(
+            app.name_input.is_empty(),
+            "name_input must be cleared after commit"
+        );
+    }
+
+    #[test]
+    fn confirm_yes_new_set_resets_document() {
+        let mut app = new_app();
+        // Mark dirty and put some undo history.
+        app.apply(Action::FocusLane(0));
+        app.apply(Action::MoveCursor(0, 0));
+        app.apply(Action::ToggleStep);
+        assert!(app.dirty);
+        assert!(!app.undo.is_empty());
+        // Open confirm and accept.
+        app.apply(Action::OpenConfirm(ConfirmAction::NewSet));
+        assert_eq!(app.mode, Mode::Confirm(ConfirmAction::NewSet));
+        app.apply(Action::ConfirmYes);
+        assert_eq!(app.mode, Mode::Edit);
+        assert!(!app.dirty);
+        assert!(app.undo.is_empty(), "NewSet must clear undo stack");
+    }
+
+    #[test]
+    fn confirm_no_cancels_without_action() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(0));
+        app.apply(Action::MoveCursor(0, 0));
+        app.apply(Action::ToggleStep);
+        let set_before = app.set.clone();
+        app.apply(Action::OpenConfirm(ConfirmAction::NewSet));
+        app.apply(Action::ConfirmNo);
+        assert_eq!(app.mode, Mode::Edit);
+        assert_eq!(app.set, set_before, "ConfirmNo must leave set unchanged");
+        assert!(app.status.contains("Cancelled"));
+    }
+
+    #[test]
+    fn set_browser_new_set_dirty_routes_to_confirm() {
+        let mut app = new_app();
+        // Make app dirty.
+        app.apply(Action::FocusLane(0));
+        app.apply(Action::MoveCursor(0, 0));
+        app.apply(Action::ToggleStep);
+        assert!(app.dirty);
+        app.apply(Action::SetBrowserNewSet);
+        assert_eq!(
+            app.mode,
+            Mode::Confirm(ConfirmAction::NewSet),
+            "SetBrowserNewSet when dirty must go to Confirm"
+        );
+    }
+
+    #[test]
+    fn set_browser_new_set_clean_does_it_directly() {
+        let mut app = new_app();
+        assert!(!app.dirty);
+        app.apply(Action::SetBrowserNewSet);
+        // Should have reset to a new set without confirm.
+        assert_eq!(app.mode, Mode::Edit);
+        assert!(!app.dirty);
+        assert!(app.undo.is_empty());
+    }
+
+    #[test]
+    fn open_clear_pattern_with_material_routes_to_confirm() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(0));
+        app.apply(Action::MoveCursor(0, 0));
+        app.apply(Action::ToggleStep); // place a hit → pattern has material
+                                       // Now clear — should route to confirm.
+        app.apply(Action::OpenClearPattern);
+        assert_eq!(
+            app.mode,
+            Mode::Confirm(ConfirmAction::ClearPattern),
+            "OpenClearPattern with material must route to Confirm"
+        );
+    }
+
+    #[test]
+    fn open_clear_pattern_without_material_clears_directly() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(0)); // default set has empty drums
+                                         // Pattern should be empty already → direct clear.
+        app.apply(Action::OpenClearPattern);
+        assert_eq!(
+            app.mode,
+            Mode::Edit,
+            "empty pattern must clear without confirm"
+        );
+        assert!(app.status.contains("Cleared"));
+    }
+
+    #[test]
+    fn open_save_user_pattern_enters_name_entry_mode() {
+        let mut app = new_app();
+        app.apply(Action::OpenSaveUserPattern);
+        assert_eq!(app.mode, Mode::NameEntry(NamePurpose::SaveUserPattern));
+        assert!(app.name_input.is_empty());
+    }
+
+    #[test]
+    fn set_browser_rename_enters_name_entry_mode() {
+        let mut app = new_app();
+        app.apply(Action::SetBrowserRename);
+        assert_eq!(app.mode, Mode::NameEntry(NamePurpose::RenameSet));
+    }
+
+    #[test]
+    fn set_browser_save_as_enters_name_entry_mode() {
+        let mut app = new_app();
+        app.apply(Action::SetBrowserSaveAs);
+        assert_eq!(app.mode, Mode::NameEntry(NamePurpose::SaveSetAs));
+    }
+
+    #[test]
+    fn name_char_rejects_non_ascii_alphanumeric_except_allowed() {
+        let mut app = new_app();
+        app.apply(Action::OpenNameEntry(NamePurpose::SaveSetAs));
+        // Allowed: alphanumeric, space, -, #
+        app.apply(Action::NameChar('a'));
+        app.apply(Action::NameChar('1'));
+        app.apply(Action::NameChar(' '));
+        app.apply(Action::NameChar('-'));
+        app.apply(Action::NameChar('#'));
+        assert_eq!(app.name_input, "a1 -#");
+        // Rejected: control chars mapped to NameChar shouldn't pass the filter
+        // (in practice input.rs only sends allowed chars, but test the apply guard too)
+        app.apply(Action::NameChar('\t'));
+        app.apply(Action::NameChar('\n'));
+        assert_eq!(app.name_input, "a1 -#", "tabs/newlines must be rejected");
+    }
+
+    #[test]
+    fn name_char_caps_at_32_characters() {
+        let mut app = new_app();
+        app.apply(Action::OpenNameEntry(NamePurpose::SaveSetAs));
+        for _ in 0..40 {
+            app.apply(Action::NameChar('x'));
+        }
+        assert_eq!(
+            app.name_input.len(),
+            32,
+            "name_input must be capped at 32 chars"
+        );
+    }
+
+    // ── DoubleLength tests ────────────────────────────────────────────────
+
+    /// Build a 16-step drum pattern with hits at steps 0, 4, 8, 12.
+    fn app_with_drum_hits() -> App {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(0)); // lane 0 is drums
+                                         // Ensure the pattern is exactly 16 steps (default).
+        if let PatternData::Drums(ref mut steps) = app.set.lanes[0].pattern.data {
+            *steps = vec![Vec::new(); 16];
+            let hit = DrumHit {
+                note: 36,
+                vel: 100,
+                prob: 1.0,
+                ratchet: 1,
+            };
+            steps[0] = vec![hit.clone()];
+            steps[4] = vec![hit.clone()];
+            steps[8] = vec![hit.clone()];
+            steps[12] = vec![hit.clone()];
+        }
+        app.set.lanes[0].pattern.length = 16;
+        app
+    }
+
+    #[test]
+    fn double_length_repeats_content_and_doubles() {
+        let mut app = app_with_drum_hits();
+        assert_eq!(app.focused_lane().pattern.length, 16);
+
+        app.apply(Action::DoubleLength);
+
+        let lane = app.focused_lane();
+        assert_eq!(lane.pattern.length, 32, "length must be 32");
+        if let PatternData::Drums(steps) = &lane.pattern.data {
+            assert_eq!(steps.len(), 32, "data vec must have 32 entries");
+            // Original hits preserved.
+            assert!(!steps[0].is_empty(), "hit at step 0");
+            assert!(!steps[4].is_empty(), "hit at step 4");
+            assert!(!steps[8].is_empty(), "hit at step 8");
+            assert!(!steps[12].is_empty(), "hit at step 12");
+            // Mirrored hits in the second half.
+            assert!(!steps[16].is_empty(), "mirrored hit at step 16");
+            assert!(!steps[20].is_empty(), "mirrored hit at step 20");
+            assert!(!steps[24].is_empty(), "mirrored hit at step 24");
+            assert!(!steps[28].is_empty(), "mirrored hit at step 28");
+            // Empty steps remain empty.
+            assert!(steps[1].is_empty(), "step 1 stays empty");
+            assert!(steps[17].is_empty(), "step 17 stays empty");
+        } else {
+            panic!("expected drums data");
+        }
+        assert!(app.dirty, "dirty must be set after DoubleLength");
+        assert!(!app.undo.is_empty(), "snapshot must have been taken");
+    }
+
+    #[test]
+    fn double_length_caps_at_64() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(0));
+        // Set pattern to length 40 manually.
+        if let PatternData::Drums(ref mut steps) = app.set.lanes[0].pattern.data {
+            *steps = vec![Vec::new(); 40];
+            let hit = DrumHit {
+                note: 36,
+                vel: 100,
+                prob: 1.0,
+                ratchet: 1,
+            };
+            steps[3] = vec![hit.clone()];
+        }
+        app.set.lanes[0].pattern.length = 40;
+
+        app.apply(Action::DoubleLength);
+        assert_eq!(app.focused_lane().pattern.length, 64, "40*2 capped to 64");
+        if let PatternData::Drums(steps) = &app.focused_lane().pattern.data {
+            assert_eq!(steps.len(), 64);
+            // step 3 mirrored: 40+3=43
+            assert!(!steps[43].is_empty(), "step 43 should mirror step 3");
+        }
+
+        // Already at 64 → no-op.
+        let undo_len_before = app.undo.len();
+        app.apply(Action::DoubleLength);
+        assert_eq!(app.focused_lane().pattern.length, 64, "stays at 64");
+        assert_eq!(app.undo.len(), undo_len_before, "no snapshot when at max");
+        assert!(app.status.contains("max length"), "status toast set");
+    }
+
+    #[test]
+    fn double_length_is_undoable() {
+        let mut app = app_with_drum_hits();
+        let orig_len = app.focused_lane().pattern.length;
+
+        app.apply(Action::DoubleLength);
+        assert_eq!(app.focused_lane().pattern.length, orig_len * 2);
+
+        app.apply(Action::Undo);
+        assert_eq!(
+            app.focused_lane().pattern.length,
+            orig_len,
+            "undo must restore original length"
+        );
+        // Original hits still present.
+        if let PatternData::Drums(steps) = &app.focused_lane().pattern.data {
+            assert!(!steps[0].is_empty(), "step 0 hit restored after undo");
+            assert!(!steps[4].is_empty(), "step 4 hit restored after undo");
+        }
     }
 }

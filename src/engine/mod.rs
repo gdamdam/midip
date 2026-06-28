@@ -12,7 +12,7 @@ use crate::link::LinkClock;
 use crate::midi::ports::{connect, list_output_ports, match_port, MidiSink, NullSink};
 use crate::pattern::model::{Lane, LaneRoute, Pattern, Set};
 use clock::ClockGen;
-use scheduler::Sequencer;
+use scheduler::{Quant, Sequencer};
 use transport::{TempoSource, Transport};
 
 /// Commands sent UI -> engine.
@@ -27,6 +27,18 @@ pub enum UiCommand {
     LoadPattern {
         lane: usize,
         pattern: Pattern,
+    },
+    /// M3: queue `pattern` on `lane` to launch at the next `quant` boundary (clip-launcher
+    /// style) instead of swapping mid-phrase. Used while PLAYING; `LoadPattern` stays for the
+    /// immediate (stopped) load + undo resync path.
+    QueuePattern {
+        lane: usize,
+        pattern: Pattern,
+        quant: Quant,
+    },
+    /// M3: cancel a pending queued launch on `lane`.
+    CancelQueue {
+        lane: usize,
     },
     Mute {
         lane: usize,
@@ -93,6 +105,9 @@ pub enum EngineEvent {
     /// Engine-resolved tempo after a Tap or SetBpm command. Carries the BPM that
     /// the engine actually applied so the UI can update its displayed value.
     Tempo { bpm: f64 },
+    /// M3: engine-confirmed that a queued per-lane launch fired at global `step`
+    /// (so the UI can flip ACTIVE↔QUEUED on confirmation).
+    Launched { lane: usize, step: usize },
 }
 
 /// Handle returned by `spawn_engine`.
@@ -220,6 +235,17 @@ fn apply_command(
                 l.pattern = pattern;
                 st.seq.update_lane(lane, l);
             }
+        }
+        UiCommand::QueuePattern {
+            lane,
+            pattern,
+            quant,
+        } => {
+            // M3: arm a per-lane launch; the sequencer applies it at the next boundary.
+            st.seq.queue_launch(lane, pattern, quant);
+        }
+        UiCommand::CancelQueue { lane } => {
+            st.seq.cancel_launch(lane);
         }
         UiCommand::Mute { lane, on } => {
             if let Some(existing) = st.seq.lane(lane) {
@@ -358,6 +384,15 @@ fn step_engine(
 
     // 3. Advance sequencer + clock.
     let advanced = st.seq.tick(now, sink);
+    // M3: emit a Launched event for each lane whose queued launch fired this tick.
+    // The boundary step is the sequencer's current absolute step (launches apply at the
+    // step being materialized, which is the latest `current`).
+    for lane in st.seq.take_launched() {
+        events.push(EngineEvent::Launched {
+            lane,
+            step: st.seq.current_step(),
+        });
+    }
     st.clock.tick(now, bpm, sink);
 
     // 4. Emit a Playhead event on step advance.
@@ -2004,6 +2039,118 @@ mod tests {
         assert!(
             st.route_dirty,
             "SetSet must set route_dirty so the loop re-plans routes"
+        );
+    }
+
+    /// M3 Task 1: a QueuePattern while playing must, after the bar boundary, emit an
+    /// `EngineEvent::Launched { lane, .. }` (so the UI can flip ACTIVE↔QUEUED).
+    #[test]
+    fn queue_then_launched_event_emitted() {
+        use crate::engine::scheduler::Quant;
+        use crate::pattern::model::{DrumHit, Pattern, PatternData};
+
+        let mut set = default_set();
+        set.bpm = 120.0; // step_dur 125_000 µs; one bar = 16 * 125_000 = 2_000_000 µs
+
+        // A replacement pattern: kick (note 50) on local step 0 of a 16-step lane.
+        let mut steps: Vec<Vec<DrumHit>> = vec![Vec::new(); 16];
+        steps[0].push(DrumHit {
+            note: 50,
+            vel: 100,
+            prob: 1.0,
+            ratchet: 1,
+        });
+        let pattern = Pattern {
+            name: "q".into(),
+            desc: String::new(),
+            length: 16,
+            data: PatternData::Drums(steps),
+            id: crate::persist::Id::nil(),
+        };
+
+        let mut link = FakeLink::new(); // manual transport
+        let mut sink = RecordingSink::new();
+        // Play at 0; queue on lane 0 at t=300_000 (mid-bar, NextBar); run past the
+        // bar boundary at 2_000_000 µs.
+        let evs = run_engine_headless(
+            set,
+            &mut link,
+            &mut sink,
+            vec![
+                (0, UiCommand::Play),
+                (
+                    300_000,
+                    UiCommand::QueuePattern {
+                        lane: 0,
+                        pattern,
+                        quant: Quant::NextBar,
+                    },
+                ),
+            ],
+            2_300_000,
+            1_000,
+        );
+
+        let launched = evs
+            .iter()
+            .find(|e| matches!(e, EngineEvent::Launched { lane: 0, .. }));
+        assert!(
+            launched.is_some(),
+            "expected an EngineEvent::Launched{{lane:0,..}} after the bar boundary; got: {:?}",
+            evs
+        );
+    }
+
+    /// CancelQueue clears a pending launch so no Launched event ever fires.
+    #[test]
+    fn cancel_queue_prevents_launched_event() {
+        use crate::engine::scheduler::Quant;
+        use crate::pattern::model::{DrumHit, Pattern, PatternData};
+
+        let mut set = default_set();
+        set.bpm = 120.0;
+        let mut steps: Vec<Vec<DrumHit>> = vec![Vec::new(); 16];
+        steps[0].push(DrumHit {
+            note: 50,
+            vel: 100,
+            prob: 1.0,
+            ratchet: 1,
+        });
+        let pattern = Pattern {
+            name: "q".into(),
+            desc: String::new(),
+            length: 16,
+            data: PatternData::Drums(steps),
+            id: crate::persist::Id::nil(),
+        };
+
+        let mut link = FakeLink::new();
+        let mut sink = RecordingSink::new();
+        let evs = run_engine_headless(
+            set,
+            &mut link,
+            &mut sink,
+            vec![
+                (0, UiCommand::Play),
+                (
+                    300_000,
+                    UiCommand::QueuePattern {
+                        lane: 0,
+                        pattern,
+                        quant: Quant::NextBar,
+                    },
+                ),
+                (600_000, UiCommand::CancelQueue { lane: 0 }),
+            ],
+            2_300_000,
+            1_000,
+        );
+
+        assert!(
+            !evs.iter()
+                .any(|e| matches!(e, EngineEvent::Launched { .. })),
+            "cancelled queue must not emit a Launched event; got: {:?}",
+            evs
         );
     }
 }

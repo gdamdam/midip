@@ -328,7 +328,9 @@ pub fn render_set_browser(f: &mut Frame, area: Rect, app: &App) {
             total
         ))));
     }
-    lines.push(Line::from(Span::raw("[enter] load  [esc/o] cancel")));
+    lines.push(Line::from(Span::raw(
+        "[enter]load  [r]rename  [a/S]save-as  [D]duplicate  [d]delete  [n]new  [esc/o]cancel",
+    )));
     f.render_widget(Paragraph::new(lines), inner);
 }
 

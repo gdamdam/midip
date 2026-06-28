@@ -33,7 +33,7 @@ pub fn render_help(f: &mut Frame, area: Rect) {
         row("[!]            full MIDI panic"),
         row("[t]            type BPM (Enter confirm, Esc cancel)   [; / ']  BPM −/+"),
         row("[T]            tap tempo   [k]  toggle Ableton Link"),
-        row("[< / >]        swing   [{ / }]  pattern length"),
+        row("[< / >]        swing   [{ / }]  pattern length   [L]  double length (repeat content)"),
         blank(),
         // ── Edit (common) ────────────────────────────────────────────
         header("Edit"),
@@ -64,7 +64,29 @@ pub fn render_help(f: &mut Frame, area: Rect) {
         row("[m]            mute lane   [S]  solo lane   [M]  mirror output"),
         row("[l]            library   [o]  open set   [s]  save"),
         row("[w]            route editor (port / channel / clock-out per lane)"),
+        row("[b]            toggle launch quant: next bar / next beat"),
+        row("[C]            cancel pending queued launch on focused lane"),
         row("[?]            help   [q]  quit (twice while playing)"),
+        blank(),
+        // ── Library ───────────────────────────────────────────────────
+        header("Library  [l] to open"),
+        row("[enter]        commit pattern (queues at next bar/beat when playing)"),
+        row("[a]            audition (preview without committing)"),
+        row("[b]            toggle launch quant: next bar / next beat"),
+        row("[C]            cancel queued launch"),
+        row("[esc / l]      close library"),
+        blank(),
+        // ── Set manager ───────────────────────────────────────────────
+        header("Set Manager  [o] to open"),
+        row("[enter]        load set"),
+        row("[r]            rename set   [a / S]  save as new   [D]  duplicate"),
+        row("[d]            delete set (confirm)   [n]  new set (confirm if unsaved)"),
+        row("[esc / o]      close"),
+        blank(),
+        // ── Pattern management ────────────────────────────────────────
+        header("Pattern  (Edit mode)"),
+        row("[A]            save focused lane as user pattern (name dialog)"),
+        row("[Z]            clear focused lane pattern (confirm if material)"),
         blank(),
         // ── Route editor ──────────────────────────────────────────────
         header("Route Editor  [w] to open"),
@@ -132,8 +154,8 @@ mod tests {
 
     #[test]
     fn help_lists_all_groups() {
-        // Must be wide/tall enough to show all grouped content.
-        let whole = render_help_to_string(110, 55);
+        // Must be wide/tall enough to show all grouped content (including set manager / pattern sections).
+        let whole = render_help_to_string(110, 75);
         // Transport group
         assert!(
             whole.contains("Transport"),
@@ -170,7 +192,7 @@ mod tests {
 
     #[test]
     fn help_shows_route_editor_key_and_controls() {
-        let whole = render_help_to_string(110, 55);
+        let whole = render_help_to_string(110, 75);
         assert!(
             whole.contains("[w]"),
             "expected [w] route editor key; got: {whole:?}"

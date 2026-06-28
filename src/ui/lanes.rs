@@ -22,17 +22,26 @@ fn short_label(profile_id: &str) -> &'static str {
 }
 
 /// 16-cell activity strip: `●` for a step with content, `·` for empty.
+///
+/// For patterns with ≤16 steps each cell maps 1:1 to a step (same as before).
+/// For longer patterns the strip downsamples: cell `c` represents step
+/// `c * length / 16`, so all content — including steps beyond position 15 —
+/// is visible in the strip.
 fn activity_strip(lane: &Lane) -> String {
-    let mut s = String::with_capacity(16);
+    const CELLS: usize = 16;
+    let length = lane.pattern.length.max(1);
+    let mut s = String::with_capacity(CELLS);
     match &lane.pattern.data {
         PatternData::Drums(steps) => {
-            for i in 0..16 {
+            for c in 0..CELLS {
+                let i = c * length / CELLS;
                 let filled = steps.get(i).map(|s| !s.is_empty()).unwrap_or(false);
                 s.push(if filled { '●' } else { '·' });
             }
         }
         PatternData::Melodic(steps) => {
-            for i in 0..16 {
+            for c in 0..CELLS {
+                let i = c * length / CELLS;
                 let filled = steps.get(i).map(|s| s.is_some()).unwrap_or(false);
                 s.push(if filled { '●' } else { '·' });
             }
@@ -77,10 +86,15 @@ fn lane_line(idx: usize, app: &App) -> Line<'static> {
     }
 
     let label = short_label(lane.profile.id);
+
+    // Show the active (committed) pattern name here; a pending launch is shown
+    // separately as a QUEUED⟶ marker after the activity strip (below).
+    let queued_name: Option<String> = app.queued.get(idx).and_then(|q| q.clone());
+    let pat_display = lane.pattern.name.clone();
     let prefix = format!(
         "{marker}{n} {label:<5} {pat:<12} {conn}  {m_glyph}  ",
         n = idx + 1,
-        pat = lane.pattern.name,
+        pat = pat_display,
     );
 
     // S glyph gets a brighter accent when solo is active.
@@ -94,13 +108,18 @@ fn lane_line(idx: usize, app: &App) -> Line<'static> {
 
     // Activity strip: one cell per step. While playing, the lane's LOCAL playhead cell is
     // highlighted, so polymeter is visible (each lane's playhead moves at its own period).
+    // For patterns longer than 16 steps the strip downsamples (cell = step*16/length),
+    // so we convert the step-based playhead to a cell index for the highlight.
+    const STRIP_CELLS: usize = 16;
+    let length = lane.pattern.length.max(1);
+    let playhead_cell = local_playhead * STRIP_CELLS / length;
     let mut spans = vec![
         Span::styled(prefix, base_style),
         Span::styled(s_glyph.to_string(), s_style),
         Span::styled("  [".to_string(), base_style),
     ];
     for (i, ch) in activity_strip(lane).chars().enumerate() {
-        let cell_style = if app.playing && i == local_playhead {
+        let cell_style = if app.playing && i == playhead_cell {
             playhead_style()
         } else {
             base_style
@@ -108,6 +127,19 @@ fn lane_line(idx: usize, app: &App) -> Line<'static> {
         spans.push(Span::styled(ch.to_string(), cell_style));
     }
     spans.push(Span::styled("]".to_string(), base_style));
+
+    // QUEUED marker: shown after the activity strip when a launch is pending.
+    // Distinct amber style so it reads clearly as "not yet active".
+    if let Some(name) = queued_name {
+        let queued_style = Style::default()
+            .fg(Color::Rgb(0xF5, 0xB0, 0x41))
+            .add_modifier(Modifier::BOLD);
+        spans.push(Span::styled(
+            format!("  QUEUED\u{27f6}{}", name),
+            queued_style,
+        ));
+    }
+
     Line::from(spans)
 }
 
@@ -329,6 +361,88 @@ mod tests {
         assert!(
             synth_row.contains('○'),
             "disconnected should show ○: {synth_row:?}"
+        );
+    }
+
+    // --- M3 Task 2: QUEUED marker ----------------------------------------
+
+    #[test]
+    fn queued_lane_shows_queued_marker_with_name() {
+        let mut app = make_app();
+        // Simulate a pending queued launch on lane 0 (DRUM).
+        app.queued[0] = Some("queued-pat".to_string());
+
+        let (term, area) = render(&app, 100, 5);
+        let buf = term.backend().buffer();
+        let rows = all_rows(buf, area);
+        let drum_row = rows.iter().find(|r| r.contains("DRUM")).expect("DRUM row");
+        assert!(
+            drum_row.contains("QUEUED"),
+            "lane with queued should show QUEUED marker: {drum_row:?}"
+        );
+        assert!(
+            drum_row.contains("queued-pat"),
+            "QUEUED marker should include the pattern name: {drum_row:?}"
+        );
+    }
+
+    #[test]
+    fn non_queued_lane_does_not_show_queued_marker() {
+        let app = make_app();
+        // No queued entries (all None by default).
+        let (term, area) = render(&app, 100, 5);
+        let buf = term.backend().buffer();
+        let rows = all_rows(buf, area);
+        let whole: String = rows.join("");
+        assert!(
+            !whole.contains("QUEUED"),
+            "no lane should show QUEUED when nothing is queued: {whole:?}"
+        );
+    }
+
+    // --- >16-step overview strip test ------------------------------------
+
+    #[test]
+    fn overview_strip_shows_activity_beyond_step_16() {
+        use crate::pattern::model::{DrumHit, PatternData};
+
+        let mut app = make_app();
+        // Set lane 0 (drums) to 32 steps, hit only at step 20 (beyond the old fixed 16-cell view).
+        if let PatternData::Drums(ref mut steps) = app.set.lanes[0].pattern.data {
+            *steps = vec![Vec::new(); 32];
+            steps[20] = vec![DrumHit {
+                note: 36,
+                vel: 100,
+                prob: 1.0,
+                ratchet: 1,
+            }];
+        }
+        app.set.lanes[0].pattern.length = 32;
+
+        // activity_strip maps cell c → step c*32/16 = c*2.
+        // Step 20 lands in cell 20/2 = 10 (cell 10 → step 10*2=20). Verify ● appears.
+        let strip = activity_strip(&app.set.lanes[0]);
+        assert_eq!(strip.chars().count(), 16, "strip always 16 cells");
+        let cells: Vec<char> = strip.chars().collect();
+        assert_eq!(
+            cells[10], '●',
+            "cell 10 should show hit at step 20: {strip:?}"
+        );
+        // Cells not corresponding to step 20 must be empty.
+        for (c, &ch) in cells.iter().enumerate() {
+            if c != 10 {
+                assert_eq!(ch, '·', "cell {c} should be empty: {strip:?}");
+            }
+        }
+
+        // Also verify the rendered overview row contains '●'.
+        let (term, area) = render(&app, 80, 5);
+        let buf = term.backend().buffer();
+        let rows = all_rows(buf, area);
+        let drum_row = rows.iter().find(|r| r.contains("DRUM")).expect("DRUM row");
+        assert!(
+            drum_row.contains('●'),
+            "overview strip must show ● for 32-step hit: {drum_row:?}"
         );
     }
 
