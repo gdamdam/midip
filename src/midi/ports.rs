@@ -14,6 +14,11 @@ use midir::{MidiOutput, MidiOutputConnection};
 /// the engine only calls `send()` when an event is already due.
 pub trait MidiSink: Send {
     fn send(&mut self, msg: MidiMessage, at_micros: u64);
+    /// Returns `false` after the first failed `send` (hardware disconnect / buffer full).
+    /// Default: always healthy (used by `NullSink` and `RecordingSink`).
+    fn health(&self) -> bool {
+        true
+    }
 }
 
 /// In-memory sink that records every `(at_micros, msg)` it receives, in call order.
@@ -48,23 +53,31 @@ impl MidiSink for NullSink {
 }
 
 /// Hardware sink wrapping a `midir` output connection. Writes bytes immediately and
-/// ignores `at_micros`.
+/// ignores `at_micros`. Tracks `healthy`: flipped to `false` on the first send error
+/// so the engine hot-plug loop can swap it out for a `NullSink`.
 pub struct MidirSink {
     conn: MidiOutputConnection,
+    healthy: bool,
 }
 
 impl MidirSink {
     pub fn new(conn: MidiOutputConnection) -> Self {
-        MidirSink { conn }
+        MidirSink { conn, healthy: true }
     }
 }
 
 impl MidiSink for MidirSink {
     fn send(&mut self, msg: MidiMessage, _at_micros: u64) {
         let bytes = msg.to_bytes();
-        // Best-effort: a failed write must not crash the engine thread. The error is
-        // dropped here; device presence is surfaced separately via DeviceStatus.
-        let _ = self.conn.send(&bytes);
+        // Best-effort: a failed write must not crash the engine thread.
+        // Flip `healthy` so the hot-plug loop can detect the loss and emit DeviceStatus.
+        if self.conn.send(&bytes).is_err() {
+            self.healthy = false;
+        }
+    }
+
+    fn health(&self) -> bool {
+        self.healthy
     }
 }
 
@@ -149,5 +162,50 @@ mod tests {
                 (1600, MidiMessage::Clock),
             ]
         );
+    }
+
+    // --- health() tests ---
+
+    #[test]
+    fn recording_sink_is_always_healthy() {
+        let mut sink = RecordingSink::new();
+        assert!(sink.health());
+        sink.send(MidiMessage::Clock, 0);
+        assert!(sink.health());
+    }
+
+    #[test]
+    fn null_sink_is_always_healthy() {
+        let sink = NullSink;
+        assert!(sink.health());
+    }
+
+    /// Test double that simulates a failing hardware connection without opening real MIDI.
+    /// Mirrors the MidirSink contract: starts healthy, flips unhealthy on a failed send.
+    struct FailingSink {
+        healthy: bool,
+        should_fail: bool,
+    }
+    impl MidiSink for FailingSink {
+        fn send(&mut self, _msg: MidiMessage, _at_micros: u64) {
+            if self.should_fail {
+                self.healthy = false;
+            }
+        }
+        fn health(&self) -> bool {
+            self.healthy
+        }
+    }
+
+    #[test]
+    fn sink_test_double_starts_healthy_and_flips_on_error() {
+        let mut sink = FailingSink { healthy: true, should_fail: false };
+        assert!(sink.health(), "should start healthy");
+        sink.send(MidiMessage::Clock, 0);
+        assert!(sink.health(), "still healthy when send succeeds");
+
+        sink.should_fail = true;
+        sink.send(MidiMessage::Clock, 0);
+        assert!(!sink.health(), "should be unhealthy after failed send");
     }
 }

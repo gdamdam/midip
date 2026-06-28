@@ -13,16 +13,24 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 
 use midip::app::App;
-use midip::devices::profiles::{default_profiles, DeviceProfile};
+use midip::devices::profiles::default_profiles;
 use midip::engine::spawn_engine;
 use midip::link::AbletonLink;
-use midip::midi::ports::{connect, list_output_ports, match_port, MidiSink, NullSink};
 use midip::pattern::library::Library;
 use midip::pattern::model::Set;
 
+// select_sinks / unique_ports are pure helpers used only in tests below.
+// They live here (not in a library module) because they were originally part of
+// the port-connection logic that has since moved into the engine thread.
+#[cfg(test)]
+use midip::devices::profiles::DeviceProfile;
+#[cfg(test)]
+use midip::midi::ports::match_port;
+
 /// Map each profile to a detected output-port index by its `port_match` substring.
-/// `None` means no device matched that profile (caller substitutes a fallback sink).
+/// `None` means no device matched that profile.
 /// Pure — unit-tested without hardware.
+#[cfg(test)]
 fn select_sinks(available: &[String], profiles: &[DeviceProfile]) -> Vec<Option<usize>> {
     profiles
         .iter()
@@ -30,11 +38,8 @@ fn select_sinks(available: &[String], profiles: &[DeviceProfile]) -> Vec<Option<
         .collect()
 }
 
-/// Distinct output-port indices to open a connection to, in first-seen order.
-/// Lanes that target the same physical port (e.g. the T-8's drum + bass lanes both
-/// match "T-8") collapse to a SINGLE entry: the engine fans every message — including
-/// the 24 PPQN MIDI clock — out to every open connection, so two connections to one
-/// device would deliver the clock twice and the device would read double tempo.
+/// Distinct output-port indices in first-seen order (deduplication of shared ports).
+#[cfg(test)]
 fn unique_ports(picks: &[Option<usize>]) -> Vec<usize> {
     let mut out = Vec::new();
     for &idx in picks.iter().flatten() {
@@ -77,47 +82,16 @@ fn run(mut terminal: Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
         ),
     };
 
-    // Auto-detect ports and open ONE connection per unique physical port. Lanes that
-    // share a port (T-8 drums + bass) collapse to a single connection — otherwise the
-    // fanned-out MIDI clock would reach the device twice and double its tempo.
-    let available = list_output_ports();
-    let picks = select_sinks(&available, &profiles);
-    let mut sinks: Vec<Box<dyn MidiSink>> = Vec::new();
-    let mut connected_ports: Vec<usize> = Vec::new();
-    for port_idx in unique_ports(&picks) {
-        // Any profile that resolved to this port shares the same `port_match`/physical
-        // device; use the first one to open the single connection.
-        if let Some(i) = picks.iter().position(|p| *p == Some(port_idx)) {
-            if let Ok(s) = connect(profiles[i].port_match) {
-                sinks.push(Box::new(s));
-                connected_ports.push(port_idx);
-            }
-        }
-    }
-    // No hardware detected (or all connections failed): keep one no-op sink so the
-    // engine still runs (silent) without special-casing an empty fan-out.
-    if sinks.is_empty() {
-        sinks.push(Box::new(NullSink));
-    }
-
-    // Per-lane connection status for the lane-overview `●/○`: a lane is connected iff its
-    // matched physical port actually opened. (Hot-plug after startup is future work, via
-    // the EngineEvent::DeviceStatus path.)
-    let device_status: Vec<(bool, String)> = picks
-        .iter()
-        .map(|pick| match pick {
-            Some(idx) if connected_ports.contains(idx) => (true, available[*idx].clone()),
-            _ => (false, String::new()),
-        })
-        .collect();
-
+    // The engine now owns the full sink lifecycle: it connects ports at startup,
+    // emits one DeviceStatus per lane (populating app.device_status via on_engine_event),
+    // and rescans every ~1 s for hot-plug / send-failure. main.rs no longer builds sinks
+    // or sets app.device_status directly.
     let set = Set::default_set(profiles);
     let link = Box::new(AbletonLink::new(set.bpm));
-    let engine = spawn_engine(set.clone(), link, sinks);
+    let engine = spawn_engine(set.clone(), link, profiles);
 
     let mut app = App::new(set, library);
     app.status = lib_status;
-    app.device_status = device_status;
 
     loop {
         terminal.draw(|f| midip::ui::render(f, &app))?;

@@ -100,6 +100,8 @@ pub struct App {
     pub link_enabled: bool,
     pub link_tempo: f64,
     pub link_peers: u64,
+    /// Previous peer count — used to detect 2→0 (Link lost) and 0→N (Link gained) transitions.
+    prev_peers: u64,
     pub device_status: Vec<(bool, String)>,
     pub library: Library,
     pub lib_role: LibRole,
@@ -141,6 +143,7 @@ impl App {
             link_enabled: false,
             link_tempo: 120.0,
             link_peers: 0,
+            prev_peers: 0,
             device_status: vec![(false, String::new()); n],
             library,
             lib_role: role,
@@ -465,14 +468,36 @@ impl App {
                 self.bar = bar;
             }
             EngineEvent::LinkStatus { enabled, tempo, peers } => {
+                let prev = self.prev_peers;
                 self.link_enabled = enabled;
                 self.link_tempo = tempo;
                 self.link_peers = peers;
+                self.prev_peers = peers;
+
+                // Toast on peer transitions (only when link is enabled).
+                if enabled {
+                    if prev > 0 && peers == 0 {
+                        self.status = "Link lost".into();
+                    } else if prev == 0 && peers > 0 {
+                        self.status = format!("Link: {} peers", peers);
+                    }
+                }
             }
             EngineEvent::DeviceStatus { lane, connected, port } => {
                 if let Some(slot) = self.device_status.get_mut(lane) {
-                    *slot = (connected, port);
+                    *slot = (connected, port.clone());
                 }
+                // Toast with the port name when available, otherwise the lane index.
+                let label = if port.is_empty() {
+                    format!("lane {}", lane)
+                } else {
+                    port
+                };
+                self.status = format!(
+                    "MIDI: {} {}",
+                    label,
+                    if connected { "connected" } else { "disconnected" }
+                );
             }
         }
     }
@@ -1261,6 +1286,93 @@ mod tests {
         assert!(app.link_enabled);
         assert_eq!(app.link_tempo, 128.0);
         assert_eq!(app.link_peers, 2);
+    }
+
+    #[test]
+    fn device_status_event_updates_slot_and_sets_toast() {
+        let mut app = new_app();
+        // Simulate engine reporting lane 1 connected to "Roland S-1".
+        app.on_engine_event(crate::engine::EngineEvent::DeviceStatus {
+            lane: 1,
+            connected: true,
+            port: "Roland S-1".to_string(),
+        });
+        assert_eq!(app.device_status[1], (true, "Roland S-1".to_string()));
+        assert!(
+            app.status.contains("Roland S-1") && app.status.contains("connected"),
+            "toast should mention port and connected, got: {:?}",
+            app.status
+        );
+
+        // Simulate disconnect.
+        app.on_engine_event(crate::engine::EngineEvent::DeviceStatus {
+            lane: 1,
+            connected: false,
+            port: "Roland S-1".to_string(),
+        });
+        assert_eq!(app.device_status[1].0, false);
+        assert!(
+            app.status.contains("disconnected"),
+            "toast should say disconnected, got: {:?}",
+            app.status
+        );
+    }
+
+    #[test]
+    fn link_lost_toast_on_peers_drop_to_zero() {
+        let mut app = new_app();
+        // Establish 2 peers first.
+        app.on_engine_event(crate::engine::EngineEvent::LinkStatus {
+            enabled: true,
+            tempo: 128.0,
+            peers: 2,
+        });
+        assert_ne!(app.status, "Link lost", "no lost toast when peers arrive");
+
+        // Peers drop to 0 while link is enabled -> "Link lost".
+        app.on_engine_event(crate::engine::EngineEvent::LinkStatus {
+            enabled: true,
+            tempo: 128.0,
+            peers: 0,
+        });
+        assert_eq!(app.status, "Link lost");
+        assert_eq!(app.link_peers, 0);
+    }
+
+    #[test]
+    fn link_gained_toast_on_peers_rise_from_zero() {
+        let mut app = new_app();
+        // Start with 0 peers (default), then peers arrive.
+        app.on_engine_event(crate::engine::EngineEvent::LinkStatus {
+            enabled: true,
+            tempo: 120.0,
+            peers: 3,
+        });
+        assert!(
+            app.status.contains("3") && app.status.contains("peers"),
+            "toast should mention peer count, got: {:?}",
+            app.status
+        );
+    }
+
+    #[test]
+    fn link_lost_toast_not_emitted_when_link_disabled() {
+        let mut app = new_app();
+        // Establish peers via a separate call (simulating prior state).
+        app.on_engine_event(crate::engine::EngineEvent::LinkStatus {
+            enabled: true,
+            tempo: 120.0,
+            peers: 2,
+        });
+        app.status.clear();
+
+        // Link disabled — peers 2→0 should NOT produce "Link lost".
+        app.on_engine_event(crate::engine::EngineEvent::LinkStatus {
+            enabled: false,
+            tempo: 120.0,
+            peers: 0,
+        });
+        assert_ne!(app.status, "Link lost", "no toast when link is off");
     }
 
     #[test]
