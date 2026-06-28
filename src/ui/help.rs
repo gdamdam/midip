@@ -9,8 +9,7 @@ use ratatui::Frame;
 pub fn render_help(f: &mut Frame, area: Rect) {
     let lines: Vec<Line> = vec![
         Line::from("[space]  play / stop"),
-        Line::from("[tab] / [shift+tab]  cycle lane focus"),
-        Line::from("[1 2 3]  jump to lane"),
+        Line::from("[tab] / [shift+tab]  cycle lane focus (next / prev)"),
         Line::from("[← →]  move cursor   [↑ ↓]  cursor (drums) / pitch (melodic)"),
         Line::from("[enter]  toggle step / place note"),
         Line::from("[0-9]  velocity bucket   [+ / -]  fine velocity"),

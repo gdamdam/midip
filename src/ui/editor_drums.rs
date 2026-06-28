@@ -6,7 +6,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 
-use crate::app::App;
+use crate::app::{App, VISIBLE_STEPS};
 use crate::devices::profiles::drum_label;
 use crate::pattern::model::PatternData;
 use crate::ui::theme::{cursor_style, lane_color, playhead_style, vel_color, vel_glyph};
@@ -45,12 +45,24 @@ pub fn render_drum_editor(f: &mut Frame, area: Rect, app: &App) {
         PatternData::Melodic(_) => &[],
     };
 
+    // Horizontal scroll: show at most VISIBLE_STEPS columns starting at step_scroll.
+    let scroll = app.step_scroll;
+    let visible_end = (scroll + VISIBLE_STEPS).min(len);
+    let visible_cols = scroll..visible_end;
+
+    let scroll_indicator = if len > VISIBLE_STEPS {
+        format!("  steps {}-{}/{}", scroll + 1, visible_end, len)
+    } else {
+        String::new()
+    };
+
     let title = format!(
-        " EDIT · {} · \"{}\" · {} steps · ch{} ",
+        " EDIT · {} · \"{}\" · {} steps · ch{}{} ",
         lane.profile.label,
         lane.pattern.name,
         len,
-        lane.profile.channel + 1
+        lane.profile.channel + 1,
+        scroll_indicator,
     );
 
     let mut lines: Vec<Line> = Vec::with_capacity(voices.len() + 1);
@@ -58,7 +70,7 @@ pub fn render_drum_editor(f: &mut Frame, area: Rect, app: &App) {
     // Header row: step group numbers (1,5,9,13...).
     {
         let mut spans: Vec<Span> = vec![Span::raw("        │ ")];
-        for col in 0..len {
+        for col in visible_cols.clone() {
             let label = if col % 4 == 0 {
                 format!("{:<2}", col + 1)
             } else {
@@ -78,7 +90,7 @@ pub fn render_drum_editor(f: &mut Frame, area: Rect, app: &App) {
         let mut spans: Vec<Span> =
             vec![Span::raw(format!("{marker}{:<3} {:>2} │ ", voice.label, voice.note))];
 
-        for col in 0..len {
+        for col in visible_cols.clone() {
             let vel = hit_vel(steps, col, voice.note);
             let glyph = vel_glyph(vel).to_string();
             let is_cursor = focused_row && col == app.cur_col;
@@ -202,6 +214,41 @@ mod tests {
         assert!(whole.contains("E("), "expected euclid indicator E(...), got: {whole:?}");
         assert!(whole.contains("prob"), "expected cursor detail prob, got: {whole:?}");
         assert!(whole.contains("ratchet"), "expected cursor detail ratchet, got: {whole:?}");
+    }
+
+    // --- Fix #9 regression: horizontal scroll shows steps past 16 --------
+
+    #[test]
+    fn drum_editor_shows_hit_at_step_20_after_scrolling() {
+        use crate::app::Action;
+        let mut set = Set::default_set(default_profiles());
+        // Build a 32-step drum pattern with a BD hit at step 20.
+        let mut steps: Vec<Vec<DrumHit>> = vec![Vec::new(); 32];
+        steps[20] = vec![DrumHit { note: 36, vel: 127, prob: 1.0, ratchet: 1 }];
+        set.lanes[0].pattern = Pattern {
+            name: "test32".to_string(),
+            desc: String::new(),
+            length: 32,
+            data: PatternData::Drums(steps),
+        };
+        let mut app = App::new(set, empty_library());
+        app.focus = 0;
+        // Move cursor to col 20 — this should trigger step_scroll to advance.
+        app.apply(Action::MoveCursor(0, 20));
+        assert_eq!(app.cur_col, 20);
+        assert!(app.step_scroll > 0, "scroll must have advanced");
+
+        let backend = TestBackend::new(120, 16);
+        let mut term = Terminal::new(backend).unwrap();
+        let area = Rect::new(0, 0, 120, 16);
+        term.draw(|f| render_drum_editor(f, area, &app)).unwrap();
+
+        let buf = term.backend().buffer();
+        let whole: String = buf.content().iter().map(|c| c.symbol()).collect();
+        // The scroll indicator should be present.
+        assert!(whole.contains("steps "), "expected scroll indicator, got: {whole:?}");
+        // Step 21 (1-based) should appear in the header.
+        assert!(whole.contains("21"), "expected step 21 label visible after scroll, got: {whole:?}");
     }
 
     #[test]

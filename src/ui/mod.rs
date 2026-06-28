@@ -13,7 +13,7 @@ use ratatui::Frame;
 use crate::app::{App, Mode};
 use crate::pattern::model::LaneKind;
 
-const FOOTER: &str = "[space]play [tab]lane [↑↓←→]move/pitch [g]slide [enter]toggle [0-9]vel \
+const FOOTER: &str = "[space]play [tab/shift+tab]lane [↑↓←→]move/pitch [g]slide [enter]toggle [0-9]vel \
 [<>]swing [{}]len [^z]undo [esc]panic [l]ibrary [s]ave [t]empo [;/']BPM−/+ [k]link [?]help [q]uit";
 
 /// Centered rect helper for overlays.

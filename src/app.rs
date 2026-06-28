@@ -70,12 +70,16 @@ pub enum Action {
     None,
 }
 
+/// Number of steps visible in the editor at once. Steps beyond this are reached via scrolling.
+pub const VISIBLE_STEPS: usize = 16;
+
 pub struct App {
     pub set: Set,
     pub focus: usize,
     pub mode: Mode,
     pub cur_row: usize,
     pub cur_col: usize,
+    pub step_scroll: usize,      // first visible step column (horizontal scroll offset)
     pub euclid_rotation: usize, // current euclid rotation for the focused drum voice
 
     pub playing: bool,
@@ -110,6 +114,7 @@ impl App {
             mode: Mode::Edit,
             cur_row: 0,
             cur_col: 0,
+            step_scroll: 0,
             euclid_rotation: 0,
             playing: false,
             playhead: 0,
@@ -379,6 +384,7 @@ impl App {
         self.lib_genre = 0;
         self.lib_pattern = 0;
         self.euclid_rotation = 0; // focus changed -> reset euclid rotation
+        self.step_scroll = 0;     // reset horizontal scroll on lane change
         self.clamp_cursor();
     }
 
@@ -404,6 +410,31 @@ impl App {
         } else if self.cur_row >= rows {
             self.cur_row = rows - 1;
         }
+        self.update_step_scroll();
+    }
+
+    /// Keep `step_scroll` so that `cur_col` stays within the visible window
+    /// `[step_scroll, step_scroll + VISIBLE_STEPS)`. Also clamps scroll so it
+    /// never shows past the end of the pattern.
+    fn update_step_scroll(&mut self) {
+        let (_, cols) = self.grid_dims();
+        // Scroll right if cursor is past the right edge of the window.
+        if self.cur_col >= self.step_scroll + VISIBLE_STEPS {
+            self.step_scroll = self.cur_col + 1 - VISIBLE_STEPS;
+        }
+        // Scroll left if cursor is before the window.
+        if self.cur_col < self.step_scroll {
+            self.step_scroll = self.cur_col;
+        }
+        // Clamp so we don't scroll past the end of the pattern.
+        if cols > VISIBLE_STEPS {
+            let max_scroll = cols - VISIBLE_STEPS;
+            if self.step_scroll > max_scroll {
+                self.step_scroll = max_scroll;
+            }
+        } else {
+            self.step_scroll = 0;
+        }
     }
 
     fn move_cursor(&mut self, drow: i32, dcol: i32) {
@@ -416,6 +447,7 @@ impl App {
             self.euclid_rotation = 0;
         }
         self.cur_row = new_row as usize;
+        self.update_step_scroll();
     }
 
     fn snapshot(&mut self) {
@@ -1313,6 +1345,91 @@ mod tests {
         if let PatternData::Drums(steps) = &app.focused_lane().pattern.data {
             assert!((steps[0][0].prob - 1.0).abs() < 1e-6, "undo restored prior prob");
         }
+    }
+
+    // --- Fix #10 reducer: SetVelBucket on buckets 1-3 (regression) -------
+
+    #[test]
+    fn set_vel_bucket_buckets_1_2_3_change_velocity() {
+        // Buckets 1-3 must now be reachable (previously shadowed by FocusLane in input).
+        let mut app = new_app();
+        app.apply(Action::FocusLane(0)); // drums
+        app.apply(Action::MoveCursor(0, 0));
+        app.apply(Action::ToggleStep); // place hit; default vel 100
+
+        // Bucket 1 -> 1*14+1 = 15
+        app.apply(Action::SetVelBucket(1));
+        if let PatternData::Drums(steps) = &app.focused_lane().pattern.data {
+            assert_eq!(steps[0][0].vel, 15, "bucket 1 should set vel to 15");
+        }
+
+        // Bucket 2 -> 2*14+1 = 29
+        app.apply(Action::SetVelBucket(2));
+        if let PatternData::Drums(steps) = &app.focused_lane().pattern.data {
+            assert_eq!(steps[0][0].vel, 29, "bucket 2 should set vel to 29");
+        }
+
+        // Bucket 3 -> 3*14+1 = 43
+        app.apply(Action::SetVelBucket(3));
+        if let PatternData::Drums(steps) = &app.focused_lane().pattern.data {
+            assert_eq!(steps[0][0].vel, 43, "bucket 3 should set vel to 43");
+        }
+    }
+
+    // --- Fix #9: horizontal scroll regression ----------------------------
+
+    #[test]
+    fn step_scroll_advances_when_cursor_moves_past_visible_window() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(0)); // drums, default 16 steps
+        // Extend pattern to 32 steps so there is room to scroll.
+        for _ in 0..16 {
+            app.apply(Action::AdjustPatternLen(1));
+        }
+        assert_eq!(app.focused_lane().pattern.length, 32);
+        assert_eq!(app.step_scroll, 0);
+
+        // Move cursor to col 20 (past the initial 16-step window).
+        app.apply(Action::MoveCursor(0, 20));
+        assert_eq!(app.cur_col, 20);
+        // step_scroll must have advanced so col 20 is within [step_scroll, step_scroll+16).
+        assert!(
+            app.cur_col >= app.step_scroll && app.cur_col < app.step_scroll + crate::app::VISIBLE_STEPS,
+            "col 20 should be in the visible window [{}..{})",
+            app.step_scroll,
+            app.step_scroll + crate::app::VISIBLE_STEPS
+        );
+        assert!(app.step_scroll > 0, "scroll must have advanced past 0");
+    }
+
+    #[test]
+    fn step_scroll_resets_when_cursor_returns_to_start() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(0));
+        for _ in 0..16 {
+            app.apply(Action::AdjustPatternLen(1)); // 32 steps
+        }
+        app.apply(Action::MoveCursor(0, 20)); // scroll right
+        assert!(app.step_scroll > 0);
+
+        // Move cursor back to col 0 (many steps left).
+        app.apply(Action::MoveCursor(0, -20));
+        assert_eq!(app.cur_col, 0);
+        assert_eq!(app.step_scroll, 0, "scroll should reset to 0 when cursor is at col 0");
+    }
+
+    #[test]
+    fn step_scroll_resets_on_focus_change() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(0));
+        for _ in 0..16 {
+            app.apply(Action::AdjustPatternLen(1)); // 32 steps
+        }
+        app.apply(Action::MoveCursor(0, 20));
+        assert!(app.step_scroll > 0);
+
+        app.apply(Action::FocusNext); // switch lane
+        assert_eq!(app.step_scroll, 0, "step_scroll should reset on lane change");
     }
 
     // --- semantic arrow-key cursor axis tests ----------------------------
