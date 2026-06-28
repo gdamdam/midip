@@ -104,6 +104,27 @@ pub fn list_output_ports() -> Vec<String> {
         .collect()
 }
 
+/// Create a virtual CoreMIDI output named `name` so other apps on the machine can
+/// subscribe to midip as a MIDI source. Not unit-tested (touches CoreMIDI).
+///
+/// The virtual port is created ONCE at engine startup, outside the hot loop.
+/// Returns `None` if the platform does not support virtual outputs or if creation fails.
+#[cfg(unix)]
+pub fn create_virtual_output(name: &str) -> Option<MidirSink> {
+    use midir::os::unix::VirtualOutput;
+    MidiOutput::new("midip-virtual")
+        .ok()?
+        .create_virtual(name)
+        .ok()
+        .map(MidirSink::new)
+}
+
+/// Stub for non-Unix platforms: virtual MIDI outputs are not supported.
+#[cfg(not(unix))]
+pub fn create_virtual_output(_name: &str) -> Option<MidirSink> {
+    None
+}
+
 /// Connect to the first output port whose name matches `port_match`. Not unit-tested.
 pub fn connect(port_match: &str) -> Result<MidirSink> {
     let out = MidiOutput::new("midip").context("create MIDI output")?;
