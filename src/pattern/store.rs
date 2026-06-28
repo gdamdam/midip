@@ -189,4 +189,22 @@ mod tests {
 
         std::fs::remove_dir_all(&dir).ok();
     }
+
+    #[test]
+    fn load_set_errors_on_unknown_profile_id() {
+        let dir = unique_dir("unknown-profile");
+        let set = Set::default_set(default_profiles());
+        let path = save_set(&dir, &set).unwrap();
+
+        // Mutate the saved JSON to introduce a bogus profile_id
+        let json_str = std::fs::read_to_string(&path).unwrap();
+        let mut json: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+        json["lanes"][0]["profile_id"] = serde_json::json!("nonexistent-id");
+        std::fs::write(&path, json.to_string()).unwrap();
+
+        // Loading should fail with an unknown profile id error
+        assert!(load_set(&path).is_err());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }
