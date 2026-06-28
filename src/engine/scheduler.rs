@@ -8,9 +8,24 @@ use crate::pattern::model::{Lane, PatternData, Set};
 /// Pulses Per Quarter Note for the MIDI clock.
 pub const PPQN: u64 = 24;
 
+/// Minimum musical BPM accepted by the scheduler. Prevents a zero/negative BPM
+/// from producing a zero or near-infinite step duration that hangs the tick loop.
+pub const MIN_BPM: f64 = 20.0;
+
+/// Maximum musical BPM accepted by the scheduler. Clamps absurdly high BPM
+/// values to a sane ceiling that keeps step durations positive.
+pub const MAX_BPM: f64 = 300.0;
+
 /// Duration of one 16th-note step in microseconds at `bpm`.
 /// A quarter note is `60_000_000 / bpm` µs; a 16th is a quarter of that.
+/// `bpm` is clamped to `MIN_BPM..=MAX_BPM` so the result is always a finite,
+/// positive µs value regardless of what a loaded set contains.
 pub fn step_dur_micros(bpm: f64) -> u64 {
+    let bpm = if bpm.is_finite() {
+        bpm.clamp(MIN_BPM, MAX_BPM)
+    } else {
+        MIN_BPM
+    };
     (60_000_000.0 / (bpm * 4.0)).round() as u64
 }
 
@@ -676,6 +691,25 @@ mod tests {
     #[test]
     fn ppqn_is_24() {
         assert_eq!(PPQN, 24);
+    }
+
+    #[test]
+    fn step_dur_clamps_zero_and_negative_bpm_to_finite() {
+        // bpm <= 0 must not yield 0 or u64::MAX (both hang the tick loop).
+        let at_min = step_dur_micros(MIN_BPM);
+        assert_eq!(step_dur_micros(0.0), at_min);
+        assert_eq!(step_dur_micros(-120.0), at_min);
+        assert!(step_dur_micros(0.0) > 0 && step_dur_micros(0.0) < u64::MAX);
+    }
+
+    #[test]
+    fn step_dur_clamps_absurdly_high_bpm() {
+        assert_eq!(step_dur_micros(100_000.0), step_dur_micros(MAX_BPM));
+    }
+
+    #[test]
+    fn step_dur_unchanged_in_normal_range() {
+        assert_eq!(step_dur_micros(120.0), 125_000); // regression: normal path intact
     }
 
     #[test]
@@ -1860,6 +1894,18 @@ mod sequencer_tests {
             vec![36, 37, 38, 39],
             "step-by-step must fire all steps"
         );
+    }
+
+    #[test]
+    fn zero_bpm_set_does_not_hang_tick() {
+        let mut set = set_with(vec![drum_lane_four_on_floor()]);
+        set.bpm = 0.0;
+        let mut seq = Sequencer::new(set);
+        let mut sink = RecordingSink::new();
+        seq.play(0);
+        // If unclamped this loops forever; clamped it advances a bounded number of steps.
+        seq.tick(1_000_000, &mut sink); // must return
+        assert!(seq.current_step() < 1000, "step count must be bounded");
     }
 
     #[test]
