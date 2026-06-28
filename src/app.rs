@@ -79,7 +79,8 @@ pub struct App {
     pub mode: Mode,
     pub cur_row: usize,
     pub cur_col: usize,
-    pub step_scroll: usize,      // first visible step column (horizontal scroll offset)
+    /// First visible step column — always `(cur_col / VISIBLE_STEPS) * VISIBLE_STEPS` (page-snapped).
+    pub step_scroll: usize,
     pub euclid_rotation: usize, // current euclid rotation for the focused drum voice
 
     pub playing: bool,
@@ -99,6 +100,10 @@ pub struct App {
     pub status: String,
     pub should_quit: bool,
     pub tempo_input: String,
+    /// Armed for double-q quit: true after first Quit while playing.
+    pub quit_armed: bool,
+    /// True when the Set has unsaved mutations since the last successful Save.
+    pub dirty: bool,
 }
 
 /// Default melodic velocity multiplier when placing a note (1.0 -> MIDI 100).
@@ -133,6 +138,8 @@ impl App {
             status: String::new(),
             should_quit: false,
             tempo_input: String::new(),
+            quit_armed: false,
+            dirty: false,
         }
     }
 
@@ -146,6 +153,11 @@ impl App {
 
     /// Apply an action; mutate state and return engine commands to forward.
     pub fn apply(&mut self, action: Action) -> Vec<UiCommand> {
+        // Any action other than Quit disarms the double-q quit gesture.
+        if action != Action::Quit {
+            self.quit_armed = false;
+        }
+
         let mut cmds = Vec::new();
         match action {
             Action::TogglePlay => {
@@ -171,11 +183,17 @@ impl App {
             Action::SetVelBucket(b) => {
                 self.snapshot();
                 self.set_vel_bucket(b);
+                if let Some(v) = self.cursor_vel_midi() {
+                    self.status = format!("Velocity {}", v);
+                }
                 cmds.push(self.load_focused());
             }
             Action::AdjustVel(d) => {
                 self.snapshot();
                 self.adjust_vel(d);
+                if let Some(v) = self.cursor_vel_midi() {
+                    self.status = format!("Velocity {}", v);
+                }
                 cmds.push(self.load_focused());
             }
             Action::NoteUp => {
@@ -246,12 +264,16 @@ impl App {
             Action::ToggleMute => {
                 let lane = &mut self.set.lanes[self.focus];
                 lane.mute = !lane.mute;
-                cmds.push(UiCommand::Mute { lane: self.focus, on: lane.mute });
+                let (n, muted) = (self.focus, self.set.lanes[self.focus].mute);
+                self.status = format!("Lane {} {}", n, if muted { "muted" } else { "unmuted" });
+                cmds.push(UiCommand::Mute { lane: self.focus, on: self.set.lanes[self.focus].mute });
             }
             Action::ToggleSolo => {
                 let lane = &mut self.set.lanes[self.focus];
                 lane.solo = !lane.solo;
-                cmds.push(UiCommand::Solo { lane: self.focus, on: lane.solo });
+                let (n, soloed) = (self.focus, self.set.lanes[self.focus].solo);
+                self.status = format!("Lane {} {}", n, if soloed { "solo" } else { "unsolo" });
+                cmds.push(UiCommand::Solo { lane: self.focus, on: self.set.lanes[self.focus].solo });
             }
             Action::SetBpm(bpm) => {
                 self.set.bpm = bpm;
@@ -260,6 +282,7 @@ impl App {
             Action::Tap => cmds.push(UiCommand::Tap),
             Action::ToggleLink => {
                 self.link_enabled = !self.link_enabled;
+                self.status = if self.link_enabled { "Link on".into() } else { "Link off".into() };
                 cmds.push(UiCommand::ToggleLink(self.link_enabled));
             }
             Action::OpenTempo => {
@@ -279,6 +302,7 @@ impl App {
                 if let Ok(bpm) = self.tempo_input.parse::<f64>() {
                     let bpm = bpm.clamp(20.0, 300.0);
                     self.set.bpm = bpm;
+                    self.status = format!("BPM {}", bpm as i64);
                     cmds.push(UiCommand::SetBpm(bpm));
                 }
                 self.tempo_input.clear();
@@ -289,6 +313,7 @@ impl App {
             }
             Action::AdjustBpm(d) => {
                 self.set.bpm = (self.set.bpm + d as f64).clamp(20.0, 300.0);
+                self.status = format!("BPM {}", self.set.bpm as i64);
                 cmds.push(UiCommand::SetBpm(self.set.bpm));
             }
             Action::AdjustSwing(d) => {
@@ -312,16 +337,25 @@ impl App {
             }
             Action::AdjustProb(d) => {
                 if self.adjust_prob(d) {
+                    if let Some(pct) = self.cursor_prob_pct() {
+                        self.status = format!("Prob {}%", pct);
+                    }
                     cmds.push(self.load_focused());
                 }
             }
             Action::AdjustRatchet(d) => {
                 if self.adjust_ratchet(d) {
+                    if let Some(r) = self.cursor_ratchet() {
+                        self.status = format!("Ratchet x{}", r);
+                    }
                     cmds.push(self.load_focused());
                 }
             }
             Action::Euclid { dp, dr } => {
                 if self.apply_euclid(dp, dr) {
+                    let pulses = self.euclid_current_pulses();
+                    let steps = self.set.lanes[self.focus].pattern.length;
+                    self.status = format!("Euclid E({},{})", pulses, steps);
                     cmds.push(self.load_focused());
                 }
             }
@@ -334,6 +368,7 @@ impl App {
             Action::LibNav(dg, dp) => self.lib_nav(dg, dp),
             Action::LibLoad => {
                 if let Some(pat) = self.selected_lib_pattern().cloned() {
+                    self.status = format!("Loaded {}", pat.name);
                     self.snapshot();
                     self.set.lanes[self.focus].pattern = pat;
                     cmds.push(self.load_focused());
@@ -343,14 +378,24 @@ impl App {
                 // Cross-task dependency: `config::data_dir()` is defined in Task 21.
                 let dir = crate::config::data_dir().join("sets");
                 match crate::pattern::store::save_set(&dir, &self.set) {
-                    Ok(path) => self.status = format!("saved {}", path.display()),
-                    Err(e) => self.status = format!("save failed: {}", e),
+                    Ok(_path) => {
+                        self.status = "Saved".into();
+                        self.dirty = false;
+                    }
+                    Err(e) => self.status = format!("Save failed: {}", e),
                 }
             }
             Action::Help => {
                 self.mode = if self.mode == Mode::Help { Mode::Edit } else { Mode::Help };
             }
-            Action::Quit => self.should_quit = true,
+            Action::Quit => {
+                if self.playing && !self.quit_armed {
+                    self.quit_armed = true;
+                    self.status = "Press q again to quit".into();
+                } else {
+                    self.should_quit = true;
+                }
+            }
             Action::None => {}
         }
         cmds
@@ -413,28 +458,37 @@ impl App {
         self.update_step_scroll();
     }
 
-    /// Keep `step_scroll` so that `cur_col` stays within the visible window
-    /// `[step_scroll, step_scroll + VISIBLE_STEPS)`. Also clamps scroll so it
-    /// never shows past the end of the pattern.
+    /// Snap `step_scroll` to the 16-step page that contains `cur_col`.
+    /// The visible window is `[page*16, page*16+16)` where `page = cur_col / VISIBLE_STEPS`.
     fn update_step_scroll(&mut self) {
-        let (_, cols) = self.grid_dims();
-        // Scroll right if cursor is past the right edge of the window.
-        if self.cur_col >= self.step_scroll + VISIBLE_STEPS {
-            self.step_scroll = self.cur_col + 1 - VISIBLE_STEPS;
+        self.step_scroll = (self.cur_col / VISIBLE_STEPS) * VISIBLE_STEPS;
+    }
+
+    /// Return the half-open step range `[start, end)` that is currently visible
+    /// for the focused pattern.  Always a 16-step-aligned page containing `cur_col`.
+    pub fn visible_step_range(&self) -> (usize, usize) {
+        let start = (self.cur_col / VISIBLE_STEPS) * VISIBLE_STEPS;
+        let len = self.set.lanes[self.focus].pattern.length;
+        let end = (start + VISIBLE_STEPS).min(len);
+        (start, end)
+    }
+
+    /// Short label for the current mode / lane-kind combination, used by the status bar.
+    pub fn context_label(&self) -> &'static str {
+        match self.mode {
+            Mode::Edit => match self.focused_kind() {
+                LaneKind::Drums   => "EDIT DRUM",
+                LaneKind::Melodic => "EDIT MELODIC",
+            },
+            Mode::Library   => "LIBRARY",
+            Mode::Help      => "HELP",
+            Mode::TempoEntry => "TEMPO",
         }
-        // Scroll left if cursor is before the window.
-        if self.cur_col < self.step_scroll {
-            self.step_scroll = self.cur_col;
-        }
-        // Clamp so we don't scroll past the end of the pattern.
-        if cols > VISIBLE_STEPS {
-            let max_scroll = cols - VISIBLE_STEPS;
-            if self.step_scroll > max_scroll {
-                self.step_scroll = max_scroll;
-            }
-        } else {
-            self.step_scroll = 0;
-        }
+    }
+
+    /// Whether the Set has unsaved mutations.
+    pub fn dirty(&self) -> bool {
+        self.dirty
     }
 
     fn move_cursor(&mut self, drow: i32, dcol: i32) {
@@ -453,6 +507,7 @@ impl App {
     fn snapshot(&mut self) {
         self.undo.push(self.set.clone());
         self.redo.clear();
+        self.dirty = true;
     }
 
     fn undo(&mut self) {
@@ -572,6 +627,63 @@ impl App {
             }
             PatternData::Melodic(steps) => {
                 matches!(steps.get(col), Some(Some(_)))
+            }
+        }
+    }
+
+    /// MIDI velocity (1–127) of the cursor cell, if a note is present. Used for status toasts.
+    fn cursor_vel_midi(&self) -> Option<u8> {
+        let row = self.cur_row;
+        let col = self.cur_col;
+        match &self.set.lanes[self.focus].pattern.data {
+            PatternData::Drums(steps) => {
+                let note = profiles::DRUM_VOICES[row].note;
+                steps.get(col)
+                    .and_then(|s| s.iter().find(|h| h.note == note))
+                    .map(|h| h.vel)
+            }
+            PatternData::Melodic(steps) => {
+                steps.get(col)
+                    .and_then(|s| s.as_ref())
+                    .map(|n| (n.vel.clamp(0.0, 1.3) * 97.0) as u8)
+            }
+        }
+    }
+
+    /// Probability of the cursor cell as an integer percentage (0–100), if present.
+    fn cursor_prob_pct(&self) -> Option<u32> {
+        let row = self.cur_row;
+        let col = self.cur_col;
+        match &self.set.lanes[self.focus].pattern.data {
+            PatternData::Drums(steps) => {
+                let note = profiles::DRUM_VOICES[row].note;
+                steps.get(col)
+                    .and_then(|s| s.iter().find(|h| h.note == note))
+                    .map(|h| (h.prob * 100.0).round() as u32)
+            }
+            PatternData::Melodic(steps) => {
+                steps.get(col)
+                    .and_then(|s| s.as_ref())
+                    .map(|n| (n.prob * 100.0).round() as u32)
+            }
+        }
+    }
+
+    /// Ratchet count of the cursor cell, if present.
+    fn cursor_ratchet(&self) -> Option<u8> {
+        let row = self.cur_row;
+        let col = self.cur_col;
+        match &self.set.lanes[self.focus].pattern.data {
+            PatternData::Drums(steps) => {
+                let note = profiles::DRUM_VOICES[row].note;
+                steps.get(col)
+                    .and_then(|s| s.iter().find(|h| h.note == note))
+                    .map(|h| h.ratchet)
+            }
+            PatternData::Melodic(steps) => {
+                steps.get(col)
+                    .and_then(|s| s.as_ref())
+                    .map(|n| n.ratchet)
             }
         }
     }
@@ -1493,5 +1605,165 @@ mod tests {
         app.apply(left_action);
         assert_eq!(app.cur_col, 2, "melodic Left must decrease cur_col");
         assert_eq!(app.cur_row, 0, "melodic cur_row must remain 0");
+    }
+
+    // --- Item 2: double-q quit while playing --------------------------------
+
+    #[test]
+    fn quit_while_playing_arms_then_quits() {
+        let mut app = new_app();
+        app.apply(Action::TogglePlay); // start playing
+        assert!(app.playing);
+
+        // First Quit: arms, does NOT quit.
+        app.apply(Action::Quit);
+        assert!(!app.should_quit, "first Quit while playing should not quit");
+        assert!(app.quit_armed, "first Quit while playing should arm");
+        assert_eq!(app.status, "Press q again to quit");
+
+        // Second Quit: quits.
+        app.apply(Action::Quit);
+        assert!(app.should_quit, "second consecutive Quit should quit");
+    }
+
+    #[test]
+    fn quit_while_playing_disarmed_by_other_action() {
+        let mut app = new_app();
+        app.apply(Action::TogglePlay); // start playing
+
+        app.apply(Action::Quit); // arm
+        assert!(app.quit_armed);
+
+        app.apply(Action::None); // any other action clears the arm
+        assert!(!app.quit_armed, "non-Quit action should disarm quit_armed");
+
+        // Another Quit now re-arms instead of quitting.
+        app.apply(Action::Quit);
+        assert!(!app.should_quit, "disarmed quit should not quit on next Quit");
+        assert!(app.quit_armed);
+    }
+
+    #[test]
+    fn quit_while_stopped_quits_immediately() {
+        let mut app = new_app();
+        assert!(!app.playing);
+        app.apply(Action::Quit);
+        assert!(app.should_quit, "Quit while stopped should quit immediately");
+    }
+
+    // --- Item 3: 16-step paging via visible_step_range ----------------------
+
+    #[test]
+    fn visible_step_range_cursor_at_col_5_on_16_step_pattern() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(0)); // drums, default 16 steps
+        app.apply(Action::MoveCursor(0, 5));
+        let (start, end) = app.visible_step_range();
+        assert_eq!(start, 0);
+        assert_eq!(end, 16); // pattern length = 16, min(0+16, 16) = 16
+    }
+
+    #[test]
+    fn visible_step_range_cursor_at_col_20_on_32_step_pattern() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(0));
+        // Extend to 32 steps.
+        for _ in 0..16 { app.apply(Action::AdjustPatternLen(1)); }
+        app.apply(Action::MoveCursor(0, 20));
+        let (start, end) = app.visible_step_range();
+        assert_eq!(start, 16); // page 1: 20/16 = 1 -> 1*16=16
+        assert_eq!(end, 32);   // min(16+16, 32) = 32
+    }
+
+    #[test]
+    fn visible_step_range_cursor_at_col_50_on_64_step_pattern() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(0));
+        // Extend to 64 steps.
+        for _ in 0..48 { app.apply(Action::AdjustPatternLen(1)); }
+        assert_eq!(app.focused_lane().pattern.length, 64);
+        app.apply(Action::MoveCursor(0, 50));
+        let (start, end) = app.visible_step_range();
+        assert_eq!(start, 48); // page 3: 50/16 = 3 -> 3*16=48
+        assert_eq!(end, 64);   // min(48+16, 64) = 64
+    }
+
+    // --- Item 4: context_label ----------------------------------------------
+
+    #[test]
+    fn context_label_covers_all_modes_and_kinds() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(0)); // drums
+        assert_eq!(app.context_label(), "EDIT DRUM");
+
+        app.apply(Action::FocusLane(1)); // bass = melodic
+        assert_eq!(app.context_label(), "EDIT MELODIC");
+
+        app.apply(Action::OpenLibrary);
+        assert_eq!(app.context_label(), "LIBRARY");
+
+        app.apply(Action::CloseLibrary);
+        app.apply(Action::Help);
+        assert_eq!(app.context_label(), "HELP");
+
+        app.apply(Action::Help); // close help -> back to Edit
+        app.apply(Action::OpenTempo);
+        assert_eq!(app.context_label(), "TEMPO");
+    }
+
+    // --- Item 5: status toasts on consequential ops -------------------------
+
+    #[test]
+    fn save_sets_saved_status() {
+        let mut app = new_app();
+        app.apply(Action::Save);
+        // Save may fail in tests (no filesystem set up), but status is always set.
+        // On success it is "Saved"; on error it starts with "Save failed:".
+        assert!(
+            app.status == "Saved" || app.status.starts_with("Save failed:"),
+            "status after Save should be 'Saved' or 'Save failed: ...' but was {:?}", app.status
+        );
+    }
+
+    #[test]
+    fn set_vel_bucket_sets_velocity_status() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(0));
+        app.apply(Action::MoveCursor(0, 0));
+        app.apply(Action::ToggleStep); // place a hit
+        app.apply(Action::SetVelBucket(5));
+        assert!(
+            app.status.contains("Velocity"),
+            "status after SetVelBucket should contain 'Velocity' but was {:?}", app.status
+        );
+    }
+
+    // --- Item 6: dirty flag -------------------------------------------------
+
+    #[test]
+    fn dirty_false_initially() {
+        let app = new_app();
+        assert!(!app.dirty(), "dirty should be false on fresh App");
+    }
+
+    #[test]
+    fn dirty_true_after_toggle_step() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(0));
+        app.apply(Action::ToggleStep);
+        assert!(app.dirty(), "dirty should be true after a step edit");
+    }
+
+    #[test]
+    fn dirty_false_after_successful_save() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(0));
+        app.apply(Action::ToggleStep); // dirty = true
+        assert!(app.dirty());
+        app.apply(Action::Save); // may succeed or fail
+        if app.status == "Saved" {
+            assert!(!app.dirty(), "dirty should be false after a successful Save");
+        }
+        // If save failed (no fs), dirty remains true — that's correct behavior.
     }
 }

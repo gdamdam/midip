@@ -29,6 +29,14 @@ pub fn key_to_action(key: KeyEvent, mode: Mode, kind: LaneKind) -> Action {
         }
     }
 
+    // Global play/panic — checked before per-mode branches so they fire in ALL modes.
+    // Esc retains its per-mode meaning (Edit→Panic, Library/Help→close, TempoEntry→cancel).
+    match key.code {
+        KeyCode::Char(' ') => return Action::TogglePlay,
+        KeyCode::Char('!') => return Action::Panic,
+        _ => {}
+    }
+
     match mode {
         Mode::Library => match key.code {
             KeyCode::Up => return Action::LibNav(-1, 0),
@@ -168,6 +176,30 @@ mod tests {
             key_to_action(k(KeyCode::Char(' ')), Mode::Edit, LaneKind::Drums),
             Action::TogglePlay
         );
+    }
+
+    // --- Item 1: global Space→TogglePlay and '!'→Panic in every mode -------
+
+    #[test]
+    fn space_is_toggle_play_in_all_modes() {
+        for mode in [Mode::Edit, Mode::Library, Mode::Help, Mode::TempoEntry] {
+            assert_eq!(
+                key_to_action(k(KeyCode::Char(' ')), mode, LaneKind::Drums),
+                Action::TogglePlay,
+                "Space should be TogglePlay in {:?}", mode
+            );
+        }
+    }
+
+    #[test]
+    fn exclamation_is_panic_in_all_modes() {
+        for mode in [Mode::Edit, Mode::Library, Mode::Help, Mode::TempoEntry] {
+            assert_eq!(
+                key_to_action(k(KeyCode::Char('!')), mode, LaneKind::Drums),
+                Action::Panic,
+                "! should be Panic in {:?}", mode
+            );
+        }
     }
 
     #[test]
