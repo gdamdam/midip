@@ -87,13 +87,10 @@ fn lane_line(idx: usize, app: &App) -> Line<'static> {
 
     let label = short_label(lane.profile.id);
 
-    // If a launch is queued for this lane, show the queued name; otherwise show the
-    // active (committed) pattern name.
+    // Show the active (committed) pattern name here; a pending launch is shown
+    // separately as a QUEUED⟶ marker after the activity strip (below).
     let queued_name: Option<String> = app.queued.get(idx).and_then(|q| q.clone());
-    let pat_display = match &queued_name {
-        Some(_) => lane.pattern.name.clone(),
-        None => lane.pattern.name.clone(),
-    };
+    let pat_display = lane.pattern.name.clone();
     let prefix = format!(
         "{marker}{n} {label:<5} {pat:<12} {conn}  {m_glyph}  ",
         n = idx + 1,
