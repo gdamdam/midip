@@ -5,6 +5,25 @@ use crate::midi::ports::MidiSink;
 use crate::midi::MidiMessage;
 use crate::pattern::model::{Lane, PatternData, Set};
 
+/// Ownership domain of a sounding note (design §3.1). M1 only produces Playback;
+/// the field + release_domain exist so M3 audition / M15 preview can reuse the registry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NoteDomain {
+    Playback,
+    Audition,
+    Preview,
+    Performance,
+}
+
+/// A note currently sounding, tracked by the authoritative registry.
+#[derive(Clone, Debug)]
+pub struct SoundingNote {
+    pub channel: u8,
+    pub note: u8,
+    pub lane: usize,
+    pub domain: NoteDomain,
+}
+
 /// Pulses Per Quarter Note for the MIDI clock.
 pub const PPQN: u64 = 24;
 
@@ -93,6 +112,9 @@ pub struct Sequencer {
     current: usize,
     /// Deterministic xorshift64 PRNG state for per-step probability rolls.
     rng: u64,
+    /// Authoritative registry of every currently-sounding note with its owner.
+    /// Updated at emit time: NoteOn inserts, NoteOff removes by (channel, note).
+    pub sounding: Vec<SoundingNote>,
 }
 
 /// Default PRNG seed (a fixed nonzero constant so playback is reproducible).
@@ -111,6 +133,7 @@ impl Sequencer {
             active: vec![None; n],
             current: 0,
             rng: DEFAULT_SEED,
+            sounding: Vec::new(),
         }
     }
 
@@ -144,49 +167,50 @@ impl Sequencer {
         self.next_unit() < prob
     }
 
-    pub fn play(&mut self, at_micros: u64) {
-        self.playing = true;
-        self.origin_micros = at_micros;
-        self.current = 0;
-        self.next_step = 0;
-        // Fix #5: reset the accumulated clock. `None` signals that no step has
-        // fired yet; the tick loop treats this as "step 0 is due at origin_micros".
-        self.last_step_at = None;
-        self.queue.clear();
-        for a in self.active.iter_mut() {
-            *a = None;
-        }
-        // Step 0 (and all other steps) are materialized by tick() once
-        // now_micros >= step_start. This avoids double-emit when the first
-        // tick lands exactly on the origin (step_start == now_micros).
-    }
-
-    /// Halt the sequencer, immediately sending NoteOff for every active melodic note.
-    /// Emits directly to `sink` at `at_micros` so callers don't need a follow-up tick.
-    pub fn stop(&mut self, at_micros: u64, sink: &mut dyn MidiSink) {
-        // Release every still-active melodic note directly to sink.
-        for slot in self.active.iter_mut() {
-            if let Some(active) = slot.take() {
-                sink.send(
-                    MidiMessage::NoteOff {
-                        channel: active.channel,
-                        note: active.note,
-                    },
-                    at_micros,
-                );
+    /// Route ALL NoteOn/NoteOff emission through this single helper.
+    /// Updates the sounding registry then forwards to `sink.send` unchanged.
+    /// - NoteOn: inserts into registry (replaces any existing (ch,note) — retrigger).
+    /// - NoteOff: removes matching (ch,note) from registry.
+    /// - Other messages: passed through unmodified, registry unchanged.
+    fn emit(&mut self, msg: MidiMessage, lane: usize, at_micros: u64, sink: &mut dyn MidiSink) {
+        match msg {
+            MidiMessage::NoteOn { channel, note, .. } => {
+                // Retrigger: replace any prior entry for (channel, note).
+                self.sounding
+                    .retain(|s| !(s.channel == channel && s.note == note));
+                self.sounding.push(SoundingNote {
+                    channel,
+                    note,
+                    lane,
+                    domain: NoteDomain::Playback,
+                });
             }
+            MidiMessage::NoteOff { channel, note } => {
+                self.sounding
+                    .retain(|s| !(s.channel == channel && s.note == note));
+            }
+            _ => {}
         }
-        self.playing = false;
-        self.queue.clear();
+        sink.send(msg, at_micros);
     }
 
-    /// All-notes-off / all-sound-off live recovery. Sends CC 123 (All Notes Off) and
-    /// CC 120 (All Sound Off) on every lane's channel, plus a NoteOff for each tracked
-    /// active melodic note, then clears note tracking. Emits directly to `sink` at
-    /// `at_micros` (does not enqueue). Does NOT change `playing` — the performer keeps
-    /// the transport running while clearing stuck notes mid-pattern.
-    pub fn panic(&mut self, at_micros: u64, sink: &mut dyn MidiSink) {
-        // CC 123 + CC 120 on each distinct lane channel.
+    /// Release every currently-sounding note, then send CC123 + CC120 per distinct
+    /// channel, and clear the registry (and the legato `active` tracker).
+    /// This is the P4 fix: call BEFORE clearing `queue` so queued NoteOffs for
+    /// already-flushed NoteOns don't get dropped silently.
+    pub fn release_all(&mut self, at_micros: u64, sink: &mut dyn MidiSink) {
+        // NoteOff for every sounding note.
+        let sounding = std::mem::take(&mut self.sounding);
+        for s in &sounding {
+            sink.send(
+                MidiMessage::NoteOff {
+                    channel: s.channel,
+                    note: s.note,
+                },
+                at_micros,
+            );
+        }
+        // CC123 + CC120 per distinct channel in the set.
         let mut sent: Vec<u8> = Vec::new();
         for lane in &self.set.lanes {
             let ch = lane.profile.channel;
@@ -211,18 +235,97 @@ impl Sequencer {
                 at_micros,
             );
         }
-        // Explicit NoteOff for every tracked active note, then clear tracking.
+        // Clear the legato active tracker too.
         for slot in self.active.iter_mut() {
-            if let Some(active) = slot.take() {
+            *slot = None;
+        }
+        // sounding was already cleared by take().
+    }
+
+    /// Release only notes belonging to domain `d`.
+    pub fn release_domain(&mut self, d: NoteDomain, at_micros: u64, sink: &mut dyn MidiSink) {
+        let mut remaining = Vec::with_capacity(self.sounding.len());
+        for s in std::mem::take(&mut self.sounding) {
+            if s.domain == d {
                 sink.send(
                     MidiMessage::NoteOff {
-                        channel: active.channel,
-                        note: active.note,
+                        channel: s.channel,
+                        note: s.note,
                     },
                     at_micros,
                 );
+            } else {
+                remaining.push(s);
             }
         }
+        self.sounding = remaining;
+    }
+
+    /// Release only notes on the given lane indices. Used by route/disconnect (Task 5).
+    pub fn release_lanes(&mut self, lanes: &[usize], at_micros: u64, sink: &mut dyn MidiSink) {
+        let mut remaining = Vec::with_capacity(self.sounding.len());
+        for s in std::mem::take(&mut self.sounding) {
+            if lanes.contains(&s.lane) {
+                sink.send(
+                    MidiMessage::NoteOff {
+                        channel: s.channel,
+                        note: s.note,
+                    },
+                    at_micros,
+                );
+                // Also clear the legato active slot for this lane.
+                if let Some(slot) = self.active.get_mut(s.lane) {
+                    *slot = None;
+                }
+            } else {
+                remaining.push(s);
+            }
+        }
+        self.sounding = remaining;
+    }
+
+    /// Number of currently-sounding notes across all domains. Test hook.
+    pub fn sounding_count(&self) -> usize {
+        self.sounding.len()
+    }
+
+    pub fn play(&mut self, at_micros: u64) {
+        self.playing = true;
+        self.origin_micros = at_micros;
+        self.current = 0;
+        self.next_step = 0;
+        // Fix #5: reset the accumulated clock. `None` signals that no step has
+        // fired yet; the tick loop treats this as "step 0 is due at origin_micros".
+        self.last_step_at = None;
+        self.queue.clear();
+        self.sounding.clear();
+        for a in self.active.iter_mut() {
+            *a = None;
+        }
+        // Step 0 (and all other steps) are materialized by tick() once
+        // now_micros >= step_start. This avoids double-emit when the first
+        // tick lands exactly on the origin (step_start == now_micros).
+    }
+
+    /// Halt the sequencer, releasing every sounding note (including drums whose
+    /// NoteOn was flushed but NoteOff is still queued — P4 fix), then halting.
+    /// `release_all` is called BEFORE `queue.clear()` so no queued NoteOff drops.
+    pub fn stop(&mut self, at_micros: u64, sink: &mut dyn MidiSink) {
+        // P4 fix: release via the authoritative sounding registry first,
+        // then clear the queue (so a flushed drum NoteOn + queued NoteOff
+        // releases cleanly instead of hanging).
+        self.release_all(at_micros, sink);
+        self.playing = false;
+        self.queue.clear();
+    }
+
+    /// All-notes-off / all-sound-off live recovery. Releases every sounding note via
+    /// the authoritative registry (all domains), sends CC 123 + CC 120 per distinct
+    /// lane channel, and clears the registry. Does NOT change `playing`.
+    pub fn panic(&mut self, at_micros: u64, sink: &mut dyn MidiSink) {
+        // release_all handles NoteOff for every sounding note + CC123/120 per channel
+        // + clears active[]. playing is intentionally left unchanged.
+        self.release_all(at_micros, sink);
         // Note: `playing` is intentionally left unchanged.
     }
 
@@ -279,12 +382,14 @@ impl Sequencer {
         for lane_idx in 0..self.set.lanes.len() {
             if !self.lane_audible(lane_idx, any_solo) {
                 if let Some(held) = self.active[lane_idx].take() {
-                    sink.send(
+                    self.emit(
                         MidiMessage::NoteOff {
                             channel: held.channel,
                             note: held.note,
                         },
+                        lane_idx,
                         now_micros,
+                        sink,
                     );
                 }
             }
@@ -625,12 +730,13 @@ impl Sequencer {
     }
 
     /// Send and remove every queued event whose time is <= now, in time order.
+    /// Routes through `emit()` so the sounding registry is updated on every flush.
     fn flush_due(&mut self, now_micros: u64, sink: &mut dyn MidiSink) {
         let i = 0;
         while i < self.queue.len() {
             if self.queue[i].at_micros <= now_micros {
                 let ev = self.queue.remove(i);
-                sink.send(ev.msg, ev.at_micros);
+                self.emit(ev.msg, ev.lane, ev.at_micros, sink);
             } else {
                 // queue is time-ordered, so the first future event ends the scan.
                 break;
@@ -1906,6 +2012,210 @@ mod sequencer_tests {
         // If unclamped this loops forever; clamped it advances a bounded number of steps.
         seq.tick(1_000_000, &mut sink); // must return
         assert!(seq.current_step() < 1000, "step count must be bounded");
+    }
+
+    // =========================================================================
+    // Task 2: Active-note registry tests
+    // =========================================================================
+
+    // Helper: inject a sounding note with a chosen domain directly into the
+    // registry (test-only — simulates a note that was emitted before the test
+    // body but whose domain we want to control).
+    fn inject_sounding(
+        seq: &mut Sequencer,
+        channel: u8,
+        note: u8,
+        lane: usize,
+        domain: NoteDomain,
+    ) {
+        // Remove any existing entry for (channel, note) then push a fresh one.
+        seq.sounding
+            .retain(|s| !(s.channel == channel && s.note == note));
+        seq.sounding.push(SoundingNote {
+            channel,
+            note,
+            lane,
+            domain,
+        });
+    }
+
+    /// P4 regression: stop() must release a drum note whose NoteOn was already
+    /// flushed to the sink but whose NoteOff is still in the queue.
+    #[test]
+    fn stop_releases_flushed_drum_with_queued_noteoff() {
+        let dur = step_dur_micros(120.0);
+        let gate = note_len_micros(T8_DRUMS.drum_gate_fraction, dur);
+        // One drum lane: kick on step 0.
+        let mut seq = Sequencer::new(set_with(vec![drum_lane_four_on_floor()]));
+        let mut sink = RecordingSink::new();
+        seq.play(0);
+
+        // Tick exactly at t=0: the NoteOn is materialized AND flushed to sink
+        // (at_micros=0 <= now=0). The NoteOff is queued at t=gate (future).
+        seq.tick(0, &mut sink);
+
+        // Confirm NoteOn flushed, NoteOff still pending (not yet in sink).
+        let noteoff_before = sink
+            .events
+            .iter()
+            .filter(|(_, m)| {
+                *m == MidiMessage::NoteOff {
+                    channel: 9,
+                    note: 36,
+                }
+            })
+            .count();
+        assert_eq!(
+            noteoff_before, 0,
+            "NoteOff must still be queued, not flushed yet"
+        );
+        assert_eq!(
+            seq.sounding_count(),
+            1,
+            "kick must be in the sounding registry"
+        );
+
+        // Stop before the NoteOff is due. P4 bug: without registry, stop() only
+        // released `active` (melodic tracking), not the drum note — it would hang.
+        seq.stop(1, &mut sink);
+
+        let noteoff_after = sink
+            .events
+            .iter()
+            .filter(|(_, m)| {
+                *m == MidiMessage::NoteOff {
+                    channel: 9,
+                    note: 36,
+                }
+            })
+            .count();
+        assert_eq!(
+            noteoff_after, 1,
+            "stop() must release the still-sounding drum note (P4 fix)"
+        );
+        assert_eq!(
+            seq.sounding_count(),
+            0,
+            "registry must be empty after stop()"
+        );
+        assert!(!seq.is_playing());
+        let _ = gate;
+    }
+
+    /// release_domain releases only notes in its domain, leaving others sounding.
+    #[test]
+    fn release_domain_only_releases_its_domain() {
+        let mut seq = Sequencer::new(set_with(vec![drum_lane_four_on_floor()]));
+        let mut sink = RecordingSink::new();
+
+        // Inject two notes in different domains.
+        inject_sounding(&mut seq, 1, 60, 0, NoteDomain::Playback);
+        inject_sounding(&mut seq, 2, 62, 0, NoteDomain::Audition);
+        assert_eq!(seq.sounding_count(), 2);
+
+        // Release only Audition.
+        seq.release_domain(NoteDomain::Audition, 1000, &mut sink);
+
+        assert_eq!(seq.sounding_count(), 1, "Playback note must remain");
+        // The Audition note (ch2, note 62) got a NoteOff.
+        assert!(sink.events.iter().any(|(_, m)| *m
+            == MidiMessage::NoteOff {
+                channel: 2,
+                note: 62
+            }));
+        // The Playback note (ch1, note 60) must NOT have a NoteOff.
+        assert!(!sink.events.iter().any(|(_, m)| *m
+            == MidiMessage::NoteOff {
+                channel: 1,
+                note: 60
+            }));
+    }
+
+    /// release_lanes releases only notes on the named lanes.
+    #[test]
+    fn release_lanes_releases_only_named_lanes() {
+        let mut seq = Sequencer::new(set_with(vec![
+            drum_lane_four_on_floor(), // lane 0
+            drum_lane_four_on_floor(), // lane 1
+        ]));
+        let mut sink = RecordingSink::new();
+
+        // Inject one note per lane.
+        inject_sounding(&mut seq, 9, 36, 0, NoteDomain::Playback);
+        inject_sounding(&mut seq, 9, 38, 1, NoteDomain::Playback);
+        assert_eq!(seq.sounding_count(), 2);
+
+        // Release only lane 0.
+        seq.release_lanes(&[0], 1000, &mut sink);
+
+        assert_eq!(seq.sounding_count(), 1, "lane 1 note must remain");
+        assert!(sink.events.iter().any(|(_, m)| *m
+            == MidiMessage::NoteOff {
+                channel: 9,
+                note: 36
+            }));
+        assert!(!sink.events.iter().any(|(_, m)| *m
+            == MidiMessage::NoteOff {
+                channel: 9,
+                note: 38
+            }));
+    }
+
+    /// panic() emits CC123+CC120 per channel, NoteOff for every sounding note,
+    /// clears the registry, and leaves transport playing.
+    #[test]
+    fn panic_emits_cc123_120_and_clears_registry() {
+        let drums = drum_lane_four_on_floor();
+        let bass = melodic_lane(
+            vec![
+                Some(MelodicNote {
+                    semi: 0,
+                    vel: 1.0,
+                    slide: false,
+                    len: 4.0,
+                    prob: 1.0,
+                    ratchet: 1,
+                }),
+                None,
+                None,
+                None,
+            ],
+            true,
+        );
+        let mut seq = Sequencer::new(set_with(vec![drums, bass]));
+        let mut sink = RecordingSink::new();
+        seq.play(0);
+        seq.tick(0, &mut sink); // bass NoteOn emitted → enters registry
+
+        // Inject an extra Audition note to confirm panic() clears ALL domains.
+        inject_sounding(&mut seq, 3, 72, 0, NoteDomain::Audition);
+
+        let count_before = seq.sounding_count();
+        assert!(count_before >= 2, "bass + audition note must be sounding");
+
+        seq.panic(10_000, &mut sink);
+
+        assert_eq!(
+            seq.sounding_count(),
+            0,
+            "panic() must clear the entire registry"
+        );
+        assert!(seq.is_playing(), "panic() must leave transport playing");
+        // CC123 + CC120 on each distinct lane channel.
+        for ch in [9u8, 1u8] {
+            assert!(sink.events.iter().any(|(_, m)| *m
+                == MidiMessage::ControlChange {
+                    channel: ch,
+                    controller: 123,
+                    value: 0
+                }));
+            assert!(sink.events.iter().any(|(_, m)| *m
+                == MidiMessage::ControlChange {
+                    channel: ch,
+                    controller: 120,
+                    value: 0
+                }));
+        }
     }
 
     #[test]

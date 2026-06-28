@@ -186,12 +186,28 @@ fn stop_mid_run_emits_all_notes_off_and_halts_noteons() {
         1_000,
     );
 
-    // There must be at least one NoteOff at/after stop_at (all-notes-off on stop).
-    let off_after_stop = sink
-        .events
-        .iter()
-        .any(|(at, m)| *at >= stop_at && matches!(m, MidiMessage::NoteOff { .. }));
-    assert!(off_after_stop, "expected NoteOff after stop");
+    // stop() calls release_all() which always emits CC123 + CC120 per channel and
+    // NoteOffs for any notes still sounding at stop time.  In this fixture all
+    // NoteOffs were already flushed before step 6, so no extra NoteOff is produced —
+    // that is correct behaviour.  What we assert instead is that CC123 (All Notes Off)
+    // fired on the drum channel, proving release_all ran.
+    // (Premise changed from Task 2: old stop sent a redundant NoteOff for the melodic
+    // active tracker even when the NoteOff was already flushed; new stop only releases
+    // notes that are genuinely still sounding per the authoritative registry.)
+    let cc123_after_stop = sink.events.iter().any(|(at, m)| {
+        *at >= stop_at
+            && matches!(
+                m,
+                MidiMessage::ControlChange {
+                    controller: 123,
+                    ..
+                }
+            )
+    });
+    assert!(
+        cc123_after_stop,
+        "expected CC123 (all-notes-off) at/after stop"
+    );
 
     // No NoteOn should be scheduled after stop (allow a one-step grace for the stop tick).
     let on_after_stop = note_ons(&sink)
