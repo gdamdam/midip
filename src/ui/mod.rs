@@ -61,9 +61,29 @@ fn centered(area: Rect, pct_x: u16, pct_y: u16) -> Rect {
     h[1]
 }
 
+/// Minimum usable terminal dimensions.
+const MIN_WIDTH: u16 = 60;
+const MIN_HEIGHT: u16 = 16;
+
 /// Top-level render: transport / lanes / editor / footer with overlay support.
 pub fn render(f: &mut Frame, app: &App) {
     let area = f.area();
+
+    // Guard: if the terminal is too small, show a resize prompt and bail out.
+    // Attempting the normal multi-pane layout on a tiny frame produces garbage.
+    if area.width < MIN_WIDTH || area.height < MIN_HEIGHT {
+        let w = area.width;
+        let h = area.height;
+        let msg = format!(
+            "midip needs at least {MIN_WIDTH}x{MIN_HEIGHT} — resize the terminal (now {w}x{h})"
+        );
+        let para = ratatui::widgets::Paragraph::new(msg)
+            .alignment(ratatui::layout::Alignment::Center);
+        // Render into the full available area (however small it is).
+        f.render_widget(para, area);
+        return;
+    }
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -210,5 +230,44 @@ mod tests {
         app.mode = Mode::Help;
         let whole = render_to_string(&app);
         assert!(whole.contains("close"), "Help footer should contain 'close'");
+    }
+
+    // --- minimum terminal size tests ---
+
+    fn render_to_string_sized(app: &App, w: u16, h: u16) -> String {
+        let backend = TestBackend::new(w, h);
+        let mut term = Terminal::new(backend).unwrap();
+        term.draw(|f| render(f, app)).unwrap();
+        term.backend().buffer().content().iter().map(|c| c.symbol()).collect()
+    }
+
+    #[test]
+    fn tiny_terminal_shows_resize_warning() {
+        let set = Set::default_set(default_profiles());
+        let app = App::new(set, empty_library());
+        // 30x6 is well below the 60x16 minimum.
+        let whole = render_to_string_sized(&app, 30, 6);
+        // The full message is longer than 30 chars so it gets clipped, but the
+        // minimum-size spec "60x16" fits within the first 30 chars and must appear.
+        assert!(
+            whole.contains("60x16"),
+            "expected minimum dimensions in resize warning, got: {whole:?}"
+        );
+    }
+
+    #[test]
+    fn normal_terminal_does_not_show_resize_warning() {
+        let set = Set::default_set(default_profiles());
+        let app = App::new(set, empty_library());
+        // 120x30 is well above the minimum — normal render path.
+        let whole = render_to_string_sized(&app, 120, 30);
+        assert!(
+            whole.contains("play"),
+            "expected normal footer hint on large terminal, got: {whole:?}"
+        );
+        assert!(
+            !whole.contains("resize the terminal"),
+            "should NOT show resize warning on large terminal"
+        );
     }
 }
