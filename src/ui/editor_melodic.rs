@@ -13,7 +13,9 @@ use crate::ui::theme::{cursor_style, lane_color, note_name, playhead_style, vel_
 
 /// Combined style when cursor and playhead coincide: keep playhead bg, add cursor modifiers.
 fn combined_cursor_playhead_style() -> Style {
-    cursor_style().bg(playhead_style().bg.unwrap())
+    // Fall back to DarkGray if the theme ever drops the playhead bg, so we never panic.
+    let bg = playhead_style().bg.unwrap_or(ratatui::style::Color::DarkGray);
+    cursor_style().bg(bg)
 }
 
 /// Render the melodic editor into `area`.
@@ -71,6 +73,9 @@ pub fn render_melodic_editor(f: &mut Frame, area: Rect, app: &App) {
     // Feature #5: non-lossy length — track active sustain across columns.
     // sustain_end is the exclusive end (absolute step index) of the current sustain.
     let mut sustain_end: usize = 0;
+    // Feature #6: track the previous column's note so a slide can draw a glide tie
+    // that bridges INTO it from the note on its left, not just a marker on its own cell.
+    let mut prev_was_note = false;
 
     for col in visible_cols {
         let is_cursor = col == app.cur_col;
@@ -92,28 +97,34 @@ pub fn render_melodic_editor(f: &mut Frame, area: Rect, app: &App) {
         match steps.get(col).and_then(|s| s.as_ref()) {
             Some(note) => {
                 let pitch = resolve_melodic_pitch(root, note.semi, lane.transpose, lane.octave);
-                // Feature #6: slide marker on note row.
+                // Feature #6: a slide note draws a glide tie. When the previous step also
+                // held a note, lead the cell with a connecting line (`─╴`) so the eye reads
+                // a bridge FROM the left note INTO this one; otherwise keep the `~` marker.
                 let label = if note.slide {
-                    format!("~{:<3}", note_name(pitch))
+                    if prev_was_note {
+                        format!("─╴{:<2}", note_name(pitch))
+                    } else {
+                        format!("~{:<3}", note_name(pitch))
+                    }
                 } else {
                     format!("{:<4}", note_name(pitch))
                 };
                 note_spans.push(Span::styled(label, cell_style));
 
-                // Feature #5: non-lossy length rendering on len row.
-                // sustain_end from a prior note may overlap; this note starts a new head.
+                // Feature #5/#6: len row. A slide leads with a connector reaching left
+                // (`──▶`) so the glide tie is visible on the length lane too.
                 let note_head = if note.len >= 1.0 {
                     // Set sustain for columns after this one.
                     sustain_end = col + note.len.floor() as usize;
                     if note.slide {
-                        "~▶  ".to_string()
+                        "──▶ ".to_string()
                     } else {
                         "▶   ".to_string()
                     }
                 } else {
                     // Sub-step: partial head, no sustain from this note.
                     // Don't extend sustain_end.
-                    if note.slide { "~▷  ".to_string() } else { "▷   ".to_string() }
+                    if note.slide { "──▷ ".to_string() } else { "▷   ".to_string() }
                 };
                 len_spans.push(Span::raw(note_head));
 
@@ -123,6 +134,7 @@ pub fn render_melodic_editor(f: &mut Frame, area: Rect, app: &App) {
                     format!("{bar:<4}"),
                     Style::default().fg(vel_color(mv)),
                 ));
+                prev_was_note = true;
             }
             None => {
                 note_spans.push(Span::styled(format!("{:<4}", "·"), cell_style));
@@ -135,6 +147,7 @@ pub fn render_melodic_editor(f: &mut Frame, area: Rect, app: &App) {
                 }
 
                 vel_spans.push(Span::raw(format!("{:<4}", "·")));
+                prev_was_note = false;
             }
         }
     }
@@ -353,7 +366,10 @@ mod tests {
     }
 
     #[test]
-    fn melodic_slide_shows_connecting_glyph() {
+    fn melodic_slide_shows_connector_between_adjacent_notes() {
+        // Two adjacent notes (step 0, step 1 slide) must render a CONNECTOR bridging
+        // them — a glide tie reaching from the left note into the slide note — not just
+        // a lone `~` marker on the slide cell.
         let mut set = Set::default_set(default_profiles());
         let mut steps: Vec<Option<MelodicNote>> = vec![None; 16];
         steps[0] = Some(MelodicNote {
@@ -376,7 +392,41 @@ mod tests {
         term.draw(|f| render_melodic_editor(f, f.area(), &app)).unwrap();
         let whole: String =
             term.backend().buffer().content().iter().map(|c| c.symbol()).collect();
-        assert!(whole.contains('~'), "slide note must show connecting glyph ~");
+        // The connecting line glyph bridges the two adjacent notes (distinct from `~`).
+        assert!(
+            whole.contains('─'),
+            "adjacent slide must render a connecting line ─ between the notes, got: {whole:?}"
+        );
+        assert!(
+            whole.contains('╴'),
+            "slide note row must lead with a left-joining tie ╴, got: {whole:?}"
+        );
+    }
+
+    #[test]
+    fn melodic_lone_slide_falls_back_to_tilde_marker() {
+        // A slide note with NO preceding note still gets the `~` slide marker (no left
+        // neighbour to connect to).
+        let mut set = Set::default_set(default_profiles());
+        let mut steps: Vec<Option<MelodicNote>> = vec![None; 16];
+        steps[2] = Some(MelodicNote {
+            semi: 2, vel: 1.0, slide: true, len: 1.0, prob: 1.0, ratchet: 1,
+        });
+        set.lanes[1].pattern = Pattern {
+            name: "lone".to_string(),
+            desc: String::new(),
+            length: 16,
+            data: PatternData::Melodic(steps),
+        };
+        let mut app = App::new(set, empty_library());
+        app.focus = 1;
+        app.cur_col = 2;
+        let backend = TestBackend::new(120, 10);
+        let mut term = Terminal::new(backend).unwrap();
+        term.draw(|f| render_melodic_editor(f, f.area(), &app)).unwrap();
+        let whole: String =
+            term.backend().buffer().content().iter().map(|c| c.symbol()).collect();
+        assert!(whole.contains('~'), "lone slide note must show ~ marker, got: {whole:?}");
     }
 
     #[test]

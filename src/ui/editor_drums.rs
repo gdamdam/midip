@@ -31,7 +31,9 @@ fn hit_at<'a>(
 
 /// Combined style when cursor and playhead coincide: keep playhead bg, add cursor modifiers.
 fn combined_cursor_playhead_style() -> Style {
-    cursor_style().bg(playhead_style().bg.unwrap())
+    // Fall back to DarkGray if the theme ever drops the playhead bg, so we never panic.
+    let bg = playhead_style().bg.unwrap_or(ratatui::style::Color::DarkGray);
+    cursor_style().bg(bg)
 }
 
 /// Render the drum editor into `area`.
