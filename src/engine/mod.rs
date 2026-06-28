@@ -73,6 +73,9 @@ pub enum EngineEvent {
         connected: bool,
         port: String,
     },
+    /// Engine-confirmed: Play was received with Link enabled; waiting for the quantized bar
+    /// boundary. The sequencer is NOT yet running — the UI should show an "armed" indicator.
+    Armed,
     /// Engine-confirmed: sequencer has started playing (step 0 on manual; bar boundary on Link).
     Started { at_step: usize },
     /// Engine-confirmed: sequencer has stopped.
@@ -141,6 +144,7 @@ fn apply_command(
                 link.request_start(now, 4.0);
                 st.clock.start(now);
                 st.armed = true;
+                events.push(EngineEvent::Armed);
             } else {
                 // Manual mode: start immediately and confirm.
                 st.seq.play(now);

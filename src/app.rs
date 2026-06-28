@@ -96,6 +96,10 @@ pub struct App {
     pub euclid_rotation: usize, // current euclid rotation for the focused drum voice
 
     pub playing: bool,
+    /// Engine-confirmed: sequencer is actually playing (set by `EngineEvent::Started`).
+    pub engine_playing: bool,
+    /// Engine-confirmed: waiting for Link bar boundary (set by `EngineEvent::Armed`).
+    pub armed: bool,
     pub playhead: usize,
     pub bar: u32,
     pub link_enabled: bool,
@@ -148,6 +152,8 @@ impl App {
             step_scroll: 0,
             euclid_rotation: 0,
             playing: false,
+            engine_playing: false,
+            armed: false,
             playhead: 0,
             bar: 0,
             link_enabled: false,
@@ -588,8 +594,18 @@ impl App {
                     }
                 );
             }
-            // Engine-confirmed transport state — UI integration handled in Task 6.
-            EngineEvent::Started { .. } | EngineEvent::Stopped => {}
+            EngineEvent::Armed => {
+                self.armed = true;
+                self.engine_playing = false;
+            }
+            EngineEvent::Started { .. } => {
+                self.armed = false;
+                self.engine_playing = true;
+            }
+            EngineEvent::Stopped => {
+                self.armed = false;
+                self.engine_playing = false;
+            }
         }
     }
 
@@ -1448,6 +1464,56 @@ mod tests {
         assert!(app.link_enabled);
         assert_eq!(app.link_tempo, 128.0);
         assert_eq!(app.link_peers, 2);
+    }
+
+    #[test]
+    fn engine_started_event_sets_engine_playing_clears_armed() {
+        let mut app = new_app();
+        // Start in armed state to verify Started clears it.
+        app.armed = true;
+        app.engine_playing = false;
+        app.on_engine_event(crate::engine::EngineEvent::Started { at_step: 0 });
+        assert!(
+            app.engine_playing,
+            "engine_playing must be true after Started"
+        );
+        assert!(!app.armed, "armed must be false after Started");
+    }
+
+    #[test]
+    fn engine_armed_event_sets_armed_clears_engine_playing() {
+        let mut app = new_app();
+        app.engine_playing = true;
+        app.on_engine_event(crate::engine::EngineEvent::Armed);
+        assert!(app.armed, "armed must be true after Armed event");
+        assert!(
+            !app.engine_playing,
+            "engine_playing must be false after Armed event"
+        );
+    }
+
+    #[test]
+    fn engine_stopped_event_clears_both_fields() {
+        let mut app = new_app();
+        app.engine_playing = true;
+        app.armed = true;
+        app.on_engine_event(crate::engine::EngineEvent::Stopped);
+        assert!(
+            !app.engine_playing,
+            "engine_playing must be false after Stopped"
+        );
+        assert!(!app.armed, "armed must be false after Stopped");
+    }
+
+    #[test]
+    fn engine_armed_then_started_ends_armed_playing() {
+        let mut app = new_app();
+        app.on_engine_event(crate::engine::EngineEvent::Armed);
+        assert!(app.armed);
+        assert!(!app.engine_playing);
+        app.on_engine_event(crate::engine::EngineEvent::Started { at_step: 0 });
+        assert!(!app.armed, "armed cleared after Started");
+        assert!(app.engine_playing, "engine_playing set after Started");
     }
 
     #[test]
