@@ -133,6 +133,16 @@ pub enum Action {
     /// Delete the user pattern file at `path`. Best-effort removal.
     /// Only ever touches paths under the user `patterns/` dir; vendored library dir is never written.
     DeleteUserPattern(std::path::PathBuf),
+    /// Save current set under a new name with a fresh id. Becomes the new current document.
+    SaveSetAs(String),
+    /// Rename current set: keep id, update name, write new file, remove old file.
+    RenameSet(String),
+    /// Write a copy of the current set with a fresh id and " copy" suffix. Current doc unchanged.
+    DuplicateSet,
+    /// Replace current document with a default empty set. Clears undo/redo.
+    NewSet,
+    /// Delete the set file at `path`. Best-effort removal.
+    DeleteSet(std::path::PathBuf),
     None,
 }
 
@@ -218,6 +228,11 @@ pub struct App {
     /// cleared when EngineEvent::Launched fires for that lane or CancelQueue is applied).
     /// Sized to `set.lanes.len()`.
     pub queued: Vec<Option<String>>,
+
+    // --- M3 Task 6: set management ---
+    /// The on-disk path of the currently-loaded/saved set file, so Rename/Delete can target it.
+    /// None if the set has never been saved or was replaced by NewSet.
+    pub current_set_path: Option<std::path::PathBuf>,
 }
 
 /// Default melodic velocity multiplier when placing a note (1.0 -> MIDI 100).
@@ -274,6 +289,7 @@ impl App {
             mirror_on: false,
             launch_quant: Quant::NextBar,
             queued: vec![None; n],
+            current_set_path: None,
         }
     }
 
@@ -728,6 +744,7 @@ impl App {
                                 .and_then(|s| s.to_str())
                                 .unwrap_or("set")
                                 .to_string();
+                            self.current_set_path = Some(self.set_files[self.set_sel].clone());
                             self.load_set_document(set, stem);
                             self.mode = Mode::Edit;
                             cmds.push(UiCommand::SetSet(self.set.clone()));
@@ -746,7 +763,8 @@ impl App {
                 // Cross-task dependency: `config::data_dir()` is defined in Task 21.
                 let dir = crate::config::data_dir().join("sets");
                 match crate::pattern::store::save_set(&dir, &mut self.set) {
-                    Ok(_path) => {
+                    Ok(path) => {
+                        self.current_set_path = Some(path);
                         self.set_status("Saved");
                         self.dirty = false;
                         // Deliberate save supersedes the recovery snapshot.
@@ -1046,6 +1064,83 @@ impl App {
                 // Best-effort: silently ignore "not found" errors.
                 let _ = std::fs::remove_file(&path);
                 self.set_status("Deleted pattern");
+            }
+            Action::SaveSetAs(name) => {
+                // Give the set a fresh identity so save-as creates a new file rather
+                // than overwriting the source. The current document becomes the new set.
+                let dir = crate::config::data_dir().join("sets");
+                self.set.name = name.clone();
+                self.set.id = crate::persist::Id::nil();
+                self.set.ensure_id();
+                match crate::pattern::store::save_set(&dir, &mut self.set) {
+                    Ok(path) => {
+                        self.current_set_path = Some(path);
+                        self.dirty = false;
+                        self.set_status(format!("Saved as {}", name));
+                    }
+                    Err(e) => self.set_status(format!("Save failed: {}", e)),
+                }
+            }
+            Action::RenameSet(name) => {
+                // Keep the id; only the name (and therefore filename) changes.
+                let dir = crate::config::data_dir().join("sets");
+                let old_path = self.current_set_path.clone();
+                self.set.name = name.clone();
+                match crate::pattern::store::save_set(&dir, &mut self.set) {
+                    Ok(new_path) => {
+                        // Remove the old file if it differs (best-effort).
+                        if let Some(ref op) = old_path {
+                            if op != &new_path {
+                                let _ = std::fs::remove_file(op);
+                            }
+                        }
+                        self.current_set_path = Some(new_path);
+                        self.dirty = false;
+                        self.set_status(format!("Renamed to {}", name));
+                    }
+                    Err(e) => self.set_status(format!("Rename failed: {}", e)),
+                }
+            }
+            Action::DuplicateSet => {
+                // Clone with a fresh id and " copy" suffix; write a new file.
+                // The current document stays unchanged.
+                let dir = crate::config::data_dir().join("sets");
+                let mut clone = self.set.clone();
+                let copy_name = format!("{} copy", clone.name);
+                clone.name = copy_name.clone();
+                clone.id = crate::persist::Id::nil();
+                clone.ensure_id();
+                match crate::pattern::store::save_set(&dir, &mut clone) {
+                    Ok(_) => self.set_status(format!("Duplicated to {}", copy_name)),
+                    Err(e) => self.set_status(format!("Duplicate failed: {}", e)),
+                }
+                // current_set_path and self.set are intentionally untouched.
+            }
+            Action::NewSet => {
+                // Replace the current document with a blank default set.
+                // Clears undo/redo (you cannot undo across documents).
+                // Confirmation when dirty is Task 7 — here just do it unconditionally.
+                let new_set = Set::default_set(crate::devices::profiles::default_profiles());
+                let n = new_set.lanes.len();
+                self.set = new_set;
+                self.undo.clear();
+                self.redo.clear();
+                self.audition = None;
+                self.dirty = false;
+                self.current_set_path = None;
+                self.queued = vec![None; n];
+                self.clamp_cursor();
+                self.set_status("New set");
+                cmds.push(UiCommand::SetSet(self.set.clone()));
+            }
+            Action::DeleteSet(path) => {
+                // Best-effort file removal. If the deleted file is the current document's
+                // backing file, clear current_set_path (the in-memory set is left as-is).
+                let _ = std::fs::remove_file(&path);
+                if self.current_set_path.as_deref() == Some(&path) {
+                    self.current_set_path = None;
+                }
+                self.set_status("Deleted set");
             }
             Action::None => {}
         }
@@ -4152,5 +4247,233 @@ mod tests {
         assert!(!path.exists(), "file must be gone after DeleteUserPattern");
 
         std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    // ── Task 6: Set management ops ───────────────────────────────────────────
+
+    #[test]
+    fn save_set_as_writes_new_id_and_tracks_path() {
+        let tok = unique_token("t6-saveas");
+        let tmp = std::env::temp_dir().join(format!("midip-t6-saveas-{}", tok));
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let mut app = new_app();
+        // Override data_dir is not possible cleanly, so we call the action and
+        // verify using the stored current_set_path plus direct store access.
+        // We need the sets dir to be writable; use a tmp dir per task instructions:
+        // "sets dir resolves under target/ in test binaries" — the action uses
+        // config::data_dir().join("sets"), so we verify via current_set_path.
+
+        let original_id = app.set.id.clone(); // nil before first save
+
+        // SaveSetAs("mine-<tok>") gives a fresh id and new name.
+        let name = format!("t6mine{}", tok);
+        app.apply(Action::SaveSetAs(name.clone()));
+
+        // Name was updated.
+        assert_eq!(app.set.name, name);
+        // Id was freshly minted (different from nil).
+        assert!(!app.set.id.is_nil(), "id must be non-nil after SaveSetAs");
+        // If original was nil, it must now differ; always true for nil.
+        assert_ne!(app.set.id, original_id.clone());
+        // current_set_path must be tracked.
+        assert!(
+            app.current_set_path.is_some(),
+            "current_set_path must be Some after SaveSetAs"
+        );
+        // File must exist on disk.
+        let path = app.current_set_path.as_ref().unwrap();
+        assert!(path.exists(), "saved file must exist on disk");
+        // dirty must be false.
+        assert!(!app.dirty, "dirty must be false after SaveSetAs");
+        // Status must mention "Saved as".
+        assert!(
+            app.status.contains("Saved as"),
+            "status must say 'Saved as' but was: {}",
+            app.status
+        );
+
+        // Cleanup.
+        std::fs::remove_file(path).ok();
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn rename_set_keeps_id_changes_file_removes_old() {
+        let tok = unique_token("t6-rename");
+
+        let mut app = new_app();
+        // First, do a SaveSetAs to get a real file and current_set_path.
+        let first_name = format!("t6renold{}", tok);
+        app.apply(Action::SaveSetAs(first_name.clone()));
+        let old_path = app
+            .current_set_path
+            .clone()
+            .expect("must have a path after SaveSetAs");
+        assert!(old_path.exists(), "old file must exist before rename");
+        let original_id = app.set.id.clone();
+
+        // Now rename.
+        let new_name = format!("t6rennew{}", tok);
+        app.apply(Action::RenameSet(new_name.clone()));
+
+        // Id must be unchanged.
+        assert_eq!(
+            app.set.id, original_id,
+            "RenameSet must preserve the set id"
+        );
+        // Name updated.
+        assert_eq!(app.set.name, new_name);
+        // Old file is gone.
+        assert!(
+            !old_path.exists(),
+            "old file must be removed after RenameSet"
+        );
+        // New file exists.
+        let new_path = app
+            .current_set_path
+            .as_ref()
+            .expect("current_set_path must be Some after rename");
+        assert!(new_path.exists(), "new file must exist after RenameSet");
+        assert_ne!(new_path, &old_path, "new path must differ from old path");
+        // dirty cleared.
+        assert!(!app.dirty, "dirty must be false after RenameSet");
+        // Status mentions "Renamed to".
+        assert!(
+            app.status.contains("Renamed to"),
+            "status must say 'Renamed to' but was: {}",
+            app.status
+        );
+
+        // Cleanup.
+        std::fs::remove_file(new_path).ok();
+    }
+
+    #[test]
+    fn duplicate_set_creates_copy_leaves_current() {
+        let tok = unique_token("t6-dup");
+
+        let mut app = new_app();
+        // Save to get a stable id for the current set.
+        let orig_name = format!("t6dupbase{}", tok);
+        app.apply(Action::SaveSetAs(orig_name.clone()));
+        let orig_path = app.current_set_path.clone().expect("must have path");
+        let orig_id = app.set.id.clone();
+        let orig_name_after = app.set.name.clone();
+
+        // Duplicate.
+        app.apply(Action::DuplicateSet);
+
+        // Current set unchanged.
+        assert_eq!(
+            app.set.id, orig_id,
+            "DuplicateSet must not change current set id"
+        );
+        assert_eq!(
+            app.set.name, orig_name_after,
+            "DuplicateSet must not change current set name"
+        );
+        assert_eq!(
+            app.current_set_path,
+            Some(orig_path.clone()),
+            "current_set_path must not change after DuplicateSet"
+        );
+
+        // A copy file should exist with " copy" suffix in the name.
+        let sets_dir = orig_path.parent().expect("path must have parent");
+        let files = crate::pattern::store::list_sets(sets_dir).unwrap_or_default();
+        let copy_file = files.iter().find(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .map(|n| n.contains("copy"))
+                .unwrap_or(false)
+        });
+        assert!(
+            copy_file.is_some(),
+            "a 'copy' file must exist after DuplicateSet"
+        );
+
+        // The copy must have a different id from the original.
+        let copy = crate::pattern::store::load_set(copy_file.unwrap()).unwrap();
+        assert_ne!(copy.id, orig_id, "duplicate must have a fresh id");
+        assert!(
+            copy.name.contains("copy"),
+            "duplicate name must contain 'copy' but was: {}",
+            copy.name
+        );
+
+        // Status mentions "Duplicated".
+        assert!(
+            app.status.contains("Duplicated"),
+            "status must mention 'Duplicated' but was: {}",
+            app.status
+        );
+
+        // Cleanup.
+        std::fs::remove_file(&orig_path).ok();
+        if let Some(cp) = copy_file {
+            std::fs::remove_file(cp).ok();
+        }
+    }
+
+    #[test]
+    fn new_set_resets_and_clears_undo() {
+        let mut app = new_app();
+        // Make an edit to push something onto the undo stack.
+        app.apply(Action::ToggleStep);
+        assert!(!app.undo.is_empty(), "undo must be non-empty after edit");
+        // Track a path.
+        app.apply(Action::SaveSetAs(format!(
+            "t6newbefore{}",
+            unique_token("t6-new")
+        )));
+        assert!(app.current_set_path.is_some());
+
+        let cmds = app.apply(Action::NewSet);
+
+        // Undo/redo cleared.
+        assert!(app.undo.is_empty(), "undo must be empty after NewSet");
+        assert!(app.redo.is_empty(), "redo must be empty after NewSet");
+        // dirty cleared.
+        assert!(!app.dirty, "dirty must be false after NewSet");
+        // current_set_path cleared.
+        assert!(
+            app.current_set_path.is_none(),
+            "current_set_path must be None after NewSet"
+        );
+        // Must emit SetSet.
+        assert!(
+            cmds.iter().any(|c| matches!(c, UiCommand::SetSet(_))),
+            "NewSet must emit SetSet"
+        );
+    }
+
+    #[test]
+    fn delete_set_removes_file() {
+        let tok = unique_token("t6-delset");
+
+        let mut app = new_app();
+        // Save to get a file.
+        app.apply(Action::SaveSetAs(format!("t6delsetfile{}", tok)));
+        let path = app
+            .current_set_path
+            .clone()
+            .expect("must have path after save");
+        assert!(path.exists(), "file must exist before delete");
+
+        app.apply(Action::DeleteSet(path.clone()));
+
+        assert!(!path.exists(), "file must be gone after DeleteSet");
+        // current_set_path cleared when deleted path matches.
+        assert!(
+            app.current_set_path.is_none(),
+            "current_set_path must be None after deleting current file"
+        );
+        // Status mentions "Deleted".
+        assert!(
+            app.status.contains("Deleted"),
+            "status must say 'Deleted' but was: {}",
+            app.status
+        );
     }
 }
