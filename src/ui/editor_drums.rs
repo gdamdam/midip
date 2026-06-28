@@ -151,7 +151,7 @@ pub fn render_drum_editor(f: &mut Frame, area: Rect, app: &App) {
         .unwrap_or("?");
     let detail = match hit_at(steps, app.cur_col, focused_note) {
         Some(h) => format!(
-            "Step {} · {} · Velocity {} [-/+] · prob/Probability {}% [p/P] · ratchet/Ratchet x{} [y/Y]",
+            "Step {} · {} · Velocity {} [-/+] · Probability {}% [p/P] · Ratchet x{} [y/Y]",
             app.cur_col + 1,
             drum_label(&lane.profile, focused_note),
             h.vel,
@@ -228,8 +228,8 @@ mod tests {
         assert!(bd_row.contains('█'), "expected hit glyph on BD row: {bd_row:?}");
 
         assert!(whole.contains("E("), "expected euclid indicator E(...), got: {whole:?}");
-        assert!(whole.contains("prob"), "expected cursor detail prob, got: {whole:?}");
-        assert!(whole.contains("ratchet"), "expected cursor detail ratchet, got: {whole:?}");
+        assert!(whole.contains("Probability"), "expected cursor detail Probability, got: {whole:?}");
+        assert!(whole.contains("Ratchet"), "expected cursor detail Ratchet, got: {whole:?}");
     }
 
     #[test]

@@ -143,9 +143,9 @@ pub fn render_melodic_editor(f: &mut Frame, area: Rect, app: &App) {
     let detail = match steps.get(app.cur_col).and_then(|s| s.as_ref()) {
         Some(note) => {
             let pitch = resolve_melodic_pitch(root, note.semi, lane.transpose, lane.octave);
-            let slide_indicator = if note.slide { "~slide" } else { "" };
+            let slide_indicator = if note.slide { " · ~slide" } else { "" };
             format!(
-                "Step {} · {} · vel {:.2} · len {:.1} · {} · prob {}% · ratchet x{}",
+                "Step {} · {} · vel {:.2} · len {:.1}{} · Probability {}% [p/P] · Ratchet x{} [y/Y]",
                 app.cur_col + 1,
                 note_name(pitch),
                 note.vel,
@@ -247,8 +247,8 @@ mod tests {
             term.backend().buffer().content().iter().map(|c| c.symbol()).collect();
         assert!(whole.contains("A2"), "expected note name A2, got: {whole:?}");
         assert!(whole.contains('~'), "expected slide marker ~, got: {whole:?}");
-        assert!(whole.contains("prob"), "expected detail prob, got: {whole:?}");
-        assert!(whole.contains("ratchet"), "expected detail ratchet, got: {whole:?}");
+        assert!(whole.contains("Probability"), "expected detail Probability, got: {whole:?}");
+        assert!(whole.contains("Ratchet"), "expected detail Ratchet, got: {whole:?}");
     }
 
     #[test]
@@ -400,7 +400,7 @@ mod tests {
         term.draw(|f| render_melodic_editor(f, f.area(), &app)).unwrap();
         let whole: String =
             term.backend().buffer().content().iter().map(|c| c.symbol()).collect();
-        assert!(whole.contains("prob"), "detail must contain 'prob'");
-        assert!(whole.contains("ratchet"), "detail must contain 'ratchet'");
+        assert!(whole.contains("Probability"), "detail must contain 'Probability'");
+        assert!(whole.contains("Ratchet"), "detail must contain 'Ratchet'");
     }
 }
