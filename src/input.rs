@@ -55,6 +55,8 @@ pub fn key_to_action(key: KeyEvent, mode: Mode, kind: LaneKind) -> Action {
             KeyCode::Down => return Action::LibNav(0, 1),  // move down in focused list
             KeyCode::Enter => return Action::LibLoad,
             KeyCode::Char('a') => return Action::Audition, // cue/audition selected pattern
+            KeyCode::Char('b') => return Action::ToggleLaunchQuant, // toggle bar/beat quant
+            KeyCode::Char('C') => return Action::CancelQueue, // cancel pending queued launch
             KeyCode::Char('l') | KeyCode::Esc => return Action::CloseLibrary,
             _ => {}
         },
@@ -164,6 +166,8 @@ pub fn key_to_action(key: KeyEvent, mode: Mode, kind: LaneKind) -> Action {
                     'w' => return Action::OpenRouteEditor,
                     's' => return Action::Save,
                     'q' => return Action::Quit,
+                    'b' => return Action::ToggleLaunchQuant, // toggle next-bar / next-beat launch quant
+                    'C' => return Action::CancelQueue,       // cancel pending queued launch
                     _ => {}
                 }
 
@@ -810,6 +814,61 @@ mod tests {
             key_to_action(shift_m, Mode::Edit, LaneKind::Drums),
             Action::None,
             "'M' must be bound (was unbound/None before this task)"
+        );
+    }
+
+    // ── M3 Task 2: launch quant toggle and cancel queue keys ─────────────────
+
+    #[test]
+    fn b_key_maps_to_toggle_launch_quant_in_edit_mode() {
+        for kind in [LaneKind::Drums, LaneKind::Melodic] {
+            assert_eq!(
+                key_to_action(k(KeyCode::Char('b')), Mode::Edit, kind),
+                Action::ToggleLaunchQuant,
+                "'b' in Edit mode must be ToggleLaunchQuant"
+            );
+        }
+    }
+
+    #[test]
+    fn shift_c_maps_to_cancel_queue_in_edit_mode() {
+        let shift_c = KeyEvent::new(KeyCode::Char('C'), KeyModifiers::SHIFT);
+        for kind in [LaneKind::Drums, LaneKind::Melodic] {
+            assert_eq!(
+                key_to_action(shift_c, Mode::Edit, kind),
+                Action::CancelQueue,
+                "'C' (Shift+C) in Edit mode must be CancelQueue"
+            );
+        }
+    }
+
+    #[test]
+    fn b_key_maps_to_toggle_launch_quant_in_library_mode() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('b')), Mode::Library, LaneKind::Drums),
+            Action::ToggleLaunchQuant,
+            "'b' in Library mode must be ToggleLaunchQuant"
+        );
+    }
+
+    #[test]
+    fn shift_c_maps_to_cancel_queue_in_library_mode() {
+        let shift_c = KeyEvent::new(KeyCode::Char('C'), KeyModifiers::SHIFT);
+        assert_eq!(
+            key_to_action(shift_c, Mode::Library, LaneKind::Drums),
+            Action::CancelQueue,
+            "'C' (Shift+C) in Library mode must be CancelQueue"
+        );
+    }
+
+    #[test]
+    fn b_was_unbound_before_m3_task2() {
+        // Documents that 'b' was previously Action::None in Edit mode.
+        // The actual assertion confirms it is now bound (not None):
+        assert_ne!(
+            key_to_action(k(KeyCode::Char('b')), Mode::Edit, LaneKind::Drums),
+            Action::None,
+            "'b' must be bound to ToggleLaunchQuant (was None before M3-T2)"
         );
     }
 }

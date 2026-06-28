@@ -64,7 +64,17 @@ pub fn render_help(f: &mut Frame, area: Rect) {
         row("[m]            mute lane   [S]  solo lane   [M]  mirror output"),
         row("[l]            library   [o]  open set   [s]  save"),
         row("[w]            route editor (port / channel / clock-out per lane)"),
+        row("[b]            toggle launch quant: next bar / next beat"),
+        row("[C]            cancel pending queued launch on focused lane"),
         row("[?]            help   [q]  quit (twice while playing)"),
+        blank(),
+        // ── Library ───────────────────────────────────────────────────
+        header("Library  [l] to open"),
+        row("[enter]        commit pattern (queues at next bar/beat when playing)"),
+        row("[a]            audition (preview without committing)"),
+        row("[b]            toggle launch quant: next bar / next beat"),
+        row("[C]            cancel queued launch"),
+        row("[esc / l]      close library"),
         blank(),
         // ── Route editor ──────────────────────────────────────────────
         header("Route Editor  [w] to open"),

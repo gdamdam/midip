@@ -77,10 +77,18 @@ fn lane_line(idx: usize, app: &App) -> Line<'static> {
     }
 
     let label = short_label(lane.profile.id);
+
+    // If a launch is queued for this lane, show the queued name; otherwise show the
+    // active (committed) pattern name.
+    let queued_name: Option<String> = app.queued.get(idx).and_then(|q| q.clone());
+    let pat_display = match &queued_name {
+        Some(_) => lane.pattern.name.clone(),
+        None => lane.pattern.name.clone(),
+    };
     let prefix = format!(
         "{marker}{n} {label:<5} {pat:<12} {conn}  {m_glyph}  ",
         n = idx + 1,
-        pat = lane.pattern.name,
+        pat = pat_display,
     );
 
     // S glyph gets a brighter accent when solo is active.
@@ -108,6 +116,19 @@ fn lane_line(idx: usize, app: &App) -> Line<'static> {
         spans.push(Span::styled(ch.to_string(), cell_style));
     }
     spans.push(Span::styled("]".to_string(), base_style));
+
+    // QUEUED marker: shown after the activity strip when a launch is pending.
+    // Distinct amber style so it reads clearly as "not yet active".
+    if let Some(name) = queued_name {
+        let queued_style = Style::default()
+            .fg(Color::Rgb(0xF5, 0xB0, 0x41))
+            .add_modifier(Modifier::BOLD);
+        spans.push(Span::styled(
+            format!("  QUEUED\u{27f6}{}", name),
+            queued_style,
+        ));
+    }
+
     Line::from(spans)
 }
 
@@ -329,6 +350,42 @@ mod tests {
         assert!(
             synth_row.contains('○'),
             "disconnected should show ○: {synth_row:?}"
+        );
+    }
+
+    // --- M3 Task 2: QUEUED marker ----------------------------------------
+
+    #[test]
+    fn queued_lane_shows_queued_marker_with_name() {
+        let mut app = make_app();
+        // Simulate a pending queued launch on lane 0 (DRUM).
+        app.queued[0] = Some("queued-pat".to_string());
+
+        let (term, area) = render(&app, 100, 5);
+        let buf = term.backend().buffer();
+        let rows = all_rows(buf, area);
+        let drum_row = rows.iter().find(|r| r.contains("DRUM")).expect("DRUM row");
+        assert!(
+            drum_row.contains("QUEUED"),
+            "lane with queued should show QUEUED marker: {drum_row:?}"
+        );
+        assert!(
+            drum_row.contains("queued-pat"),
+            "QUEUED marker should include the pattern name: {drum_row:?}"
+        );
+    }
+
+    #[test]
+    fn non_queued_lane_does_not_show_queued_marker() {
+        let app = make_app();
+        // No queued entries (all None by default).
+        let (term, area) = render(&app, 100, 5);
+        let buf = term.backend().buffer();
+        let rows = all_rows(buf, area);
+        let whole: String = rows.join("");
+        assert!(
+            !whole.contains("QUEUED"),
+            "no lane should show QUEUED when nothing is queued: {whole:?}"
         );
     }
 

@@ -5,6 +5,7 @@
 //! `LoadPattern`). Undo/redo snapshot the whole `Set`.
 
 use crate::devices::profiles;
+use crate::engine::scheduler::Quant;
 use crate::engine::{EngineEvent, UiCommand};
 use crate::pattern::euclid;
 use crate::pattern::library::{LibRole, Library};
@@ -85,7 +86,10 @@ pub enum Action {
     AdjustPatternLen(i8), // resize the focused lane's pattern length
     AdjustProb(i8),  // per-step probability on the cursor cell (±0.1 per unit)
     AdjustRatchet(i8), // per-step ratchet count on the cursor cell (clamped 1..=8)
-    Euclid { dp: i8, dr: i8 }, // drums: dp = ±pulses for focused voice, dr = ±rotation
+    Euclid {
+        dp: i8,
+        dr: i8,
+    }, // drums: dp = ±pulses for focused voice, dr = ±rotation
     Panic,           // all-notes-off; no undo snapshot, no Set mutation
     OpenLibrary,
     CloseLibrary,
@@ -110,6 +114,10 @@ pub enum Action {
     RecoveryDiscard,
     RecoveryOpenSaved,
     ToggleMirror,
+    /// Flip launch quant between NextBar and NextBeat.
+    ToggleLaunchQuant,
+    /// Cancel any pending queued launch on the focused lane.
+    CancelQueue,
     None,
 }
 
@@ -187,6 +195,14 @@ pub struct App {
     /// Available MIDI output port names, refreshed when the editor opens.
     pub route_editor_ports: Vec<String>,
     pub mirror_on: bool,
+
+    // --- M3 Task 2: clip-launcher queue ---
+    /// Quantization grid for the next library-load-while-playing. Default: NextBar.
+    pub launch_quant: Quant,
+    /// Per-lane queued pattern name (set when a QueuePattern is emitted while playing;
+    /// cleared when EngineEvent::Launched fires for that lane or CancelQueue is applied).
+    /// Sized to `set.lanes.len()`.
+    pub queued: Vec<Option<String>>,
 }
 
 /// Default melodic velocity multiplier when placing a note (1.0 -> MIDI 100).
@@ -241,6 +257,8 @@ impl App {
             route_editor_field: RouteField::Port,
             route_editor_ports: Vec::new(),
             mirror_on: false,
+            launch_quant: Quant::NextBar,
+            queued: vec![None; n],
         }
     }
 
@@ -598,12 +616,28 @@ impl App {
                     // true pre-audition pattern). snapshot() also marks dirty.
                     self.snapshot();
                     self.audition = None;
+                    // Commit the pattern to the document unconditionally: the saved doc
+                    // always reflects the intended pattern. Whether it launches now or at a
+                    // boundary is an engine concern only.
                     self.set.lanes[self.focus].pattern = pat.clone();
-                    self.set_status(format!("Loaded {}", name));
-                    cmds.push(UiCommand::LoadPattern {
-                        lane: self.focus,
-                        pattern: pat,
-                    });
+                    if self.engine_playing {
+                        // Playing: queue to the next launch boundary (clip-launcher style).
+                        let quant = self.launch_quant;
+                        self.queued[self.focus] = Some(name.clone());
+                        self.set_status(format!("Queued {} ({})", name, quant_label(quant)));
+                        cmds.push(UiCommand::QueuePattern {
+                            lane: self.focus,
+                            pattern: pat,
+                            quant,
+                        });
+                    } else {
+                        // Stopped: load immediately (existing behavior).
+                        self.set_status(format!("Loaded {}", name));
+                        cmds.push(UiCommand::LoadPattern {
+                            lane: self.focus,
+                            pattern: pat,
+                        });
+                    }
                     self.mode = Mode::Edit;
                 }
             }
@@ -859,6 +893,21 @@ impl App {
                 self.set_sel = 0;
                 self.mode = Mode::SetBrowser;
             }
+            Action::ToggleLaunchQuant => {
+                self.launch_quant = match self.launch_quant {
+                    Quant::NextBar => Quant::NextBeat,
+                    Quant::NextBeat => Quant::NextBar,
+                };
+                self.set_status(format!("Launch: {}", quant_label(self.launch_quant)));
+            }
+            Action::CancelQueue => {
+                let lane = self.focus;
+                if self.queued[lane].is_some() {
+                    self.queued[lane] = None;
+                    self.set_status(format!("Queue cancelled (lane {})", lane + 1));
+                    cmds.push(UiCommand::CancelQueue { lane });
+                }
+            }
             Action::ToggleMirror => {
                 self.mirror_on = !self.mirror_on;
                 self.set_status(if self.mirror_on {
@@ -948,10 +997,13 @@ impl App {
                 self.set.bpm = bpm;
                 self.set_status(format!("Tap: {} BPM", bpm.round() as u32));
             }
-            // M3 Task 1: a queued per-lane launch fired in the engine. The ACTIVE/QUEUED
-            // display handling lands in Task 2; for now this is a no-op so the match stays
-            // exhaustive.
-            EngineEvent::Launched { .. } => {}
+            // M3 Task 2: a queued per-lane launch fired. Clear the QUEUED display for
+            // that lane so it flips back to ACTIVE (the engine now plays the queued pattern).
+            EngineEvent::Launched { lane, .. } => {
+                if let Some(slot) = self.queued.get_mut(lane) {
+                    *slot = None;
+                }
+            }
         }
     }
 
@@ -1059,11 +1111,13 @@ impl App {
     /// discarded so the loss is not silent. (Full confirm-prompt is deferred to M3.)
     fn load_set_document(&mut self, set: Set, name: String) {
         let had_unsaved = self.dirty;
+        let n = set.lanes.len();
         self.set = set;
         self.undo.clear();
         self.redo.clear();
         self.audition = None;
         self.dirty = false;
+        self.queued = vec![None; n];
         self.clamp_cursor();
         self.set_status(if had_unsaved {
             format!("Loaded {} (unsaved changes discarded)", name)
@@ -1531,6 +1585,14 @@ impl App {
         let map = self.current_genre_map();
         map.get_index(self.lib_genre)
             .and_then(|(_, v)| v.get(self.lib_pattern))
+    }
+}
+
+/// Human-readable label for a `Quant` value, used in status toasts and UI.
+fn quant_label(q: Quant) -> &'static str {
+    match q {
+        Quant::NextBar => "next bar",
+        Quant::NextBeat => "next beat",
     }
 }
 
@@ -3488,6 +3550,152 @@ mod tests {
         assert!(
             cmds2.contains(&crate::engine::UiCommand::SetMirror(false)),
             "must emit SetMirror(false)"
+        );
+    }
+
+    // ── M3 Task 2: load-while-playing queues; ACTIVE/QUEUED display ──────────
+
+    #[test]
+    fn libload_while_playing_queues_not_loads() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(0)); // drums; lib_role -> Drums
+        app.apply(Action::OpenLibrary);
+        // Simulate engine confirmed playing.
+        app.engine_playing = true;
+        let cmds = app.apply(Action::LibLoad);
+        // Must emit QueuePattern, NOT LoadPattern.
+        assert!(
+            cmds.iter()
+                .any(|c| matches!(c, UiCommand::QueuePattern { lane: 0, .. })),
+            "while playing, LibLoad must emit QueuePattern; got: {:?}",
+            cmds
+        );
+        assert!(
+            !cmds
+                .iter()
+                .any(|c| matches!(c, UiCommand::LoadPattern { .. })),
+            "while playing, LibLoad must NOT emit LoadPattern; got: {:?}",
+            cmds
+        );
+        // queued[0] must be set to the pattern name.
+        assert!(
+            app.queued[0].is_some(),
+            "queued[0] must be Some after LibLoad while playing"
+        );
+        assert_eq!(
+            app.queued[0].as_deref(),
+            Some("lib-drum"),
+            "queued[0] must contain the loaded pattern name"
+        );
+    }
+
+    #[test]
+    fn libload_while_stopped_loads_immediately() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(0));
+        app.apply(Action::OpenLibrary);
+        app.engine_playing = false;
+        let cmds = app.apply(Action::LibLoad);
+        // Must emit LoadPattern (existing behavior).
+        assert!(
+            cmds.iter()
+                .any(|c| matches!(c, UiCommand::LoadPattern { lane: 0, .. })),
+            "while stopped, LibLoad must emit LoadPattern; got: {:?}",
+            cmds
+        );
+        assert!(
+            !cmds
+                .iter()
+                .any(|c| matches!(c, UiCommand::QueuePattern { .. })),
+            "while stopped, LibLoad must NOT emit QueuePattern; got: {:?}",
+            cmds
+        );
+        // queued[0] must remain None.
+        assert!(
+            app.queued[0].is_none(),
+            "queued[0] must be None after immediate load while stopped"
+        );
+    }
+
+    #[test]
+    fn launched_event_clears_queued_display() {
+        let mut app = new_app();
+        // Manually set queued state as if a queue was pending on lane 1.
+        app.queued[1] = Some("lib-bass".to_string());
+        assert!(app.queued[1].is_some());
+        // Fire the Launched event for lane 1.
+        app.on_engine_event(crate::engine::EngineEvent::Launched { lane: 1, step: 16 });
+        assert!(
+            app.queued[1].is_none(),
+            "Launched event must clear queued[1]"
+        );
+    }
+
+    #[test]
+    fn cancel_queue_clears_display_and_emits_command() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(1));
+        app.queued[1] = Some("lib-bass".to_string());
+        let cmds = app.apply(Action::CancelQueue);
+        assert!(
+            app.queued[1].is_none(),
+            "CancelQueue must clear queued[focus]"
+        );
+        assert!(
+            cmds.iter()
+                .any(|c| matches!(c, UiCommand::CancelQueue { lane: 1 })),
+            "CancelQueue must emit UiCommand::CancelQueue{{lane:1}}; got: {:?}",
+            cmds
+        );
+    }
+
+    #[test]
+    fn toggle_launch_quant_flips_nextbar_nextbeat_nextbar() {
+        let mut app = new_app();
+        assert_eq!(app.launch_quant, Quant::NextBar, "default is NextBar");
+        app.apply(Action::ToggleLaunchQuant);
+        assert_eq!(
+            app.launch_quant,
+            Quant::NextBeat,
+            "first toggle -> NextBeat"
+        );
+        app.apply(Action::ToggleLaunchQuant);
+        assert_eq!(app.launch_quant, Quant::NextBar, "second toggle -> NextBar");
+    }
+
+    #[test]
+    fn libload_while_playing_queues_with_nextbeat_when_set() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(0));
+        app.apply(Action::OpenLibrary);
+        app.engine_playing = true;
+        app.launch_quant = Quant::NextBeat;
+        let cmds = app.apply(Action::LibLoad);
+        assert!(
+            cmds.iter().any(|c| matches!(
+                c,
+                UiCommand::QueuePattern {
+                    lane: 0,
+                    quant: Quant::NextBeat,
+                    ..
+                }
+            )),
+            "QueuePattern must carry the current launch_quant; got: {:?}",
+            cmds
+        );
+    }
+
+    #[test]
+    fn libload_while_playing_commits_pattern_to_doc() {
+        // The doc pattern is updated immediately even when queuing (so saved file matches).
+        let mut app = new_app();
+        app.apply(Action::FocusLane(0));
+        app.apply(Action::OpenLibrary);
+        app.engine_playing = true;
+        app.apply(Action::LibLoad);
+        assert_eq!(
+            app.set.lanes[0].pattern.name, "lib-drum",
+            "doc pattern must be updated even when queued (not stopped)"
         );
     }
 }
