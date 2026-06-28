@@ -588,6 +588,8 @@ impl App {
                     }
                 );
             }
+            // Engine-confirmed transport state — UI integration handled in Task 6.
+            EngineEvent::Started { .. } | EngineEvent::Stopped => {}
         }
     }
 

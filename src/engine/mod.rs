@@ -73,6 +73,10 @@ pub enum EngineEvent {
         connected: bool,
         port: String,
     },
+    /// Engine-confirmed: sequencer has started playing (step 0 on manual; bar boundary on Link).
+    Started { at_step: usize },
+    /// Engine-confirmed: sequencer has stopped.
+    Stopped,
 }
 
 /// Handle returned by `spawn_engine`.
@@ -94,6 +98,10 @@ struct EngineState {
     clock: ClockGen,
     transport: Transport,
     link_enabled: bool,
+    /// True after a Link-gated Play: waiting for the quantized bar boundary before
+    /// actually starting the sequencer. While armed, `seq.playing` is false so no
+    /// notes escape.
+    armed: bool,
     last_step: Option<usize>,
     bar: u32,
     tick_count: u64,
@@ -110,6 +118,7 @@ impl EngineState {
             clock: ClockGen::new(),
             transport,
             link_enabled: false,
+            armed: false,
             last_step: None,
             bar: 0,
             tick_count: 0,
@@ -125,18 +134,28 @@ fn apply_command(
     now: u64,
     link: &mut dyn LinkClock,
     sink: &mut dyn MidiSink,
+    events: &mut Vec<EngineEvent>,
 ) -> bool {
     match cmd {
         UiCommand::Play => {
-            st.seq.play(now);
-            st.clock.start(now); // begin Clock ticks only — no MIDI Start (would run the device's own sequencer)
             if link.enabled() {
-                link.request_start(now, 4.0); // quantized start: align to next bar
+                // Link mode: defer sequencer start to the quantized bar boundary.
+                // While armed, seq.playing is false so no notes escape.
+                link.request_start(now, 4.0);
+                st.clock.start(now);
+                st.armed = true;
+            } else {
+                // Manual mode: start immediately and confirm.
+                st.seq.play(now);
+                st.clock.start(now); // begin Clock ticks only — no MIDI Start (would run the device's own sequencer)
+                events.push(EngineEvent::Started { at_step: 0 });
             }
         }
         UiCommand::Stop => {
             st.seq.stop(now, sink); // releases sounding notes (all-notes-off)
             st.clock.stop(); // cease Clock ticks; no MIDI Stop sent
+            st.armed = false;
+            events.push(EngineEvent::Stopped);
         }
         UiCommand::SetBpm(bpm) => {
             st.transport.manual_bpm = bpm;
@@ -159,6 +178,13 @@ fn apply_command(
             } else {
                 TempoSource::Manual(st.transport.manual_bpm)
             };
+            // If we were armed waiting for a Link boundary and Link is turned off,
+            // start the sequencer immediately.
+            if !on && st.armed {
+                st.seq.play(now);
+                st.armed = false;
+                events.push(EngineEvent::Started { at_step: 0 });
+            }
         }
         UiCommand::LoadPattern { lane, pattern } => {
             if let Some(existing) = st.seq.lane(lane) {
@@ -250,7 +276,7 @@ fn step_engine(
     while i < pending.len() {
         if pending[i].0 <= now {
             let (_, cmd) = pending.remove(i);
-            if apply_command(st, cmd, now, link, sink) {
+            if apply_command(st, cmd, now, link, sink, events) {
                 quit = true;
             }
         } else {
@@ -271,6 +297,14 @@ fn step_engine(
         None
     };
     let bpm = st.transport.effective_bpm(link_tempo);
+
+    // Link-gated start: once the quantized bar boundary is reached (beat >= 0),
+    // fire the sequencer. While armed, seq.playing is false so tick emits nothing.
+    if st.armed && st.link_enabled && link.beat_at(now, 4.0) >= 0.0 {
+        st.seq.play(now);
+        st.armed = false;
+        events.push(EngineEvent::Started { at_step: 0 });
+    }
 
     if st.link_enabled {
         let beat = link.beat_at(now, 4.0);
@@ -827,5 +861,146 @@ mod tests {
             enabled_ev,
             "expected LinkStatus{{enabled:true}} after ToggleLink"
         );
+    }
+
+    /// Bug 1b: with Link enabled and beat < 0 (pre-boundary countdown), Play must NOT
+    /// start the sequencer immediately — no NoteOn and no Started event.
+    #[test]
+    fn link_play_defers_notes_until_boundary() {
+        use crate::midi::MidiMessage;
+
+        let set = default_set();
+        let mut link = FakeLink::new();
+        link.set_enabled(true);
+        link.set_beat(-1.0); // still counting down; boundary not yet reached
+
+        let mut sink = RecordingSink::new();
+        let evs = run_engine_headless(
+            set,
+            &mut link,
+            &mut sink,
+            vec![(0, UiCommand::ToggleLink(true)), (0, UiCommand::Play)],
+            5_000,
+            1_000,
+        );
+
+        assert!(
+            !sink
+                .events
+                .iter()
+                .any(|(_, m)| matches!(m, MidiMessage::NoteOn { .. })),
+            "no NoteOn should fire before the Link bar boundary; got: {:?}",
+            sink.events
+        );
+        assert!(
+            !evs.iter().any(|e| matches!(e, EngineEvent::Started { .. })),
+            "no Started event should be emitted before boundary; got: {:?}",
+            evs
+        );
+    }
+
+    /// Regression: without Link, Play must start the sequencer immediately and emit Started.
+    #[test]
+    fn manual_play_starts_immediately() {
+        use crate::midi::MidiMessage;
+        use crate::pattern::model::{DrumHit, Pattern, PatternData};
+
+        let mut set = default_set();
+        set.bpm = 120.0; // step_dur = 125_000 µs
+
+        // Add a drum hit on lane 0 step 0 so a NoteOn fires immediately.
+        let mut steps: Vec<Vec<DrumHit>> = vec![Vec::new(); 16];
+        steps[0].push(DrumHit {
+            note: 36,
+            vel: 100,
+            prob: 1.0,
+            ratchet: 1,
+        });
+        set.lanes[0].pattern = Pattern {
+            name: "test".into(),
+            desc: String::new(),
+            length: 16,
+            data: PatternData::Drums(steps),
+        };
+
+        let mut link = FakeLink::new(); // link disabled
+        let mut sink = RecordingSink::new();
+        let evs = run_engine_headless(
+            set,
+            &mut link,
+            &mut sink,
+            vec![(0, UiCommand::Play)],
+            500,
+            100,
+        );
+
+        assert!(
+            sink.events
+                .iter()
+                .any(|(_, m)| matches!(m, MidiMessage::NoteOn { .. })),
+            "NoteOn must fire at t=0 in manual (no-Link) mode; got: {:?}",
+            sink.events
+        );
+        assert!(
+            evs.iter()
+                .any(|e| matches!(e, EngineEvent::Started { at_step: 0 })),
+            "Started{{at_step:0}} must be emitted immediately in manual mode; got: {:?}",
+            evs
+        );
+    }
+
+    /// Link-gated start fires at the boundary: armed at beat=-1, boundary crossed at beat=0.
+    /// Tests step_engine directly since FakeLink's beat is static across run_engine_headless.
+    #[test]
+    fn link_play_starts_at_boundary() {
+        let set = default_set();
+        let mut st = EngineState::new(set);
+        let mut link = FakeLink::new();
+        link.set_enabled(true);
+        link.set_beat(-1.0); // pre-boundary
+
+        let mut sink = crate::midi::ports::RecordingSink::new();
+        let mut events: Vec<EngineEvent> = Vec::new();
+
+        // Arm the engine: send Play command through step_engine
+        let mut pending = vec![(0u64, UiCommand::ToggleLink(true)), (0u64, UiCommand::Play)];
+        step_engine(&mut st, 0, &mut pending, &mut link, &mut sink, &mut events);
+
+        // After arming: no Started yet, sequencer not playing
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, EngineEvent::Started { .. })),
+            "no Started before boundary; got: {:?}",
+            events
+        );
+        assert!(!st.seq.is_playing(), "seq must NOT be playing while armed");
+        assert!(st.armed, "engine must be armed");
+
+        // Now cross the boundary
+        link.set_beat(0.0);
+        events.clear();
+        let mut pending2: Vec<(u64, UiCommand)> = vec![];
+        step_engine(
+            &mut st,
+            1_000,
+            &mut pending2,
+            &mut link,
+            &mut sink,
+            &mut events,
+        );
+
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, EngineEvent::Started { at_step: 0 })),
+            "Started{{at_step:0}} must be emitted when beat >= 0; got: {:?}",
+            events
+        );
+        assert!(
+            st.seq.is_playing(),
+            "sequencer must be playing after boundary"
+        );
+        assert!(!st.armed, "armed must be cleared after boundary");
     }
 }
