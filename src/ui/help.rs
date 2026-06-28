@@ -1,33 +1,73 @@
 //! Keybinding help overlay.
 
 use ratatui::layout::Rect;
-use ratatui::text::Line;
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
+
+fn header(title: &'static str) -> Line<'static> {
+    Line::from(Span::styled(
+        title,
+        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+    ))
+}
+
+fn row(text: &'static str) -> Line<'static> {
+    Line::from(format!("  {text}"))
+}
+
+fn blank() -> Line<'static> {
+    Line::from("")
+}
 
 /// Render the help overlay into `area` (caller clears/positions it).
 pub fn render_help(f: &mut Frame, area: Rect) {
     let lines: Vec<Line> = vec![
-        Line::from("[space]  play / stop"),
-        Line::from("[tab] / [shift+tab]  cycle lane focus (next / prev)"),
-        Line::from("[← →]  move cursor   [↑ ↓]  cursor (drums) / pitch (melodic)"),
-        Line::from("[enter]  toggle step / place note"),
-        Line::from("[0-9]  velocity bucket   [+ / -]  fine velocity"),
-        Line::from("[g]  toggle slide (melodic)   [[ / ]]  octave"),
-        Line::from("[, / .]  note length   [{ / }]  pattern length"),
-        Line::from("[< / >]  swing"),
-        Line::from("[p / P]  step probability   [y / Y]  ratchet"),
-        Line::from("[e / E]  euclid pulses (drums)   [[ / ]]  euclid rotation (drums)"),
-        Line::from("[x c v]  cut / copy / paste   [r / R]  rotate   [del]  clear"),
-        Line::from("[ctrl+z] / [u]  undo   [ctrl+y]  redo"),
-        Line::from("[m]  mute   [S]  solo"),
-        Line::from("[esc]  panic / all-notes-off (does not stop transport)"),
-        Line::from("[t]  set tempo (type BPM, Enter to confirm, Esc to cancel)   [; / ']  BPM −/+   [T]  tap   [k]  toggle Link"),
-        Line::from("[l]  library   [s]  save   [?]  help   [q]  quit"),
+        // ── Transport ────────────────────────────────────────────────
+        header("Transport"),
+        row("[space]        play / stop"),
+        row("[esc]          panic / all-notes-off (transport keeps running)"),
+        row("[!]            full MIDI panic"),
+        row("[t]            type BPM (Enter confirm, Esc cancel)   [; / ']  BPM −/+"),
+        row("[T]            tap tempo   [k]  toggle Ableton Link"),
+        row("[< / >]        swing   [{ / }]  pattern length"),
+        blank(),
+        // ── Edit (common) ────────────────────────────────────────────
+        header("Edit"),
+        row("[tab / shift+tab]  cycle lane focus (next / prev)"),
+        row("[enter]        toggle step (Drums) / place note (Melodic)"),
+        row("[0-9]          velocity bucket   [+ / -]  fine velocity"),
+        row("[p / P]        step probability   [y / Y]  ratchet"),
+        row("[x c v]        cut / copy / paste   [r / R]  rotate   [del]  clear"),
+        blank(),
+        // ── Drums ─────────────────────────────────────────────────────
+        header("Drums"),
+        row("[← →]          move cursor   [↑ ↓]  move cursor vertically"),
+        row("[e / E]        euclid pulses (add/remove)   [[ / ]]  euclid rotation"),
+        blank(),
+        // ── Melodic ───────────────────────────────────────────────────
+        header("Melodic"),
+        row("[← →]          step cursor   [↑ ↓]  pitch up / down"),
+        row("[g]            toggle slide   [, / .]  note length   [[ / ]]  octave"),
+        blank(),
+        // ── Per-step ──────────────────────────────────────────────────
+        header("Per-step"),
+        row("[p / P]        probability up / down"),
+        row("[y / Y]        ratchet up / down"),
+        blank(),
+        // ── Global ────────────────────────────────────────────────────
+        header("Global"),
+        row("[ctrl+z] / [u]  undo   [ctrl+y]  redo"),
+        row("[m]            mute lane   [S]  solo lane"),
+        row("[l]            library   [o]  open set   [s]  save"),
+        row("[?]            help   [q]  quit (twice while playing)"),
     ];
     // Clear behind the overlay so it sits on top of the editor.
     f.render_widget(Clear, area);
-    let block = Block::default().borders(Borders::ALL).title(" HELP ");
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(Span::styled(" CONTROLS ", Style::default().add_modifier(Modifier::BOLD)));
     f.render_widget(Paragraph::new(lines).block(block), area);
 }
 
@@ -37,18 +77,17 @@ mod tests {
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
 
-    #[test]
-    fn help_shows_play_hint() {
-        let backend = TestBackend::new(92, 22);
+    fn render_help_to_string(w: u16, h: u16) -> String {
+        let backend = TestBackend::new(w, h);
         let mut term = Terminal::new(backend).unwrap();
         term.draw(|f| render_help(f, f.area())).unwrap();
-        let whole: String = term
-            .backend()
-            .buffer()
-            .content()
-            .iter()
-            .map(|c| c.symbol())
-            .collect();
+        term.backend().buffer().content().iter().map(|c| c.symbol()).collect()
+    }
+
+    #[test]
+    fn help_shows_play_hint() {
+        // Use a tall enough terminal so all content sections are rendered.
+        let whole = render_help_to_string(110, 40);
         assert!(whole.contains("play"), "expected play hint, got: {whole:?}");
         // New bindings are listed in the help overlay.
         assert!(whole.contains("probability"), "expected prob hint, got: {whole:?}");
@@ -56,5 +95,28 @@ mod tests {
         assert!(whole.contains("euclid"), "expected euclid hint, got: {whole:?}");
         assert!(whole.contains("ctrl+z"), "expected ctrl+z undo hint, got: {whole:?}");
         assert!(whole.contains("panic"), "expected esc panic hint, got: {whole:?}");
+    }
+
+    #[test]
+    fn help_lists_all_groups() {
+        // Must be wide/tall enough to show all grouped content.
+        let whole = render_help_to_string(110, 40);
+        // Transport group
+        assert!(whole.contains("Transport"), "expected Transport group header");
+        assert!(whole.contains("panic"), "expected panic in Transport group");
+        // Edit/Drums group
+        assert!(whole.contains("Drums"), "expected Drums group header");
+        assert!(whole.contains("euclid"), "expected euclid in Drums group");
+        // Edit/Melodic group
+        assert!(whole.contains("Melodic"), "expected Melodic group header");
+        assert!(whole.contains("slide"), "expected slide in Melodic group");
+        // Per-step group
+        assert!(whole.contains("Per-step"), "expected Per-step group header");
+        assert!(whole.contains("probability"), "expected probability in Per-step");
+        assert!(whole.contains("ratchet"), "expected ratchet in Per-step");
+        // Global/misc group
+        assert!(whole.contains("Global"), "expected Global group header");
+        assert!(whole.contains("undo"), "expected undo in Global group");
+        assert!(whole.contains("open"), "expected open in Global group");
     }
 }
