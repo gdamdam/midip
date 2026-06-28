@@ -10,7 +10,7 @@ pub mod transport;
 
 use crate::link::LinkClock;
 use crate::midi::ports::MidiSink;
-use crate::pattern::model::{Pattern, Set};
+use crate::pattern::model::{Lane, Pattern, Set};
 use clock::ClockGen;
 use scheduler::Sequencer;
 use transport::{TempoSource, Transport};
@@ -28,6 +28,10 @@ pub enum UiCommand {
     Mute { lane: usize, on: bool },
     Solo { lane: usize, on: bool },
     Transpose { lane: usize, semis: i8 },
+    /// Sync all lane state after undo/redo. Does NOT rebuild the Sequencer or reset the clock/playhead.
+    SyncLanes(Vec<Lane>),
+    /// Update a single lane's octave shift without touching anything else.
+    SetOctave { lane: usize, octave: i8 },
     SetSet(Set),
     /// All-notes-off / all-sound-off live recovery; does not stop transport.
     Panic,
@@ -152,6 +156,20 @@ fn apply_command(
                 st.seq.update_lane(lane, l);
             }
         }
+        UiCommand::SyncLanes(lanes) => {
+            // Restore all lane state from an undo/redo snapshot without disturbing the
+            // clock or playhead — the engine keeps playing from the current position.
+            for (i, lane) in lanes.into_iter().enumerate() {
+                st.seq.update_lane(i, lane);
+            }
+        }
+        UiCommand::SetOctave { lane, octave } => {
+            if let Some(existing) = st.seq.lane(lane) {
+                let mut l = existing.clone();
+                l.octave = octave;
+                st.seq.update_lane(lane, l);
+            }
+        }
         UiCommand::SetSet(set) => {
             let playing = st.seq.is_playing();
             st.seq = Sequencer::new(set);
@@ -164,7 +182,11 @@ fn apply_command(
             // transport or clock — playback keeps running while stuck notes are cleared.
             st.seq.panic(now, sink);
         }
-        UiCommand::Quit => return true,
+        UiCommand::Quit => {
+            // Release all sounding notes before exiting — avoids hanging notes on hardware.
+            st.seq.panic(now, sink);
+            return true;
+        }
     }
     false
 }

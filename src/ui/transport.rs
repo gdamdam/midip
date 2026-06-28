@@ -36,7 +36,7 @@ pub fn render_transport(f: &mut Frame, area: Rect, app: &App) {
 
     let swing_pct = (app.set.swing * 100.0).round() as i32;
 
-    let line = Line::from(vec![
+    let mut spans = vec![
         Span::styled(play, Style::default().fg(accent).add_modifier(Modifier::BOLD)),
         Span::raw("   "),
         Span::raw(bpm_display),
@@ -48,7 +48,12 @@ pub fn render_transport(f: &mut Frame, area: Rect, app: &App) {
         Span::raw("4/4"),
         Span::raw("   "),
         Span::raw(format!("swing {swing_pct}%")),
-    ]);
+    ];
+    if !app.status.is_empty() {
+        spans.push(Span::raw("   "));
+        spans.push(Span::raw(app.status.clone()));
+    }
+    let line = Line::from(spans);
 
     let block = Block::default().borders(Borders::ALL).title(" midip ");
     let para = Paragraph::new(line).block(block);

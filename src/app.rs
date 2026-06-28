@@ -192,6 +192,8 @@ impl App {
                 self.snapshot();
                 let lane = &mut self.set.lanes[self.focus];
                 lane.octave = (lane.octave as i32 + d as i32).clamp(-4, 4) as i8;
+                let new_octave = lane.octave;
+                cmds.push(UiCommand::SetOctave { lane: self.focus, octave: new_octave });
                 cmds.push(self.load_focused());
             }
             Action::ToggleSlide => {
@@ -228,8 +230,14 @@ impl App {
                 self.clear_step();
                 cmds.push(self.load_focused());
             }
-            Action::Undo => self.undo(),
-            Action::Redo => self.redo(),
+            Action::Undo => {
+                self.undo();
+                cmds.push(UiCommand::SyncLanes(self.set.lanes.clone()));
+            }
+            Action::Redo => {
+                self.redo();
+                cmds.push(UiCommand::SyncLanes(self.set.lanes.clone()));
+            }
             Action::ToggleMute => {
                 let lane = &mut self.set.lanes[self.focus];
                 lane.mute = !lane.mute;
