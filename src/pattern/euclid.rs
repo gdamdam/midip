@@ -109,4 +109,32 @@ mod tests {
         let on: Vec<usize> = mask.iter().enumerate().filter(|(_, &b)| b).map(|(i, _)| i).collect();
         assert_eq!(on, vec![3, 7, 11, 15]);
     }
+
+    #[test]
+    fn e3_8_is_the_tresillo() {
+        // Tresillo: 3 pulses in 8 steps → {0, 3, 6}
+        let mask = bjorklund(3, 8, 0);
+        let on: Vec<usize> = mask.iter().enumerate().filter(|(_, &b)| b).map(|(i, _)| i).collect();
+        assert_eq!(on, vec![0, 3, 6]);
+    }
+
+    #[test]
+    fn e5_8_is_the_standard_cinquillo() {
+        // Toussaint's canonical E(5,8): x.xx.xx.
+        let p = bjorklund(5, 8, 0);
+        assert_eq!(
+            p,
+            vec![true, false, true, true, false, true, true, false]
+        );
+        let on: Vec<usize> = p.iter().enumerate().filter(|(_, &b)| b).map(|(i, _)| i).collect();
+        assert_eq!(on, vec![0, 2, 3, 5, 6]);
+    }
+
+    #[test]
+    fn rotation_wraps_modulo_steps() {
+        // Rotation should wrap: rotation == steps should equal rotation == 0
+        assert_eq!(bjorklund(4, 16, 16), bjorklund(4, 16, 0));
+        // Rotation modulo: (rotation % steps) should apply
+        assert_eq!(bjorklund(4, 16, 17), bjorklund(4, 16, 1));
+    }
 }
