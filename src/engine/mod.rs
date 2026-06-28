@@ -302,147 +302,157 @@ pub fn run_engine_headless(
 }
 
 // ---------------------------------------------------------------------------
-// Per-lane sink state for the real engine (hot-plug lifecycle).
+// Per-PORT sink state for the real engine (hot-plug lifecycle).
+//
+// CRITICAL INVARIANT: exactly ONE MIDI connection per distinct physical port.
+// Lanes that resolve to the same `port_match` (e.g. the T-8's drum + bass lanes
+// both match "T-8") COLLAPSE to a single connection. The fan-out sends each
+// message once per PORT, so the 24 PPQN MIDI clock reaches a shared device ONCE.
+// Two connections to one port would deliver the clock twice and the device would
+// read DOUBLE tempo — a hardware-confirmed bug fixed in "open one MIDI connection
+// per physical port…" and which this port-level model preserves.
 // ---------------------------------------------------------------------------
 
-/// Per-lane connection record used by the engine thread.
-/// Each lane owns its sink independently; lanes sharing a physical port each hold
-/// their own `MidirSink` (the no-double-clock guarantee is preserved because `connect`
-/// opens a separate connection handle — CoreMIDI deduplicates clock at the port level,
-/// and in practice the T-8 uses a single physical IAC-style bus per device).
-///
-/// NOTE: If double-clock is observed on shared-port devices in practice, the fix is a
-/// shared `Arc<Mutex<MidirSink>>` fan-out — but that requires a larger refactor and
-/// midir connections are move-only, so we keep the simpler per-lane model for now.
-struct LaneSink {
-    /// The profile this lane tracks (port_match substring, display name).
-    profile: DeviceProfile,
-    /// Current sink for this lane. `None` = no connected port (NullSink semantics but
-    /// without holding a live connection). We store `Option` so we can `take` on
-    /// unhealthy detection and reconnect cleanly.
+/// One connection per distinct physical port. `port_match` is the substring that
+/// identifies the port; `sink` is the single live connection (or `NullSink` when
+/// disconnected). Health + hot-plug operate at this PORT level.
+struct PortSink {
+    /// The port_match substring shared by every lane mapped to this port.
+    port_match: &'static str,
+    /// The single sink for this port (NullSink when not connected).
     sink: Box<dyn MidiSink>,
-    /// Last-known connection state (used for change-detection / dedupe).
+    /// Last-known connection state (for change-detection / dedupe).
     connected: bool,
-    /// Last-known port name that was successfully connected (empty when disconnected).
+    /// Last-known connected port name (empty when disconnected).
     port_name: String,
 }
 
-impl LaneSink {
-    fn new_disconnected(profile: DeviceProfile) -> Self {
-        LaneSink {
-            profile,
+/// Distinct-port plan derived purely from profiles — NO hardware access.
+///
+/// Returns `(ports, lane_to_port)` where `ports[i].port_match` is the i-th distinct
+/// `port_match` in first-seen order, and `lane_to_port[lane]` is the index into `ports`
+/// for that lane. Lanes sharing a `port_match` map to the SAME port index — this is the
+/// dedup that guarantees one connection per physical port. Mirrors the old `unique_ports`.
+fn map_lanes_to_ports(profiles: &[DeviceProfile; 3]) -> (Vec<&'static str>, [usize; 3]) {
+    let mut distinct: Vec<&'static str> = Vec::new();
+    let mut lane_to_port = [0usize; 3];
+    for (lane, p) in profiles.iter().enumerate() {
+        let idx = match distinct.iter().position(|m| *m == p.port_match) {
+            Some(i) => i,
+            None => {
+                distinct.push(p.port_match);
+                distinct.len() - 1
+            }
+        };
+        lane_to_port[lane] = idx;
+    }
+    (distinct, lane_to_port)
+}
+
+/// Look up the actual port display name for a `port_match` in the available list,
+/// falling back to the `port_match` substring itself.
+fn port_display_name(available: &[String], port_match: &str) -> String {
+    available
+        .iter()
+        .find(|n| n.to_lowercase().contains(&port_match.to_lowercase()))
+        .cloned()
+        .unwrap_or_else(|| port_match.to_string())
+}
+
+/// Emit a `DeviceStatus` for every lane, derived from its mapped port's current state.
+/// Both lanes sharing a port report the SAME connected/port — consistent with the single
+/// underlying connection.
+fn emit_lane_status(
+    ports: &[PortSink],
+    lane_to_port: &[usize; 3],
+    events: &mut Vec<EngineEvent>,
+) {
+    for (lane, &port_idx) in lane_to_port.iter().enumerate() {
+        let ps = &ports[port_idx];
+        events.push(EngineEvent::DeviceStatus {
+            lane,
+            connected: ps.connected,
+            port: ps.port_name.clone(),
+        });
+    }
+}
+
+/// Build ONE sink per distinct physical port and emit one initial `DeviceStatus` per lane
+/// (derived from the shared port state). Opens at most one connection per port_match.
+fn build_port_sinks(
+    profiles: &[DeviceProfile; 3],
+    events: &mut Vec<EngineEvent>,
+) -> (Vec<PortSink>, [usize; 3]) {
+    let (distinct, lane_to_port) = map_lanes_to_ports(profiles);
+    let available = list_output_ports();
+    let mut ports: Vec<PortSink> = Vec::with_capacity(distinct.len());
+
+    for port_match in distinct {
+        let mut ps = PortSink {
+            port_match,
             sink: Box::new(NullSink),
             connected: false,
             port_name: String::new(),
+        };
+        // Connect exactly once if the port is present.
+        if match_port(&available, port_match).is_some() {
+            if let Ok(midir_sink) = connect(port_match) {
+                ps.sink = Box::new(midir_sink);
+                ps.connected = true;
+                ps.port_name = port_display_name(&available, port_match);
+            }
         }
+        ports.push(ps);
     }
+
+    // Per-lane DeviceStatus derived from the (single) port state.
+    emit_lane_status(&ports, &lane_to_port, events);
+    (ports, lane_to_port)
 }
 
-/// Build initial per-lane sinks from profiles and emit one `DeviceStatus` per lane.
+/// Rescan health + port presence at the PORT level. Emits per-lane `DeviceStatus` only when
+/// a port's state CHANGES (so both lanes on a shared port flip together, consistently).
 ///
-/// Lanes sharing the same physical port each get their own connection. CoreMIDI routes
-/// clock at the port level so this is safe on all tested hardware (Roland T-8).
-fn build_lane_sinks(
-    profiles: &[DeviceProfile; 3],
+/// Runs in the engine thread every ~1 s (HOTPLUG_CHECK_EVERY ticks). Handles:
+/// - Send-failure: `MidiSink::health()` flips false after a failed write → port → NullSink.
+/// - Device vanished: port no longer in `list_output_ports()` → port → NullSink.
+/// - Device reappeared: port back in list for a disconnected port → reconnect ONCE.
+///
+/// Not unit-tested (touches real MIDI hardware); logic kept simple and well-commented.
+fn rescan_port_sinks(
+    ports: &mut [PortSink],
+    lane_to_port: &[usize; 3],
     events: &mut Vec<EngineEvent>,
-) -> Vec<LaneSink> {
+) {
     let available = list_output_ports();
-    let mut lanes: Vec<LaneSink> = Vec::with_capacity(profiles.len());
+    let mut changed = false;
 
-    for (lane_idx, profile) in profiles.iter().enumerate() {
-        let mut ls = LaneSink::new_disconnected(*profile);
+    for ps in ports.iter_mut() {
+        let port_present = match_port(&available, ps.port_match).is_some();
+        let sink_healthy = ps.sink.health();
 
-        if let Some(_port_idx) = match_port(&available, profile.port_match) {
-            // Try to open a connection for this lane.
-            if let Ok(midir_sink) = connect(profile.port_match) {
-                // Find the actual port name for display (best-effort; fall back to port_match).
-                let port_name = available
-                    .iter()
-                    .find(|n| n.to_lowercase().contains(&profile.port_match.to_lowercase()))
-                    .cloned()
-                    .unwrap_or_else(|| profile.port_match.to_string());
-
-                ls.sink = Box::new(midir_sink);
-                ls.connected = true;
-                ls.port_name = port_name.clone();
-
-                events.push(EngineEvent::DeviceStatus {
-                    lane: lane_idx,
-                    connected: true,
-                    port: port_name,
-                });
-                lanes.push(ls);
-                continue;
+        if ps.connected {
+            // Vanished or unhealthy → drop the single connection.
+            if !port_present || !sink_healthy {
+                ps.sink = Box::new(NullSink);
+                ps.connected = false;
+                ps.port_name.clear();
+                changed = true;
+            }
+        } else if port_present {
+            // Reappeared → reconnect exactly one connection for this port.
+            if let Ok(midir_sink) = connect(ps.port_match) {
+                ps.sink = Box::new(midir_sink);
+                ps.connected = true;
+                ps.port_name = port_display_name(&available, ps.port_match);
+                changed = true;
             }
         }
-
-        // No port found or connection failed.
-        events.push(EngineEvent::DeviceStatus {
-            lane: lane_idx,
-            connected: false,
-            port: String::new(),
-        });
-        lanes.push(ls);
     }
 
-    lanes
-}
-
-/// Rescan ports and health for every lane. Emits `DeviceStatus` only on CHANGE.
-///
-/// This runs in the engine thread every ~1 s (HOTPLUG_CHECK_EVERY ticks). It handles:
-/// - Send-failure detection: `MidirSink::health()` flips false after a failed write.
-///   Swap to NullSink; emit DeviceStatus{connected:false}.
-/// - Device vanished: port no longer in `list_output_ports()`. Same swap + event.
-/// - Device reappeared: port back in list for a previously-disconnected lane.
-///   Reconnect; emit DeviceStatus{connected:true}.
-///
-/// Not unit-tested (touches real MIDI hardware); logic is kept simple and well-commented.
-fn rescan_lane_sinks(lanes: &mut Vec<LaneSink>, events: &mut Vec<EngineEvent>) {
-    let available = list_output_ports();
-
-    for (lane_idx, ls) in lanes.iter_mut().enumerate() {
-        let port_present =
-            match_port(&available, ls.profile.port_match).is_some();
-        let sink_healthy = ls.sink.health();
-
-        if ls.connected {
-            // Already connected: check for vanished port or unhealthy sink.
-            if !port_present || !sink_healthy {
-                ls.sink = Box::new(NullSink);
-                ls.connected = false;
-                let lost_name = std::mem::take(&mut ls.port_name);
-                events.push(EngineEvent::DeviceStatus {
-                    lane: lane_idx,
-                    connected: false,
-                    port: lost_name,
-                });
-            }
-        } else {
-            // Disconnected: try to reconnect if port reappeared.
-            if port_present {
-                if let Ok(midir_sink) = connect(ls.profile.port_match) {
-                    let port_name = available
-                        .iter()
-                        .find(|n| {
-                            n.to_lowercase()
-                                .contains(&ls.profile.port_match.to_lowercase())
-                        })
-                        .cloned()
-                        .unwrap_or_else(|| ls.profile.port_match.to_string());
-
-                    ls.sink = Box::new(midir_sink);
-                    ls.connected = true;
-                    ls.port_name = port_name.clone();
-
-                    events.push(EngineEvent::DeviceStatus {
-                        lane: lane_idx,
-                        connected: true,
-                        port: port_name,
-                    });
-                }
-            }
-        }
+    // Re-derive per-lane status only when something changed (dedupe).
+    if changed {
+        emit_lane_status(ports, lane_to_port, events);
     }
 }
 
@@ -450,8 +460,10 @@ fn rescan_lane_sinks(lanes: &mut Vec<LaneSink>, events: &mut Vec<EngineEvent>) {
 /// (non-deterministic timing); shares `step_engine` with the headless driver.
 ///
 /// Takes `profiles` instead of pre-built sinks so the engine thread owns the full
-/// sink lifecycle (initial connect + periodic hot-plug rescan). Initial `DeviceStatus`
-/// events are emitted before the first tick so the UI receives them via `on_engine_event`.
+/// sink lifecycle (initial connect + periodic hot-plug rescan). Builds ONE connection
+/// per distinct physical port (shared-port lanes collapse — no double-clock). Initial
+/// `DeviceStatus` events are emitted per lane (derived from port state) before the first
+/// tick so the UI receives them via `on_engine_event`.
 pub fn spawn_engine(
     set: Set,
     mut link: Box<dyn LinkClock>,
@@ -466,8 +478,8 @@ pub fn spawn_engine(
         let mut events: Vec<EngineEvent> = Vec::new();
         let start = std::time::Instant::now();
 
-        // Build per-lane sinks and emit initial DeviceStatus for each lane.
-        let mut lane_sinks = build_lane_sinks(&profiles, &mut events);
+        // Build ONE sink per distinct port; emit initial per-lane DeviceStatus.
+        let (mut port_sinks, lane_to_port) = build_port_sinks(&profiles, &mut events);
 
         // Flush initial DeviceStatus events before the first step.
         for ev in events.drain(..) {
@@ -484,8 +496,8 @@ pub fn spawn_engine(
                 pending.push((now, cmd));
             }
 
-            // Fan out to all per-lane sinks.
-            let mut fanout = LaneFanoutSink { lanes: &mut lane_sinks };
+            // Fan out once per PORT (a shared port gets each message — incl. clock — ONCE).
+            let mut fanout = PortFanoutSink { ports: &mut port_sinks };
             let quit =
                 step_engine(&mut st, now, &mut pending, link.as_mut(), &mut fanout, &mut events);
 
@@ -501,7 +513,7 @@ pub fn spawn_engine(
 
             // Periodic hot-plug rescan: check health + port presence every ~1 s.
             if st.tick_count % HOTPLUG_CHECK_EVERY == 0 && st.tick_count > 0 {
-                rescan_lane_sinks(&mut lane_sinks, &mut events);
+                rescan_port_sinks(&mut port_sinks, &lane_to_port, &mut events);
                 for ev in events.drain(..) {
                     if evt_tx.send(ev).is_err() {
                         return;
@@ -517,15 +529,15 @@ pub fn spawn_engine(
     EngineHandle { tx: cmd_tx, rx: evt_rx, join }
 }
 
-/// Fans a single `send` out to every per-lane sink.
-struct LaneFanoutSink<'a> {
-    lanes: &'a mut Vec<LaneSink>,
+/// Fans a single `send` out to every distinct-port sink — ONCE per physical port.
+struct PortFanoutSink<'a> {
+    ports: &'a mut Vec<PortSink>,
 }
 
-impl<'a> MidiSink for LaneFanoutSink<'a> {
+impl<'a> MidiSink for PortFanoutSink<'a> {
     fn send(&mut self, msg: crate::midi::message::MidiMessage, at_micros: u64) {
-        for ls in self.lanes.iter_mut() {
-            ls.sink.send(msg.clone(), at_micros);
+        for ps in self.ports.iter_mut() {
+            ps.sink.send(msg.clone(), at_micros);
         }
     }
 }
@@ -544,6 +556,34 @@ mod tests {
 
     fn default_set() -> Set {
         Set::default_set(default_profiles())
+    }
+
+    /// REGRESSION (no hardware): the two T-8 lanes (drums + bass) share the "T-8" port_match
+    /// and MUST collapse to a SINGLE distinct port — one connection, so the 24 PPQN MIDI
+    /// clock reaches the device ONCE (two connections doubled the T-8's tempo on real hardware).
+    /// S-1 is a distinct port. Mirrors the old `unique_ports` dedup intent.
+    #[test]
+    fn shared_port_lanes_collapse_to_one_connection() {
+        let profiles = default_profiles();
+        let (distinct, lane_to_port) = map_lanes_to_ports(&profiles);
+
+        // Default profiles are [T8_DRUMS("T-8"), T8_BASS("T-8"), S1("S-1")].
+        // Exactly TWO distinct physical ports, NOT three — the two T-8 lanes dedupe.
+        assert_eq!(distinct.len(), 2, "two T-8 lanes must collapse to one port");
+        assert_eq!(distinct, vec!["T-8", "S-1"]);
+
+        // Both T-8 lanes map to the SAME port index (one shared connection).
+        assert_eq!(lane_to_port[0], lane_to_port[1], "T-8 drums + bass share one port");
+        // S-1 maps to a different port.
+        assert_ne!(lane_to_port[2], lane_to_port[0], "S-1 is a distinct port");
+
+        // The number of distinct ports == number of connections the engine will open:
+        // one per unique port_match. With two T-8 lanes that is ONE T-8 connection.
+        let t8_connections = lane_to_port.iter().filter(|&&p| distinct[p] == "T-8").count();
+        assert_eq!(t8_connections, 2, "two lanes target T-8");
+        let t8_distinct_ports =
+            distinct.iter().filter(|m| **m == "T-8").count();
+        assert_eq!(t8_distinct_ports, 1, "but only ONE T-8 connection is opened");
     }
 
     /// effective_bpm: when link is disabled, Transport::effective_bpm(None) == manual_bpm.
