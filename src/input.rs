@@ -145,6 +145,7 @@ pub fn key_to_action(key: KeyEvent, mode: Mode, kind: LaneKind) -> Action {
                     'u' => return Action::Undo,
                     'm' => return Action::ToggleMute,
                     'S' => return Action::ToggleSolo,
+                    'M' => return Action::ToggleMirror,
                     't' => return Action::OpenTempo,
                     'T' => return Action::Tap,
                     'k' => return Action::ToggleLink,
@@ -785,6 +786,30 @@ mod tests {
         assert_eq!(
             key_to_action(k(KeyCode::Char('!')), Mode::RecoveryPrompt, LaneKind::Drums),
             Action::Panic
+        );
+    }
+
+    // ── M2.5-T2: mirror toggle key ──────────────────────────────────────────
+
+    #[test]
+    fn shift_m_maps_to_toggle_mirror_in_edit_mode() {
+        let shift_m = KeyEvent::new(KeyCode::Char('M'), KeyModifiers::SHIFT);
+        for kind in [LaneKind::Drums, LaneKind::Melodic] {
+            assert_eq!(
+                key_to_action(shift_m, Mode::Edit, kind),
+                Action::ToggleMirror,
+                "'M' in Edit mode must be ToggleMirror"
+            );
+        }
+    }
+
+    #[test]
+    fn shift_m_was_unbound_before_mirror_task() {
+        let shift_m = KeyEvent::new(KeyCode::Char('M'), KeyModifiers::SHIFT);
+        assert_ne!(
+            key_to_action(shift_m, Mode::Edit, LaneKind::Drums),
+            Action::None,
+            "'M' must be bound (was unbound/None before this task)"
         );
     }
 }

@@ -102,6 +102,18 @@ fn run(mut terminal: Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
     let engine = spawn_engine(set.clone(), link);
 
     let mut app = App::new(set, library);
+
+    // Load persisted mirror preference and sync engine if on.
+    let prefs = midip::pattern::store::load_prefs(&midip::config::data_dir());
+    app.mirror_on = prefs.mirror_on;
+    if prefs.mirror_on {
+        send_or_toast(
+            &engine.tx,
+            midip::engine::UiCommand::SetMirror(true),
+            &mut app,
+        );
+    }
+
     app.set_status(lib_status);
 
     // Crash detection: if a recovery file exists with no clean-shutdown marker,

@@ -7,6 +7,39 @@ use crate::devices::profiles::profile_by_id;
 use crate::pattern::model::{Lane, LaneRoute, Pattern, Set};
 use crate::persist;
 
+/// User preferences persisted across sessions (session pref, not part of the Set).
+#[derive(Serialize, Deserialize, Default, Debug, PartialEq)]
+pub struct Prefs {
+    #[serde(default)]
+    pub mirror_on: bool,
+}
+
+/// Path of the prefs file under `dir`.
+pub fn prefs_path(dir: &Path) -> PathBuf {
+    dir.join("prefs.json")
+}
+
+/// Load prefs from `dir`; on any error (missing file, parse error) return `Prefs::default()`.
+pub fn load_prefs(dir: &Path) -> Prefs {
+    let path = prefs_path(dir);
+    let Ok(json) = std::fs::read_to_string(&path) else {
+        return Prefs::default();
+    };
+    serde_json::from_str(&json).unwrap_or_default()
+}
+
+/// Atomically write prefs to `dir/prefs.json`.
+pub fn save_prefs(dir: &Path, prefs: &Prefs) -> anyhow::Result<()> {
+    let path = prefs_path(dir);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).context("creating prefs dir")?;
+    }
+    let json = serde_json::to_string_pretty(prefs).context("serializing prefs")?;
+    persist::write_atomic(&path, json.as_bytes())
+        .with_context(|| format!("writing prefs {}", path.display()))?;
+    Ok(())
+}
+
 /// The current on-disk schema version. Increment when the format changes.
 pub const CURRENT_SET_VERSION: u32 = 1;
 
@@ -999,5 +1032,29 @@ mod tests {
             "marker must be gone after clear_clean_marker"
         );
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // ── Mirror prefs (M2.5-T2) ───────────────────────────────────────────────
+
+    #[test]
+    fn prefs_roundtrip() {
+        let dir = unique_dir("prefs-roundtrip");
+        let prefs = Prefs { mirror_on: true };
+        save_prefs(&dir, &prefs).unwrap();
+        let loaded = load_prefs(&dir);
+        assert_eq!(loaded, prefs, "mirror_on must survive save/load round-trip");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn load_prefs_missing_returns_default() {
+        let dir = unique_dir("prefs-missing");
+        // Do NOT create prefs.json — load must return default (mirror_on=false).
+        let loaded = load_prefs(&dir);
+        assert_eq!(loaded, Prefs::default());
+        assert!(
+            !loaded.mirror_on,
+            "missing prefs must default to mirror_on=false"
+        );
     }
 }

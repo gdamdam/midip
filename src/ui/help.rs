@@ -61,7 +61,7 @@ pub fn render_help(f: &mut Frame, area: Rect) {
         // ── Global ────────────────────────────────────────────────────
         header("Global"),
         row("[ctrl+z] / [u]  undo   [ctrl+y]  redo"),
-        row("[m]            mute lane   [S]  solo lane"),
+        row("[m]            mute lane   [S]  solo lane   [M]  mirror output"),
         row("[l]            library   [o]  open set   [s]  save"),
         row("[w]            route editor (port / channel / clock-out per lane)"),
         row("[?]            help   [q]  quit (twice while playing)"),

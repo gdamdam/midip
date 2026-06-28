@@ -123,6 +123,10 @@ pub fn render_transport(f: &mut Frame, area: Rect, app: &App) {
     } else {
         top_spans.push(Span::styled("EDITED", warn_style()));
     }
+    if app.mirror_on {
+        top_spans.push(sep.clone());
+        top_spans.push(Span::styled("MIR", ok_style()));
+    }
 
     // --- status/toast line --------------------------------------------------
     let status_line = if app.status.is_empty() {
@@ -361,5 +365,23 @@ mod tests {
         let text = render(&app);
         assert!(text.contains("BPM"), "expected BPM prompt, got: {text:?}");
         assert!(text.contains("12"), "expected typed digits, got: {text:?}");
+    }
+
+    #[test]
+    fn shows_mir_when_mirror_on() {
+        let mut app = make_app();
+        app.mirror_on = false;
+        let text = render(&app);
+        assert!(
+            !text.contains("MIR"),
+            "MIR must not appear when mirror_on=false, got: {text:?}"
+        );
+
+        app.mirror_on = true;
+        let text = render(&app);
+        assert!(
+            text.contains("MIR"),
+            "MIR must appear when mirror_on=true, got: {text:?}"
+        );
     }
 }
