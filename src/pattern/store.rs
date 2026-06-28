@@ -331,6 +331,43 @@ pub fn recovery_exists(dir: &Path) -> bool {
     recovery_path(dir).exists()
 }
 
+/// Path of the clean-shutdown marker file under `dir`.
+pub fn clean_marker_path(dir: &Path) -> PathBuf {
+    dir.join("recovery").join("clean")
+}
+
+/// Write an empty clean-shutdown marker atomically. Called on graceful exit.
+pub fn mark_clean_shutdown(dir: &Path) -> anyhow::Result<()> {
+    let path = clean_marker_path(dir);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).context("creating recovery dir for clean marker")?;
+    }
+    persist::write_atomic(&path, b"1")
+        .with_context(|| format!("writing clean marker {}", path.display()))?;
+    Ok(())
+}
+
+/// Remove the clean-shutdown marker. Best-effort: not-found errors are silently ignored.
+pub fn clear_clean_marker(dir: &Path) {
+    let path = clean_marker_path(dir);
+    if let Err(e) = std::fs::remove_file(&path) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            // Best-effort: swallow silently.
+        }
+    }
+}
+
+/// Returns true when the clean-shutdown marker exists under `dir`.
+pub fn clean_marker_exists(dir: &Path) -> bool {
+    clean_marker_path(dir).exists()
+}
+
+/// Returns true when an unclean shutdown is detected: a recovery file exists
+/// but no clean-shutdown marker was written (i.e. the previous run crashed or was killed).
+pub fn unclean_shutdown_detected(dir: &Path) -> bool {
+    recovery_exists(dir) && !clean_marker_exists(dir)
+}
+
 /// All `*.json` set files in `dir` (non-recursive). Empty list if the dir is absent.
 pub fn list_sets(dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
     if !dir.exists() {
@@ -918,6 +955,48 @@ mod tests {
         assert!(
             !recovery_exists(&dir),
             "recovery file must be gone after clear_recovery"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // ── Task 10: clean-shutdown marker + unclean detection ───────────────────
+
+    #[test]
+    fn unclean_detected_when_recovery_present_and_no_marker() {
+        let dir = unique_dir("t10-unclean");
+        let set = Set::default_set(default_profiles());
+        // Write recovery but NO clean marker → unclean shutdown detected.
+        save_recovery(&dir, &set).unwrap();
+        assert!(
+            unclean_shutdown_detected(&dir),
+            "must detect unclean shutdown when recovery exists and no clean marker"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn clean_marker_suppresses_recovery_prompt() {
+        let dir = unique_dir("t10-clean");
+        let set = Set::default_set(default_profiles());
+        // Both recovery AND clean marker present → clean exit, no prompt.
+        save_recovery(&dir, &set).unwrap();
+        mark_clean_shutdown(&dir).unwrap();
+        assert!(
+            !unclean_shutdown_detected(&dir),
+            "clean marker must suppress unclean detection even when recovery exists"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn clear_clean_marker_removes_it() {
+        let dir = unique_dir("t10-clear-marker");
+        mark_clean_shutdown(&dir).unwrap();
+        assert!(clean_marker_exists(&dir), "marker must exist after writing");
+        clear_clean_marker(&dir);
+        assert!(
+            !clean_marker_exists(&dir),
+            "marker must be gone after clear_clean_marker"
         );
         std::fs::remove_dir_all(&dir).ok();
     }

@@ -21,6 +21,7 @@ pub enum Mode {
     TempoEntry,
     SetBrowser,
     RouteEditor,
+    RecoveryPrompt,
 }
 
 /// Which field is focused in the route editor (cycles Left/Right).
@@ -105,6 +106,9 @@ pub enum Action {
     RouteCyclePort(i32),
     RouteAdjustChannel(i32),
     RouteToggleClockOut,
+    RecoveryRecover,
+    RecoveryDiscard,
+    RecoveryOpenSaved,
     None,
 }
 
@@ -818,6 +822,40 @@ impl App {
                     self.should_quit = true;
                 }
             }
+            Action::RecoveryRecover => {
+                let dir = crate::config::data_dir();
+                let path = crate::pattern::store::recovery_path(&dir);
+                match crate::pattern::store::load_set(&path) {
+                    Ok(recovered) => {
+                        self.set = recovered;
+                        self.dirty = true;
+                        self.undo.clear();
+                        self.redo.clear();
+                        self.audition = None;
+                        self.clamp_cursor();
+                        self.mode = Mode::Edit;
+                        self.set_status("Recovered unsaved work");
+                        crate::pattern::store::clear_recovery(&dir);
+                        cmds.push(UiCommand::SetSet(self.set.clone()));
+                    }
+                    Err(e) => {
+                        self.set_status(format!("Recovery failed: {e}"));
+                        self.mode = Mode::Edit;
+                    }
+                }
+            }
+            Action::RecoveryDiscard => {
+                crate::pattern::store::clear_recovery(&crate::config::data_dir());
+                self.mode = Mode::Edit;
+                self.set_status("Discarded recovered work");
+            }
+            Action::RecoveryOpenSaved => {
+                self.set_files =
+                    crate::pattern::store::list_sets(&crate::config::data_dir().join("sets"))
+                        .unwrap_or_default();
+                self.set_sel = 0;
+                self.mode = Mode::SetBrowser;
+            }
             Action::None => {}
         }
         cmds
@@ -960,6 +998,7 @@ impl App {
             Mode::TempoEntry => "TEMPO",
             Mode::SetBrowser => "OPEN SET",
             Mode::RouteEditor => "ROUTES",
+            Mode::RecoveryPrompt => "RECOVERY",
         }
     }
 
@@ -1490,6 +1529,10 @@ mod tests {
     use crate::engine::UiCommand;
     use crate::pattern::library::{GenreMap, LibRole, Library};
     use crate::pattern::model::{DrumHit, MelodicNote, Pattern, PatternData, Set};
+
+    /// Serializes tests that mutate `MIDIP_DATA` via `set_var`/`remove_var`.
+    /// Parallel env mutation is UB; this mutex keeps those tests sequential.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     /// Minimal in-memory library (one genre, one pattern per role) for deterministic tests.
     fn test_library() -> Library {
@@ -3320,32 +3363,121 @@ mod tests {
 
     #[test]
     fn deliberate_save_clears_recovery() {
-        // Write a recovery file, then call save via Action::Save, verify recovery gone.
-        // The reducer hardcodes `config::data_dir()`, so this test must use the same dir
-        // for its recovery calls. Writing to the real data dir is acceptable since
-        // recovery/ is always transient and clear_recovery is best-effort.
+        let _guard = ENV_LOCK.lock().unwrap();
+        // Use MIDIP_DATA to point at a unique temp dir so this test is hermetic.
         use crate::pattern::store;
-        let data_dir = crate::config::data_dir();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let tmp = std::env::temp_dir().join(format!("midip-app-save-{}", nanos));
+        std::fs::create_dir_all(tmp.join("recovery")).unwrap();
+
         let set = Set::default_set(profiles::default_profiles());
-        store::save_recovery(&data_dir, &set).unwrap();
+        store::save_recovery(&tmp, &set).unwrap();
         assert!(
-            store::recovery_exists(&data_dir),
+            store::recovery_exists(&tmp),
             "recovery must exist before Save"
         );
 
+        // Point data_dir() at our temp dir.
+        unsafe { std::env::set_var("MIDIP_DATA", &tmp) };
+
         let mut app = new_app();
-        // Action::Save calls clear_recovery on success. Let it run.
         app.apply(Action::Save);
-        // Whether the save succeeded or failed depends on the fs; the key assertion is
-        // that if it succeeded, recovery is gone.
+
+        unsafe { std::env::remove_var("MIDIP_DATA") };
+
+        // Whether Save succeeded or not depends on fs; if succeeded, recovery is gone.
         if !app.dirty {
-            // dirty == false means save succeeded
             assert!(
-                !store::recovery_exists(&data_dir),
+                !store::recovery_exists(&tmp),
                 "recovery must be cleared after a successful deliberate Save"
             );
         }
-        // Clean up in case Save failed and recovery is still there.
-        store::clear_recovery(&data_dir);
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    // ── Task 10: RecoveryPrompt actions ──────────────────────────────────────
+
+    #[test]
+    fn recovery_discard_clears_and_goes_to_edit() {
+        // Test mode transition + status. The fs.clear is exercised in store tests.
+        let mut app = new_app();
+        app.mode = Mode::RecoveryPrompt;
+        let cmds = app.apply(Action::RecoveryDiscard);
+        assert_eq!(app.mode, Mode::Edit, "RecoveryDiscard must go to Edit mode");
+        assert!(cmds.is_empty(), "RecoveryDiscard emits no engine commands");
+        assert!(
+            app.status.contains("Discard"),
+            "RecoveryDiscard must set a status toast; got: {:?}",
+            app.status
+        );
+    }
+
+    #[test]
+    fn recovery_recover_loads_and_marks_dirty_and_resets_undo() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        // Use MIDIP_DATA to point at a unique temp dir so this test is hermetic.
+        use crate::pattern::store;
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let tmp = std::env::temp_dir().join(format!("midip-app-recover-{}", nanos));
+        std::fs::create_dir_all(tmp.join("recovery")).unwrap();
+
+        // Write the recovery file into the temp dir.
+        let mut recovery_set = Set::default_set(profiles::default_profiles());
+        recovery_set.bpm = 99.0;
+        recovery_set.name = "recovered-test".to_string();
+        store::save_recovery(&tmp, &recovery_set).unwrap();
+
+        unsafe { std::env::set_var("MIDIP_DATA", &tmp) };
+
+        let mut app = new_app();
+        app.undo.push(app.set.clone()); // junk entry to confirm clear
+        app.mode = Mode::RecoveryPrompt;
+
+        let cmds = app.apply(Action::RecoveryRecover);
+
+        unsafe { std::env::remove_var("MIDIP_DATA") };
+
+        assert_eq!(app.mode, Mode::Edit, "RecoveryRecover must go to Edit mode");
+        assert!(app.dirty, "recovered set must be marked dirty");
+        assert!(
+            app.undo.is_empty(),
+            "undo stack must be cleared after recovery"
+        );
+        assert!(
+            app.redo.is_empty(),
+            "redo stack must be cleared after recovery"
+        );
+        assert!(
+            cmds.iter().any(|c| matches!(c, UiCommand::SetSet(_))),
+            "RecoveryRecover must emit SetSet"
+        );
+        assert_eq!(
+            app.set.bpm, 99.0,
+            "recovered set bpm must match saved recovery"
+        );
+        assert!(
+            !store::recovery_exists(&tmp),
+            "recovery file must be cleared after successful recovery"
+        );
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn recovery_open_saved_goes_to_set_browser() {
+        let mut app = new_app();
+        app.mode = Mode::RecoveryPrompt;
+        let cmds = app.apply(Action::RecoveryOpenSaved);
+        assert_eq!(
+            app.mode,
+            Mode::SetBrowser,
+            "RecoveryOpenSaved must go to SetBrowser mode"
+        );
+        assert!(cmds.is_empty());
     }
 }

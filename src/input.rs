@@ -40,6 +40,14 @@ pub fn key_to_action(key: KeyEvent, mode: Mode, kind: LaneKind) -> Action {
     }
 
     match mode {
+        Mode::RecoveryPrompt => {
+            return match key.code {
+                KeyCode::Char('r') | KeyCode::Enter => Action::RecoveryRecover,
+                KeyCode::Char('d') | KeyCode::Esc => Action::RecoveryDiscard,
+                KeyCode::Char('o') => Action::RecoveryOpenSaved,
+                _ => Action::None,
+            };
+        }
         Mode::Library => match key.code {
             KeyCode::Left => return Action::LibNav(-1, 0), // switch to Genre column
             KeyCode::Right => return Action::LibNav(1, 0), // switch to Pattern column
@@ -221,6 +229,7 @@ mod tests {
             Mode::Help,
             Mode::TempoEntry,
             Mode::SetBrowser,
+            Mode::RecoveryPrompt,
         ] {
             assert_eq!(
                 key_to_action(k(KeyCode::Char(' ')), mode, LaneKind::Drums),
@@ -239,6 +248,7 @@ mod tests {
             Mode::Help,
             Mode::TempoEntry,
             Mode::SetBrowser,
+            Mode::RecoveryPrompt,
         ] {
             assert_eq!(
                 key_to_action(k(KeyCode::Char('!')), mode, LaneKind::Drums),
@@ -687,6 +697,7 @@ mod tests {
             Mode::TempoEntry,
             Mode::SetBrowser,
             Mode::RouteEditor,
+            Mode::RecoveryPrompt,
         ] {
             assert_eq!(
                 key_to_action(k(KeyCode::Char(' ')), mode, LaneKind::Drums),
@@ -706,6 +717,7 @@ mod tests {
             Mode::TempoEntry,
             Mode::SetBrowser,
             Mode::RouteEditor,
+            Mode::RecoveryPrompt,
         ] {
             assert_eq!(
                 key_to_action(k(KeyCode::Char('!')), mode, LaneKind::Drums),
@@ -714,5 +726,65 @@ mod tests {
                 mode
             );
         }
+    }
+
+    // ── Task 10: RecoveryPrompt key bindings ─────────────────────────────────
+
+    #[test]
+    fn recovery_prompt_r_and_enter_recover() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('r')), Mode::RecoveryPrompt, LaneKind::Drums),
+            Action::RecoveryRecover
+        );
+        assert_eq!(
+            key_to_action(k(KeyCode::Enter), Mode::RecoveryPrompt, LaneKind::Drums),
+            Action::RecoveryRecover
+        );
+    }
+
+    #[test]
+    fn recovery_prompt_d_and_esc_discard() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('d')), Mode::RecoveryPrompt, LaneKind::Drums),
+            Action::RecoveryDiscard
+        );
+        assert_eq!(
+            key_to_action(k(KeyCode::Esc), Mode::RecoveryPrompt, LaneKind::Drums),
+            Action::RecoveryDiscard
+        );
+    }
+
+    #[test]
+    fn recovery_prompt_o_opens_set_browser() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('o')), Mode::RecoveryPrompt, LaneKind::Drums),
+            Action::RecoveryOpenSaved
+        );
+    }
+
+    #[test]
+    fn recovery_prompt_does_not_fall_through_to_edit_bindings() {
+        // 'q' in edit = Quit; in RecoveryPrompt it must not trigger Quit.
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('q')), Mode::RecoveryPrompt, LaneKind::Drums),
+            Action::None
+        );
+        // 's' in edit = Save; in RecoveryPrompt must be None.
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('s')), Mode::RecoveryPrompt, LaneKind::Drums),
+            Action::None
+        );
+    }
+
+    #[test]
+    fn space_and_bang_still_global_in_recovery_prompt() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Char(' ')), Mode::RecoveryPrompt, LaneKind::Drums),
+            Action::TogglePlay
+        );
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('!')), Mode::RecoveryPrompt, LaneKind::Drums),
+            Action::Panic
+        );
     }
 }

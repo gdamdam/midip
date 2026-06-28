@@ -3,6 +3,7 @@ pub mod editor_melodic;
 pub mod help;
 pub mod lanes;
 pub mod library;
+pub mod recovery;
 pub mod route_editor;
 pub mod theme;
 pub mod transport;
@@ -32,6 +33,7 @@ fn context_footer(app: &App) -> Line<'static> {
         Mode::TempoEntry => "[0-9]type BPM [enter]set [esc]cancel",
         Mode::Help => "[?/esc]close",
         Mode::RouteEditor => "[↑↓]lane [←→]field [c]port [[ /]]ch [z]clk-out [esc]close",
+        Mode::RecoveryPrompt => "[r/enter]recover [d/esc]discard [o]open saved",
     };
     let label_style = Style::default()
         .fg(Color::Black)
@@ -113,6 +115,7 @@ pub fn render(f: &mut Frame, app: &App) {
         Mode::Help => help::render_help(f, centered(area, 60, 70)),
         Mode::SetBrowser => library::render_set_browser(f, centered(area, 60, 70), app),
         Mode::RouteEditor => route_editor::render_route_editor(f, centered(area, 80, 70), app),
+        Mode::RecoveryPrompt => recovery::render_recovery_prompt(f, centered(area, 70, 60)),
         Mode::Edit | Mode::TempoEntry => {}
     }
 }

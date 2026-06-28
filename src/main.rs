@@ -104,6 +104,16 @@ fn run(mut terminal: Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
     let mut app = App::new(set, library);
     app.set_status(lib_status);
 
+    // Crash detection: if a recovery file exists with no clean-shutdown marker,
+    // the previous run was killed or crashed — prompt the performer to recover.
+    let dir = midip::config::data_dir();
+    if midip::pattern::store::unclean_shutdown_detected(&dir) {
+        app.mode = midip::app::Mode::RecoveryPrompt;
+    }
+    // Always remove the clean marker at startup so that if THIS run crashes,
+    // the absence of the marker will be detected on next launch.
+    midip::pattern::store::clear_clean_marker(&dir);
+
     loop {
         terminal.draw(|f| midip::ui::render(f, &app))?;
 
@@ -134,6 +144,9 @@ fn run(mut terminal: Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
 
         if app.should_quit {
             send_or_toast(&engine.tx, midip::engine::UiCommand::Quit, &mut app);
+            // Clean exit: write marker so next launch doesn't show recovery prompt.
+            let _ = midip::pattern::store::mark_clean_shutdown(&dir);
+            midip::pattern::store::clear_recovery(&dir);
             break;
         }
     }
