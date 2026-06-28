@@ -84,14 +84,15 @@ pub fn list_output_ports() -> Vec<String> {
 pub fn connect(port_match: &str) -> Result<MidirSink> {
     let out = MidiOutput::new("midip").context("create MIDI output")?;
     let ports = out.ports();
-    let names: Vec<String> = ports
+    let port_pairs: Vec<_> = ports
         .iter()
-        .filter_map(|p| out.port_name(p).ok())
+        .filter_map(|p| out.port_name(p).ok().map(|name| (p, name)))
         .collect();
+    let names: Vec<String> = port_pairs.iter().map(|(_, n)| n.clone()).collect();
     let idx = match_port(&names, port_match)
         .ok_or_else(|| anyhow!("no MIDI output port matching {:?}", port_match))?;
     let conn = out
-        .connect(&ports[idx], "midip-out")
+        .connect(port_pairs[idx].0, "midip-out")
         .map_err(|e| anyhow!("failed to connect to MIDI port: {}", e))?;
     Ok(MidirSink::new(conn))
 }
