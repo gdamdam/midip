@@ -30,6 +30,21 @@ fn select_sinks(available: &[String], profiles: &[DeviceProfile]) -> Vec<Option<
         .collect()
 }
 
+/// Distinct output-port indices to open a connection to, in first-seen order.
+/// Lanes that target the same physical port (e.g. the T-8's drum + bass lanes both
+/// match "T-8") collapse to a SINGLE entry: the engine fans every message — including
+/// the 24 PPQN MIDI clock — out to every open connection, so two connections to one
+/// device would deliver the clock twice and the device would read double tempo.
+fn unique_ports(picks: &[Option<usize>]) -> Vec<usize> {
+    let mut out = Vec::new();
+    for &idx in picks.iter().flatten() {
+        if !out.contains(&idx) {
+            out.push(idx);
+        }
+    }
+    out
+}
+
 /// RAII guard that restores the terminal on drop (covers the error path too).
 struct TermGuard;
 
@@ -62,19 +77,25 @@ fn run(mut terminal: Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
         ),
     };
 
-    // Auto-detect ports and build one sink per lane.
+    // Auto-detect ports and open ONE connection per unique physical port. Lanes that
+    // share a port (T-8 drums + bass) collapse to a single connection — otherwise the
+    // fanned-out MIDI clock would reach the device twice and double its tempo.
     let available = list_output_ports();
     let picks = select_sinks(&available, &profiles);
-    let mut sinks: Vec<Box<dyn MidiSink>> = Vec::with_capacity(picks.len());
-    for (i, pick) in picks.iter().enumerate() {
-        let sink: Box<dyn MidiSink> = match pick {
-            Some(_) => match connect(profiles[i].port_match) {
-                Ok(s) => Box::new(s),
-                Err(_) => Box::new(NullSink),
-            },
-            None => Box::new(NullSink),
-        };
-        sinks.push(sink);
+    let mut sinks: Vec<Box<dyn MidiSink>> = Vec::new();
+    for port_idx in unique_ports(&picks) {
+        // Any profile that resolved to this port shares the same `port_match`/physical
+        // device; use the first one to open the single connection.
+        if let Some(i) = picks.iter().position(|p| *p == Some(port_idx)) {
+            if let Ok(s) = connect(profiles[i].port_match) {
+                sinks.push(Box::new(s));
+            }
+        }
+    }
+    // No hardware detected (or all connections failed): keep one no-op sink so the
+    // engine still runs (silent) without special-casing an empty fan-out.
+    if sinks.is_empty() {
+        sinks.push(Box::new(NullSink));
     }
 
     let set = Set::default_set(profiles);
@@ -142,5 +163,18 @@ mod tests {
         let profiles = default_profiles();
         let picks = select_sinks(&available, &profiles);
         assert_eq!(picks, vec![None, None, None]);
+    }
+
+    #[test]
+    fn unique_ports_dedupes_shared_physical_port() {
+        use super::unique_ports;
+        // T-8 drums + T-8 bass both resolve to port 0; S-1 to port 1.
+        // Each PHYSICAL port must be connected exactly once — two connections to the
+        // T-8 would deliver MIDI clock twice and double the device's tempo.
+        assert_eq!(unique_ports(&[Some(0), Some(0), Some(1)]), vec![0, 1]);
+        // No devices -> nothing to connect.
+        assert_eq!(unique_ports(&[None, None, None]), Vec::<usize>::new());
+        // Distinct ports preserved in first-seen order.
+        assert_eq!(unique_ports(&[Some(2), Some(0), Some(2)]), vec![2, 0]);
     }
 }
