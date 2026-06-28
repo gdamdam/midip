@@ -578,13 +578,16 @@ mod tests {
             "standard hint before audition: {whole:?}"
         );
 
-        // Simulate audition active by setting the field directly.
+        // Simulate audition active by setting the isolated preview directly.
         use crate::pattern::model::PatternData as PD;
-        app.audition = Some(crate::pattern::model::Pattern {
-            name: "original".to_string(),
-            desc: String::new(),
-            length: 16,
-            data: PD::Drums(vec![Vec::new(); 16]),
+        app.audition = Some(crate::app::AuditionPreview {
+            lane: 0,
+            pattern: crate::pattern::model::Pattern {
+                name: "preview".to_string(),
+                desc: String::new(),
+                length: 16,
+                data: PD::Drums(vec![Vec::new(); 16]),
+            },
         });
 
         let whole = render_to_string(&app);

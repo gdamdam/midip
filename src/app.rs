@@ -27,6 +27,15 @@ pub enum LibCol {
     Pattern,
 }
 
+/// Isolated preview state for an active audition. Holds the cued pattern for a
+/// specific lane WITHOUT mutating the committed `Set`. The editor renders this
+/// overlay for `lane`; the engine plays it; commit/cancel resolve it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AuditionPreview {
+    pub lane: usize,
+    pub pattern: Pattern,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Action {
     TogglePlay,
@@ -125,10 +134,11 @@ pub struct App {
     pub quit_armed: bool,
     /// True when the Set has unsaved mutations since the last successful Save.
     pub dirty: bool,
-    /// Original pattern of the focused lane when an audition preview is active.
-    /// `None` when not auditioning. Set by `Action::Audition`, cleared by `LibLoad`
-    /// (commit) or `CloseLibrary` (cancel/revert).
-    pub audition: Option<Pattern>,
+    /// Isolated audition preview overlay. `None` when not auditioning. Holds the
+    /// cued pattern for a lane WITHOUT mutating the committed `Set`. Set by
+    /// `Action::Audition`/`LibNav`, cleared by `LibLoad` (commit) or `CloseLibrary`
+    /// (cancel/revert).
+    pub audition: Option<AuditionPreview>,
 }
 
 /// Default melodic velocity multiplier when placing a note (1.0 -> MIDI 100).
@@ -186,6 +196,16 @@ impl App {
 
     pub fn focused_kind(&self) -> LaneKind {
         self.set.lanes[self.focus].profile.kind
+    }
+
+    /// The pattern to display for `lane`: the audition preview overlay when an
+    /// audition targets this lane, otherwise the committed lane pattern. Used by the
+    /// editor render so auditioning shows the cued pattern without mutating the Set.
+    pub fn display_pattern(&self, lane: usize) -> &Pattern {
+        match &self.audition {
+            Some(prev) if prev.lane == lane => &prev.pattern,
+            _ => &self.set.lanes[lane].pattern,
+        }
     }
 
     /// Apply an action; mutate state and return engine commands to forward.
@@ -299,13 +319,19 @@ impl App {
             }
             Action::Undo => {
                 self.undo();
+                // Full resync: tempo + swing live outside lanes, so SyncLanes alone diverges.
+                cmds.push(UiCommand::SetBpm(self.set.bpm));
+                cmds.push(UiCommand::SetSwing(self.set.swing));
                 cmds.push(UiCommand::SyncLanes(self.set.lanes.clone()));
             }
             Action::Redo => {
                 self.redo();
+                cmds.push(UiCommand::SetBpm(self.set.bpm));
+                cmds.push(UiCommand::SetSwing(self.set.swing));
                 cmds.push(UiCommand::SyncLanes(self.set.lanes.clone()));
             }
             Action::ToggleMute => {
+                self.snapshot();
                 let lane = &mut self.set.lanes[self.focus];
                 lane.mute = !lane.mute;
                 let (n, muted) = (self.focus, self.set.lanes[self.focus].mute);
@@ -316,6 +342,7 @@ impl App {
                 });
             }
             Action::ToggleSolo => {
+                self.snapshot();
                 let lane = &mut self.set.lanes[self.focus];
                 lane.solo = !lane.solo;
                 let (n, soloed) = (self.focus, self.set.lanes[self.focus].solo);
@@ -326,6 +353,7 @@ impl App {
                 });
             }
             Action::SetBpm(bpm) => {
+                self.snapshot();
                 self.set.bpm = bpm;
                 cmds.push(UiCommand::SetBpm(bpm));
             }
@@ -355,7 +383,11 @@ impl App {
                 self.mode = Mode::Edit;
                 if let Ok(bpm) = self.tempo_input.parse::<f64>() {
                     let bpm = bpm.clamp(20.0, 300.0);
-                    self.set.bpm = bpm;
+                    // Only snapshot when the value actually changes (avoids a no-op undo entry).
+                    if bpm != self.set.bpm {
+                        self.snapshot();
+                        self.set.bpm = bpm;
+                    }
                     self.status = format!("BPM {}", bpm as i64);
                     cmds.push(UiCommand::SetBpm(bpm));
                 }
@@ -366,6 +398,7 @@ impl App {
                 self.tempo_input.clear();
             }
             Action::AdjustBpm(d) => {
+                self.snapshot();
                 self.set.bpm = (self.set.bpm + d as f64).clamp(20.0, 300.0);
                 self.status = format!("BPM {}", self.set.bpm as i64);
                 cmds.push(UiCommand::SetBpm(self.set.bpm));
@@ -419,12 +452,12 @@ impl App {
             }
             Action::OpenLibrary => self.mode = Mode::Library,
             Action::CloseLibrary => {
-                if let Some(backup) = self.audition.take() {
-                    // Cancel audition: restore original pattern.
-                    self.set.lanes[self.focus].pattern = backup.clone();
+                if self.audition.take().is_some() {
+                    // Cancel audition: the committed Set was never touched, so nothing to undo.
+                    // Restore the engine to the COMMITTED pattern (it was playing the preview).
                     cmds.push(UiCommand::LoadPattern {
                         lane: self.focus,
-                        pattern: backup,
+                        pattern: self.set.lanes[self.focus].pattern.clone(),
                     });
                     self.status = "Audition cancelled".into();
                 }
@@ -433,9 +466,13 @@ impl App {
             Action::LibNav(dx, dy) => {
                 self.lib_nav(dx, dy);
                 // Re-audition the newly-selected pattern if an audition is active.
+                // Updates the isolated preview only; the committed Set is untouched.
                 if self.audition.is_some() {
                     if let Some(pat) = self.selected_lib_pattern().cloned() {
-                        self.set.lanes[self.focus].pattern = pat.clone();
+                        self.audition = Some(AuditionPreview {
+                            lane: self.focus,
+                            pattern: pat.clone(),
+                        });
                         cmds.push(UiCommand::LoadPattern {
                             lane: self.focus,
                             pattern: pat,
@@ -444,14 +481,21 @@ impl App {
                 }
             }
             Action::LibLoad => {
-                if let Some(pat) = self.selected_lib_pattern().cloned() {
+                // Commit: prefer the audition preview if one is active for this lane;
+                // otherwise commit the currently-selected library pattern.
+                let pat = match &self.audition {
+                    Some(prev) if prev.lane == self.focus => Some(prev.pattern.clone()),
+                    _ => self.selected_lib_pattern().cloned(),
+                };
+                if let Some(pat) = pat {
                     let name = pat.name.clone();
-                    // Commit: keep whatever is already loaded in the lane.
-                    // Clear the audition backup without restoring.
-                    self.audition = None;
-                    self.status = format!("Loaded {}", name);
+                    // Snapshot FIRST — captures the committed Set with the ORIGINAL pattern
+                    // (bug 4 fix: the audition never mutated the Set, so undo lands on the
+                    // true pre-audition pattern). snapshot() also marks dirty.
                     self.snapshot();
+                    self.audition = None;
                     self.set.lanes[self.focus].pattern = pat.clone();
+                    self.status = format!("Loaded {}", name);
                     cmds.push(UiCommand::LoadPattern {
                         lane: self.focus,
                         pattern: pat,
@@ -460,18 +504,18 @@ impl App {
                 }
             }
             Action::Audition => {
-                // Only save backup on first Audition (idempotent guard).
-                if self.audition.is_none() {
-                    self.audition = Some(self.set.lanes[self.focus].pattern.clone());
-                }
+                // Isolated preview: cue the selected pattern WITHOUT mutating the committed Set.
                 if let Some(pat) = self.selected_lib_pattern().cloned() {
                     self.status = format!("Auditioning {}", pat.name);
-                    self.set.lanes[self.focus].pattern = pat.clone();
+                    self.audition = Some(AuditionPreview {
+                        lane: self.focus,
+                        pattern: pat.clone(),
+                    });
                     cmds.push(UiCommand::LoadPattern {
                         lane: self.focus,
                         pattern: pat,
                     });
-                    // Do NOT mark dirty — this is a preview.
+                    // Do NOT mark dirty and do NOT mutate self.set — this is a preview.
                 }
             }
             Action::OpenSetBrowser => {
@@ -496,9 +540,7 @@ impl App {
                                 .and_then(|s| s.to_str())
                                 .unwrap_or("set")
                                 .to_string();
-                            self.set = set;
-                            self.dirty = false;
-                            self.status = format!("Loaded {}", stem);
+                            self.load_set_document(set, stem);
                             self.mode = Mode::Edit;
                             cmds.push(UiCommand::SetSet(self.set.clone()));
                         }
@@ -700,10 +742,34 @@ impl App {
         self.update_step_scroll();
     }
 
+    /// Maximum undo depth. Bounded so a long live session can't grow the stack without limit.
+    const UNDO_LIMIT: usize = 100;
+
     fn snapshot(&mut self) {
         self.undo.push(self.set.clone());
+        if self.undo.len() > Self::UNDO_LIMIT {
+            self.undo.remove(0);
+        }
         self.redo.clear();
         self.dirty = true;
+    }
+
+    /// Switch to a freshly-loaded document. Replaces the Set and CLEARS undo/redo
+    /// (you cannot undo across documents). Warns in the status if unsaved edits were
+    /// discarded so the loss is not silent. (Full confirm-prompt is deferred to M3.)
+    fn load_set_document(&mut self, set: Set, name: String) {
+        let had_unsaved = self.dirty;
+        self.set = set;
+        self.undo.clear();
+        self.redo.clear();
+        self.audition = None;
+        self.dirty = false;
+        self.clamp_cursor();
+        self.status = if had_unsaved {
+            format!("Loaded {} (unsaved changes discarded)", name)
+        } else {
+            format!("Loaded {}", name)
+        };
     }
 
     fn undo(&mut self) {
@@ -2367,7 +2433,7 @@ mod tests {
     }
 
     #[test]
-    fn audition_saves_original_loads_selected_returns_load_pattern_no_dirty() {
+    fn audition_isolates_preview_loads_selected_returns_load_pattern_no_dirty() {
         let mut app = new_app();
         let original = app.set.lanes[0].pattern.clone();
         enter_library(&mut app);
@@ -2375,21 +2441,25 @@ mod tests {
         assert!(app.audition.is_none());
         let cmds = app.apply(Action::Audition);
 
-        // Backup saved.
+        // Preview holds the SELECTED library pattern targeting the focused lane.
         assert!(
             app.audition.is_some(),
             "audition field should be Some after Audition"
         );
+        let preview = app.audition.as_ref().unwrap();
+        assert_eq!(preview.lane, 0, "preview targets the focused lane");
         assert_eq!(
-            app.audition.as_ref().unwrap().name,
-            original.name,
-            "saved original"
+            preview.pattern.name, "lib-drum",
+            "preview holds the selected pattern"
         );
 
-        // Focused lane now has the library pattern.
-        assert_eq!(app.set.lanes[0].pattern.name, "lib-drum");
+        // Committed lane is UNCHANGED (audition is isolated — bug 5 fix).
+        assert_eq!(
+            app.set.lanes[0].pattern.name, original.name,
+            "committed set must NOT be mutated by audition"
+        );
 
-        // Returns a LoadPattern for the focused lane.
+        // Returns a LoadPattern for the focused lane (engine plays the cued pattern).
         assert!(
             cmds.iter()
                 .any(|c| matches!(c, UiCommand::LoadPattern { lane: 0, .. })),
@@ -2408,23 +2478,23 @@ mod tests {
     }
 
     #[test]
-    fn audition_noop_when_already_auditioning() {
+    fn audition_updates_preview_when_already_auditioning() {
         let mut app = new_app();
         enter_library(&mut app);
         app.apply(Action::Audition);
-        let backup_after_first = app.audition.clone().unwrap();
-
-        // Second Audition should not overwrite the saved backup.
+        // Re-auditioning the same selection keeps the preview pointed at the selected pattern.
         app.apply(Action::Audition);
         assert_eq!(
-            app.audition.as_ref().unwrap().name,
-            backup_after_first.name,
-            "second Audition must not overwrite the saved original"
+            app.audition.as_ref().unwrap().pattern.name,
+            "lib-drum",
+            "re-audition keeps the preview on the selected pattern"
         );
+        // Committed set still untouched.
+        assert_ne!(app.set.lanes[0].pattern.name, "lib-drum");
     }
 
     #[test]
-    fn lib_nav_while_auditioning_loads_new_pattern_keeps_backup() {
+    fn lib_nav_while_auditioning_updates_preview_keeps_committed() {
         // Build a library with TWO patterns for drums so LibNav can select the second.
         let mut drums = crate::pattern::library::GenreMap::new();
         let dsteps_a = vec![Vec::new(); 16];
@@ -2470,29 +2540,29 @@ mod tests {
         // Switch to Pattern column, pat-A is at index 0.
         app.apply(Action::LibNav(1, 0));
         app.apply(Action::Audition);
-        assert_eq!(app.set.lanes[0].pattern.name, "pat-A");
+        // Preview holds pat-A; committed lane is untouched (still the original).
+        assert_eq!(app.audition.as_ref().unwrap().pattern.name, "pat-A");
         assert_eq!(
-            app.audition.as_ref().unwrap().name,
-            original_name,
-            "backup is original"
+            app.set.lanes[0].pattern.name, original_name,
+            "committed lane must stay the original during audition"
         );
 
-        // Navigate to pat-B — should re-audition pat-B.
+        // Navigate to pat-B — should re-audition pat-B into the preview.
         let cmds = app.apply(Action::LibNav(0, 1)); // dy=+1 → pat-B
         assert_eq!(
-            app.set.lanes[0].pattern.name, "pat-B",
-            "lane should now hold pat-B"
+            app.audition.as_ref().unwrap().pattern.name,
+            "pat-B",
+            "preview should now hold pat-B"
         );
         assert!(
             cmds.iter()
                 .any(|c| matches!(c, UiCommand::LoadPattern { lane: 0, .. })),
             "LibNav while auditioning must return LoadPattern"
         );
-        // Original backup unchanged.
+        // Committed lane STILL the original — audition never mutates the Set.
         assert_eq!(
-            app.audition.as_ref().unwrap().name,
-            original_name,
-            "backup must not change on LibNav"
+            app.set.lanes[0].pattern.name, original_name,
+            "committed lane must not change on LibNav"
         );
     }
 
@@ -2522,29 +2592,35 @@ mod tests {
     }
 
     #[test]
-    fn close_library_while_auditioning_restores_original_and_clears_audition() {
+    fn close_library_while_auditioning_reverts_engine_and_clears_audition() {
         let mut app = new_app();
         let original_name = app.set.lanes[0].pattern.name.clone();
         enter_library(&mut app);
         app.apply(Action::Audition);
-        // Lane now holds lib-drum.
-        assert_eq!(app.set.lanes[0].pattern.name, "lib-drum");
+        // Committed lane is untouched even mid-audition (isolated preview).
+        assert_eq!(app.set.lanes[0].pattern.name, original_name);
+        // Preview holds the cued library pattern.
+        assert_eq!(app.audition.as_ref().unwrap().pattern.name, "lib-drum");
 
         let cmds = app.apply(Action::CloseLibrary);
 
-        // Reverted: lane has original back.
+        // Committed lane still the original (nothing was ever mutated).
         assert_eq!(
             app.set.lanes[0].pattern.name, original_name,
-            "original restored"
+            "committed lane unchanged"
         );
-        // Returns LoadPattern to restore in engine.
+        // Returns LoadPattern restoring the COMMITTED pattern in the engine.
         assert!(
-            cmds.iter()
-                .any(|c| matches!(c, UiCommand::LoadPattern { lane: 0, .. })),
-            "must emit LoadPattern to restore in engine"
+            cmds.iter().any(|c| matches!(
+                c,
+                UiCommand::LoadPattern { lane: 0, pattern } if pattern.name == original_name
+            )),
+            "must emit LoadPattern restoring the committed pattern in the engine"
         );
         // Audition cleared.
         assert!(app.audition.is_none());
+        // Not dirty — no Set mutation occurred.
+        assert!(!app.dirty, "cancelling audition must not mark dirty");
         // Status says cancelled.
         assert_eq!(app.status, "Audition cancelled");
         // Mode = Edit.
@@ -2575,6 +2651,156 @@ mod tests {
         assert_eq!(app.set.lanes[0].pattern.name, original);
         assert!(cmds.is_empty(), "no commands on plain close");
         assert!(app.audition.is_none());
+    }
+
+    // --- Task 8: undo/dirty correctness + audition isolation ----------------
+
+    /// Build a library with two distinct drum patterns (A then B) on the focused role.
+    fn two_pattern_app() -> App {
+        let mut drums = crate::pattern::library::GenreMap::new();
+        let pat_a = Pattern {
+            name: "pat-A".into(),
+            desc: String::new(),
+            length: 16,
+            data: PatternData::Drums(vec![Vec::new(); 16]),
+        };
+        let pat_b = Pattern {
+            name: "pat-B".into(),
+            desc: String::new(),
+            length: 16,
+            data: PatternData::Drums({
+                let mut s = vec![Vec::new(); 16];
+                s[0] = vec![DrumHit {
+                    note: 36,
+                    vel: 80,
+                    prob: 1.0,
+                    ratchet: 1,
+                }];
+                s
+            }),
+        };
+        drums.insert("techno".into(), vec![pat_a, pat_b]);
+        let library = Library {
+            drums,
+            bass: crate::pattern::library::GenreMap::new(),
+            synth: crate::pattern::library::GenreMap::new(),
+        };
+        let set =
+            crate::pattern::model::Set::default_set(crate::devices::profiles::default_profiles());
+        App::new(set, library)
+    }
+
+    /// Bug 4: audition→commit→undo must return to the TRUE pre-audition pattern,
+    /// not the auditioned one.
+    #[test]
+    fn undo_after_committed_audition_restores_pre_audition_pattern() {
+        let mut app = two_pattern_app();
+        app.apply(Action::FocusLane(0));
+        // Set a known committed pattern A by loading pat-A from the library.
+        app.apply(Action::OpenLibrary);
+        app.apply(Action::LibNav(1, 0)); // Pattern column, pat-A (idx 0)
+        app.apply(Action::LibLoad); // commit pat-A
+        let known_a = app.set.lanes[0].pattern.clone();
+        assert_eq!(known_a.name, "pat-A");
+
+        // Enter library, audition pat-B, then commit it.
+        app.apply(Action::OpenLibrary);
+        app.apply(Action::LibNav(1, 0)); // Pattern column
+        app.apply(Action::LibNav(0, 1)); // -> pat-B
+        app.apply(Action::Audition);
+        app.apply(Action::LibLoad); // commit pat-B
+        assert_eq!(app.set.lanes[0].pattern.name, "pat-B");
+
+        // Undo must restore the pre-audition pattern A, NOT pat-B.
+        app.apply(Action::Undo);
+        assert_eq!(
+            app.set.lanes[0].pattern, known_a,
+            "undo after committed audition must restore the pre-audition pattern"
+        );
+    }
+
+    /// Bug 5: auditioning must not mutate the committed Set; the preview holds the cued pattern.
+    #[test]
+    fn auditioning_does_not_mutate_committed_set() {
+        let mut app = two_pattern_app();
+        app.apply(Action::FocusLane(0));
+        let committed = app.set.lanes[0].pattern.clone();
+        app.apply(Action::OpenLibrary);
+        app.apply(Action::LibNav(1, 0)); // Pattern column
+        app.apply(Action::LibNav(0, 1)); // -> pat-B
+        let cmds = app.apply(Action::Audition);
+
+        // Committed lane unchanged.
+        assert_eq!(
+            app.set.lanes[0].pattern, committed,
+            "audition must not mutate the committed set"
+        );
+        // Preview holds pat-B.
+        assert_eq!(app.audition.as_ref().unwrap().pattern.name, "pat-B");
+        // LoadPattern(pat-B) emitted so the engine plays the cued pattern.
+        assert!(
+            cmds.iter().any(|c| matches!(
+                c,
+                UiCommand::LoadPattern { lane: 0, pattern } if pattern.name == "pat-B"
+            )),
+            "must emit LoadPattern for the auditioned pattern"
+        );
+    }
+
+    #[test]
+    fn mute_marks_dirty_and_is_undoable() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(2));
+        assert!(!app.dirty);
+        assert!(!app.focused_lane().mute);
+        app.apply(Action::ToggleMute);
+        assert!(app.focused_lane().mute, "lane should be muted");
+        assert!(app.dirty, "mute must mark dirty");
+        app.apply(Action::Undo);
+        assert!(!app.focused_lane().mute, "undo must unmute the lane");
+    }
+
+    #[test]
+    fn undo_emits_full_resync_including_bpm_and_swing() {
+        let mut app = new_app();
+        app.apply(Action::AdjustSwing(1)); // snapshots
+        let cmds = app.apply(Action::Undo);
+        assert!(
+            cmds.iter().any(|c| matches!(c, UiCommand::SetBpm(_))),
+            "undo must resync bpm"
+        );
+        assert!(
+            cmds.iter().any(|c| matches!(c, UiCommand::SetSwing(_))),
+            "undo must resync swing"
+        );
+        assert!(
+            cmds.iter().any(|c| matches!(c, UiCommand::SyncLanes(_))),
+            "undo must resync lanes"
+        );
+    }
+
+    #[test]
+    fn set_browser_load_clears_undo() {
+        let mut app = new_app();
+        // Make an edit so the undo stack is non-empty.
+        app.apply(Action::FocusLane(0));
+        app.apply(Action::MoveCursor(0, 1));
+        app.apply(Action::ToggleStep);
+        assert!(!app.undo.is_empty(), "precondition: undo non-empty");
+        assert!(app.dirty, "precondition: dirty");
+
+        // Loading a document (the SetBrowserLoad success path) resets undo/redo and
+        // warns about discarded unsaved edits.
+        let other =
+            crate::pattern::model::Set::default_set(crate::devices::profiles::default_profiles());
+        app.load_set_document(other, "other".into());
+        assert!(app.undo.is_empty(), "loading a set must clear undo");
+        assert!(app.redo.is_empty(), "loading a set must clear redo");
+        assert!(
+            app.status.contains("unsaved changes discarded"),
+            "must warn about discarded edits, got: {:?}",
+            app.status
+        );
     }
 
     // --- Task 4: Swing toast ------------------------------------------------
