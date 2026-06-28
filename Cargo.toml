@@ -5,6 +5,10 @@ edition = "2021"
 description = "Terminal MIDI pattern sequencer for Roland AIRA Compact T-8 and S-1"
 license = "MIT"
 
+[lib]
+name = "midip"
+path = "src/lib.rs"
+
 [dependencies]
 ratatui = "0.29"
 crossterm = "0.28"
