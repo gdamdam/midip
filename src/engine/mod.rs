@@ -409,32 +409,100 @@ struct PortSink {
     port_name: String,
 }
 
-/// Distinct-port plan derived purely from profiles — NO hardware access.
+/// Route-targeted output plan, derived purely from the lanes' `effective_route()` — NO
+/// hardware access. Replaces the old profile-only `map_lanes_to_ports`/broadcast model.
 ///
-/// Returns `(distinct, lane_to_port)` where `distinct[i]` is the i-th distinct `port_match`
-/// substring in first-seen order, and `lane_to_port[lane]` is the index into `distinct` for
-/// that lane. Lanes sharing a `port_match` map to the SAME port index — this is the dedup
-/// that guarantees one connection per physical port. Mirrors the old `unique_ports`.
-fn map_lanes_to_ports(profiles: &[DeviceProfile; 3]) -> (Vec<&'static str>, [usize; 3]) {
-    let mut distinct: Vec<&'static str> = Vec::new();
-    let mut lane_to_port = [0usize; 3];
-    for (lane, p) in profiles.iter().enumerate() {
-        let idx = match distinct.iter().position(|m| *m == p.port_match) {
+/// - `ports[i]` is the i-th distinct destination port (deduped by `PortRef.stable_key`,
+///   falling back to `name`), in first-seen lane order.
+/// - `channel_to_port[ch]` is the port index that MIDI channel `ch` (0..=15) routes to,
+///   or `None` if no lane uses that channel.
+/// - `clock_ports` lists the distinct port indices whose route has `clock_out` — MIDI
+///   Clock is sent once to each (deduped: a shared port appears once even with two lanes).
+/// - `lane_to_port[lane]` is the port index a lane delivers to (lanes sharing a port
+///   collapse to the SAME index — one connection per physical port, no double-clock).
+struct RoutePlan {
+    ports: Vec<crate::pattern::model::PortRef>,
+    channel_to_port: [Option<usize>; 16],
+    clock_ports: Vec<usize>,
+    lane_to_port: Vec<usize>,
+}
+
+/// The dedup key for a `PortRef`: prefer `stable_key`, fall back to `name` when empty.
+fn port_key(port: &crate::pattern::model::PortRef) -> &str {
+    if port.stable_key.is_empty() {
+        &port.name
+    } else {
+        &port.stable_key
+    }
+}
+
+/// Build the route plan from each lane's `effective_route()`. Pure; UNIT-TESTED.
+///
+/// Dedups ports by `port_key`; maps `channel_to_port[route.channel] = port_idx`; adds the
+/// port to `clock_ports` (deduped) when `route.clock_out`; records `lane_to_port[lane]`.
+fn build_route_plan(lanes: &[Lane]) -> RoutePlan {
+    let mut ports: Vec<crate::pattern::model::PortRef> = Vec::new();
+    let mut channel_to_port = [None; 16];
+    let mut clock_ports: Vec<usize> = Vec::new();
+    let mut lane_to_port: Vec<usize> = Vec::with_capacity(lanes.len());
+
+    for lane in lanes {
+        let route = lane.effective_route();
+        let key = port_key(&route.port).to_string();
+        let port_idx = match ports.iter().position(|p| port_key(p) == key) {
             Some(i) => i,
             None => {
-                distinct.push(p.port_match);
-                distinct.len() - 1
+                ports.push(route.port.clone());
+                ports.len() - 1
             }
         };
-        lane_to_port[lane] = idx;
+        lane_to_port.push(port_idx);
+        if let Some(slot) = channel_to_port.get_mut(route.channel as usize) {
+            *slot = Some(port_idx);
+        }
+        if route.clock_out && !clock_ports.contains(&port_idx) {
+            clock_ports.push(port_idx);
+        }
     }
-    (distinct, lane_to_port)
+
+    RoutePlan {
+        ports,
+        channel_to_port,
+        clock_ports,
+        lane_to_port,
+    }
+}
+
+/// Port indices a single message targets (route-targeted, NOT broadcast). Pure; UNIT-TESTED.
+///
+/// - `NoteOn`/`NoteOff`/`ControlChange{channel}` → `channel_to_port[channel]` as a 0-or-1
+///   element vec (empty when the channel is unmapped → the message drops silently).
+/// - `Clock` → every clock-out port.
+/// - Any other variant (Start/Stop/Continue) → empty.
+fn route_targets(
+    msg: &crate::midi::message::MidiMessage,
+    channel_to_port: &[Option<usize>; 16],
+    clock_ports: &[usize],
+) -> Vec<usize> {
+    use crate::midi::message::MidiMessage;
+    match msg {
+        MidiMessage::NoteOn { channel, .. }
+        | MidiMessage::NoteOff { channel, .. }
+        | MidiMessage::ControlChange { channel, .. } => channel_to_port
+            .get(*channel as usize)
+            .copied()
+            .flatten()
+            .into_iter()
+            .collect(),
+        MidiMessage::Clock => clock_ports.to_vec(),
+        _ => Vec::new(),
+    }
 }
 
 /// All lanes that resolve to the given port index, in lane order. Used to release the
 /// correct notes when a port connects/disconnects/fails (lanes sharing a port move
 /// together — the registry tracks per-lane ownership). Pure; UNIT-TESTED.
-fn lanes_of(lane_to_port: &[usize; 3], port_idx: usize) -> Vec<usize> {
+fn lanes_of(lane_to_port: &[usize], port_idx: usize) -> Vec<usize> {
     lane_to_port
         .iter()
         .enumerate()
@@ -495,7 +563,7 @@ const WATCHER_SCAN_MS: u64 = 250;
 /// structurally impossible. The first scan runs immediately (no initial sleep) so startup
 /// connects within ~one iteration.
 fn run_port_watcher(
-    port_matches: Vec<&'static str>,
+    port_matches: Vec<String>,
     updates: crossbeam_channel::Sender<PortUpdate>,
     requests: crossbeam_channel::Receiver<PortRequest>,
 ) {
@@ -532,8 +600,8 @@ fn run_port_watcher(
         for action in plan_port_actions(&present, &connected) {
             match action {
                 PortAction::Connect(idx) => {
-                    if let Ok(sink) = connect(port_matches[idx]) {
-                        let name = port_display_name(&available, port_matches[idx]);
+                    if let Ok(sink) = connect(&port_matches[idx]) {
+                        let name = port_display_name(&available, &port_matches[idx]);
                         if updates
                             .send(PortUpdate::Connected {
                                 idx,
@@ -572,7 +640,7 @@ fn port_display_name(available: &[String], port_match: &str) -> String {
 /// Emit a `DeviceStatus` for every lane, derived from its mapped port's current state.
 /// Both lanes sharing a port report the SAME connected/port — consistent with the single
 /// underlying connection.
-fn emit_lane_status(ports: &[PortSink], lane_to_port: &[usize; 3], events: &mut Vec<EngineEvent>) {
+fn emit_lane_status(ports: &[PortSink], lane_to_port: &[usize], events: &mut Vec<EngineEvent>) {
     for (lane, &port_idx) in lane_to_port.iter().enumerate() {
         let ps = &ports[port_idx];
         events.push(EngineEvent::DeviceStatus {
@@ -586,32 +654,40 @@ fn emit_lane_status(ports: &[PortSink], lane_to_port: &[usize; 3], events: &mut 
 /// Spawn the real engine on its own thread, driven by a monotonic clock. NOT unit-tested
 /// (non-deterministic timing); shares `step_engine` with the headless driver.
 ///
-/// Takes `profiles` instead of pre-built sinks. All `PortSink`s start as `NullSink`/
-/// disconnected — a dedicated device-watcher thread (the ONLY caller of
-/// `list_output_ports()`/`connect()`) owns the entire connection lifecycle and hands the
-/// engine ready-made sinks over a channel. The timing loop never enumerates or connects:
-/// it only installs delivered sinks, releases notes on loss/route-change (P1), and detects
-/// health failures (asking the watcher to reconnect). One connection per distinct physical
-/// port (shared-port lanes collapse — no double-clock).
+/// All `PortSink`s start as `NullSink`/disconnected — a dedicated device-watcher thread
+/// (the ONLY caller of `list_output_ports()`/`connect()`) owns the entire connection
+/// lifecycle and hands the engine ready-made sinks over a channel. The timing loop never
+/// enumerates or connects: it only installs delivered sinks, releases notes on
+/// loss/route-change (P1), and detects health failures (asking the watcher to reconnect).
+/// One connection per distinct destination port (shared-port lanes collapse — no
+/// double-clock). The destination ports come from the set's per-lane routes
+/// (`Lane::effective_route`), so `_profiles` is retained only for call-site compatibility.
 pub fn spawn_engine(
     set: Set,
     mut link: Box<dyn LinkClock>,
-    profiles: [DeviceProfile; 3],
+    _profiles: [DeviceProfile; 3],
 ) -> EngineHandle {
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded::<UiCommand>();
     let (evt_tx, evt_rx) = crossbeam_channel::unbounded::<EngineEvent>();
 
     let join = std::thread::spawn(move || {
+        // Route plan from the initial set's lanes (route-driven, NOT profile-only). Built
+        // ONCE here (static plan, T6); built before `set` is moved into EngineState::new.
+        // The watcher connects each distinct port by its key/name — for profile-derived
+        // routes the key == the old `port_match`, so default behavior is unchanged.
+        let plan = build_route_plan(&set.lanes);
+        let channel_to_port = plan.channel_to_port;
+        let clock_ports = plan.clock_ports;
+        let lane_to_port = plan.lane_to_port;
+
         let mut st = EngineState::new(set);
         let mut pending: Vec<(u64, UiCommand)> = Vec::new();
         let mut events: Vec<EngineEvent> = Vec::new();
         let start = std::time::Instant::now();
 
-        // Distinct-port plan from profiles only (no hardware access on this thread).
-        let (distinct, lane_to_port) = map_lanes_to_ports(&profiles);
-
         // Every port starts disconnected (NullSink); the watcher will connect present ports.
-        let mut port_sinks: Vec<PortSink> = distinct
+        let mut port_sinks: Vec<PortSink> = plan
+            .ports
             .iter()
             .map(|_| PortSink {
                 sink: Box::new(NullSink),
@@ -621,10 +697,12 @@ pub fn spawn_engine(
             .collect();
 
         // Spawn the device-watcher: it owns enumeration/connection and streams PortUpdates.
+        // Each distinct port is matched by its stable_key (falling back to name).
         let (update_tx, update_rx) = crossbeam_channel::unbounded::<PortUpdate>();
         let (request_tx, request_rx) = crossbeam_channel::unbounded::<PortRequest>();
         let watcher = {
-            let port_matches = distinct.clone();
+            let port_matches: Vec<String> =
+                plan.ports.iter().map(|p| port_key(p).to_string()).collect();
             std::thread::spawn(move || run_port_watcher(port_matches, update_tx, request_rx))
         };
 
@@ -667,6 +745,8 @@ pub fn spawn_engine(
                             let lanes = lanes_of(&lane_to_port, idx);
                             let mut fanout = PortFanoutSink {
                                 ports: &mut port_sinks,
+                                channel_to_port: &channel_to_port,
+                                clock_ports: &clock_ports,
                             };
                             st.seq.release_lanes(&lanes, now, &mut fanout);
                         }
@@ -679,13 +759,14 @@ pub fn spawn_engine(
                     PortUpdate::Disconnected { idx } => {
                         // P1: release this port's sounding notes BEFORE swapping to NullSink,
                         // so the NoteOffs go out the still-live connection (not into the void).
-                        // `release_lanes` selects by lane, but the fanout broadcasts the NoteOffs to
-                        // every port (deliberate, harmless: devices ignore notes on channels they
-                        // never sounded — matches the pre-existing per-port fanout model; M4 routing
-                        // will make sends port-targeted).
+                        // `release_lanes` emits NoteOffs carrying each lane's channel, so the
+                        // route-targeted fanout delivers them to exactly the right port (T6 —
+                        // no longer broadcast to every port).
                         let lanes = lanes_of(&lane_to_port, idx);
                         let mut fanout = PortFanoutSink {
                             ports: &mut port_sinks,
+                            channel_to_port: &channel_to_port,
+                            clock_ports: &clock_ports,
                         };
                         st.seq.release_lanes(&lanes, now, &mut fanout);
                         let ps = &mut port_sinks[idx];
@@ -697,9 +778,13 @@ pub fn spawn_engine(
                 }
             }
 
-            // Fan out once per PORT (a shared port gets each message — incl. clock — ONCE).
+            // Route-targeted fan-out: each channel message reaches ONLY its mapped port;
+            // Clock reaches each clock-out port ONCE (a shared port appears once — no
+            // double-clock). NO enumerate/connect here — the watcher owns connections.
             let mut fanout = PortFanoutSink {
                 ports: &mut port_sinks,
+                channel_to_port: &channel_to_port,
+                clock_ports: &clock_ports,
             };
             let quit = step_engine(
                 &mut st,
@@ -724,6 +809,8 @@ pub fn spawn_engine(
                 {
                     let mut fanout = PortFanoutSink {
                         ports: &mut port_sinks,
+                        channel_to_port: &channel_to_port,
+                        clock_ports: &clock_ports,
                     };
                     st.seq.release_lanes(&lanes, now, &mut fanout);
                 }
@@ -760,15 +847,22 @@ pub fn spawn_engine(
     }
 }
 
-/// Fans a single `send` out to every distinct-port sink — ONCE per physical port.
+/// Route-targeted fan-out: delivers each `send` ONLY to the port(s) its `route_targets`
+/// resolves to — a channel message goes to that channel's single mapped port; MIDI Clock
+/// goes once to each clock-out port. Unmapped channels drop silently. (Replaces the old
+/// broadcast-to-every-port model.) One delivery per physical port preserves no-double-clock.
 struct PortFanoutSink<'a> {
     ports: &'a mut Vec<PortSink>,
+    channel_to_port: &'a [Option<usize>; 16],
+    clock_ports: &'a [usize],
 }
 
 impl<'a> MidiSink for PortFanoutSink<'a> {
     fn send(&mut self, msg: crate::midi::message::MidiMessage, at_micros: u64) {
-        for ps in self.ports.iter_mut() {
-            ps.sink.send(msg.clone(), at_micros);
+        for idx in route_targets(&msg, self.channel_to_port, self.clock_ports) {
+            if let Some(ps) = self.ports.get_mut(idx) {
+                ps.sink.send(msg.clone(), at_micros);
+            }
         }
     }
 }
@@ -789,40 +883,163 @@ mod tests {
         Set::default_set(default_profiles())
     }
 
-    /// REGRESSION (no hardware): the two T-8 lanes (drums + bass) share the "T-8" port_match
+    /// REGRESSION (no hardware): the two T-8 lanes (drums + bass) share the "T-8" port
     /// and MUST collapse to a SINGLE distinct port — one connection, so the 24 PPQN MIDI
     /// clock reaches the device ONCE (two connections doubled the T-8's tempo on real hardware).
-    /// S-1 is a distinct port. Mirrors the old `unique_ports` dedup intent.
+    /// S-1 is a distinct port. Ported from `map_lanes_to_ports` to `build_route_plan` (T6).
     #[test]
     fn shared_port_lanes_collapse_to_one_connection() {
-        let profiles = default_profiles();
-        let (distinct, lane_to_port) = map_lanes_to_ports(&profiles);
+        let set = default_set();
+        let plan = build_route_plan(&set.lanes);
 
         // Default profiles are [T8_DRUMS("T-8"), T8_BASS("T-8"), S1("S-1")].
         // Exactly TWO distinct physical ports, NOT three — the two T-8 lanes dedupe.
-        assert_eq!(distinct.len(), 2, "two T-8 lanes must collapse to one port");
-        assert_eq!(distinct, vec!["T-8", "S-1"]);
+        assert_eq!(
+            plan.ports.len(),
+            2,
+            "two T-8 lanes must collapse to one port"
+        );
+        assert_eq!(plan.ports[0].stable_key, "T-8");
+        assert_eq!(plan.ports[1].stable_key, "S-1");
 
         // Both T-8 lanes map to the SAME port index (one shared connection).
         assert_eq!(
-            lane_to_port[0], lane_to_port[1],
+            plan.lane_to_port[0], plan.lane_to_port[1],
             "T-8 drums + bass share one port"
         );
         // S-1 maps to a different port.
-        assert_ne!(lane_to_port[2], lane_to_port[0], "S-1 is a distinct port");
+        assert_ne!(
+            plan.lane_to_port[2], plan.lane_to_port[0],
+            "S-1 is a distinct port"
+        );
 
-        // The number of distinct ports == number of connections the engine will open:
-        // one per unique port_match. With two T-8 lanes that is ONE T-8 connection.
-        let t8_connections = lane_to_port
+        // One connection per distinct port: two lanes target T-8 but only ONE T-8 port exists.
+        let t8_lanes = plan
+            .lane_to_port
             .iter()
-            .filter(|&&p| distinct[p] == "T-8")
+            .filter(|&&p| plan.ports[p].stable_key == "T-8")
             .count();
-        assert_eq!(t8_connections, 2, "two lanes target T-8");
-        let t8_distinct_ports = distinct.iter().filter(|m| **m == "T-8").count();
+        assert_eq!(t8_lanes, 2, "two lanes target T-8");
+        let t8_distinct_ports = plan.ports.iter().filter(|p| p.stable_key == "T-8").count();
         assert_eq!(
             t8_distinct_ports, 1,
             "but only ONE T-8 connection is opened"
         );
+    }
+
+    /// `build_route_plan` dedups shared ports and builds channel/clock maps (T6, pure).
+    #[test]
+    fn build_route_plan_dedups_shared_port() {
+        let set = default_set();
+        let plan = build_route_plan(&set.lanes);
+
+        // Exactly two distinct ports (T-8 + S-1).
+        assert_eq!(plan.ports.len(), 2);
+
+        // Drums (ch9) and bass (ch1) both live on the T-8 port → same port index.
+        let t8 = plan.channel_to_port[9];
+        let bass = plan.channel_to_port[1];
+        let s1 = plan.channel_to_port[0];
+        assert!(t8.is_some() && bass.is_some() && s1.is_some());
+        assert_eq!(t8, bass, "ch9 and ch1 both route to the T-8 port");
+        assert_ne!(t8, s1, "S-1 (ch0) is a different port from T-8");
+
+        // Both distinct ports send clock, each appearing exactly once (deduped).
+        assert_eq!(plan.clock_ports.len(), 2, "both ports clock-out once each");
+        let mut cp = plan.clock_ports.clone();
+        cp.sort_unstable();
+        cp.dedup();
+        assert_eq!(cp.len(), 2, "clock_ports has no duplicates");
+    }
+
+    /// A lane whose route has `clock_out=false` is excluded from `clock_ports` (T6, pure).
+    #[test]
+    fn build_route_plan_respects_clock_out_false() {
+        let mut set = default_set();
+        // Give the S-1 lane an explicit route with clock disabled.
+        let mut r = set.lanes[2].effective_route();
+        r.clock_out = false;
+        set.lanes[2].route = Some(r);
+
+        let plan = build_route_plan(&set.lanes);
+        let s1_idx = plan.channel_to_port[0].expect("S-1 mapped");
+        assert!(
+            !plan.clock_ports.contains(&s1_idx),
+            "clock_out=false excludes the port from clock_ports; got {:?}",
+            plan.clock_ports
+        );
+        // T-8 (drums/bass) still clocks out.
+        let t8_idx = plan.channel_to_port[9].expect("T-8 mapped");
+        assert!(plan.clock_ports.contains(&t8_idx), "T-8 still clocks out");
+    }
+
+    /// A channel message routes to ONLY its mapped port (T6, pure).
+    #[test]
+    fn route_targets_channel_msg_goes_to_its_port_only() {
+        let mut channel_to_port = [None; 16];
+        channel_to_port[9] = Some(0);
+        channel_to_port[0] = Some(1);
+        let clock_ports = vec![0, 1];
+
+        let note = crate::midi::MidiMessage::NoteOn {
+            channel: 9,
+            note: 36,
+            vel: 100,
+        };
+        assert_eq!(
+            route_targets(&note, &channel_to_port, &clock_ports),
+            vec![0]
+        );
+
+        let off = crate::midi::MidiMessage::NoteOff {
+            channel: 0,
+            note: 60,
+        };
+        assert_eq!(route_targets(&off, &channel_to_port, &clock_ports), vec![1]);
+
+        let cc = crate::midi::MidiMessage::ControlChange {
+            channel: 9,
+            controller: 123,
+            value: 0,
+        };
+        assert_eq!(route_targets(&cc, &channel_to_port, &clock_ports), vec![0]);
+    }
+
+    /// Clock goes to every clock-out port (T6, pure).
+    #[test]
+    fn route_targets_clock_goes_to_all_clock_ports() {
+        let channel_to_port = [None; 16];
+        let clock_ports = vec![0, 1];
+        assert_eq!(
+            route_targets(
+                &crate::midi::MidiMessage::Clock,
+                &channel_to_port,
+                &clock_ports
+            ),
+            vec![0, 1]
+        );
+        // No clock ports → nothing.
+        assert!(route_targets(&crate::midi::MidiMessage::Clock, &channel_to_port, &[]).is_empty());
+    }
+
+    /// An unmapped channel (no port) drops silently — empty targets (T6, pure).
+    #[test]
+    fn route_targets_unmapped_channel_is_dropped() {
+        let channel_to_port = [None; 16]; // nothing mapped
+        let clock_ports = vec![0];
+        let note = crate::midi::MidiMessage::NoteOn {
+            channel: 5,
+            note: 60,
+            vel: 64,
+        };
+        assert!(route_targets(&note, &channel_to_port, &clock_ports).is_empty());
+        // Non-channel, non-clock realtime (Start) → empty regardless.
+        assert!(route_targets(
+            &crate::midi::MidiMessage::Start,
+            &channel_to_port,
+            &clock_ports
+        )
+        .is_empty());
     }
 
     /// effective_bpm: when link is disabled, Transport::effective_bpm(None) == manual_bpm.
@@ -1116,12 +1333,20 @@ mod tests {
     /// [T-8 drums, T-8 bass, S-1]: the T-8 port owns lanes [0,1]; the S-1 port owns [2].
     #[test]
     fn lanes_of_port_groups_shared_port_lanes() {
-        let profiles = default_profiles();
-        let (distinct, lane_to_port) = map_lanes_to_ports(&profiles);
-        let t8_idx = distinct.iter().position(|m| *m == "T-8").unwrap();
-        let s1_idx = distinct.iter().position(|m| *m == "S-1").unwrap();
-        assert_eq!(lanes_of(&lane_to_port, t8_idx), vec![0, 1]);
-        assert_eq!(lanes_of(&lane_to_port, s1_idx), vec![2]);
+        let set = default_set();
+        let plan = build_route_plan(&set.lanes);
+        let t8_idx = plan
+            .ports
+            .iter()
+            .position(|p| p.stable_key == "T-8")
+            .unwrap();
+        let s1_idx = plan
+            .ports
+            .iter()
+            .position(|p| p.stable_key == "S-1")
+            .unwrap();
+        assert_eq!(lanes_of(&plan.lane_to_port, t8_idx), vec![0, 1]);
+        assert_eq!(lanes_of(&plan.lane_to_port, s1_idx), vec![2]);
     }
 
     /// Link-gated start fires at the boundary: armed at beat=-1, boundary crossed at beat=0.
