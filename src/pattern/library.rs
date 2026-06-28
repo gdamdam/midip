@@ -122,6 +122,11 @@ impl Library {
         })
     }
 
+    /// Construct an empty library (no patterns in any role).
+    pub fn empty() -> Library {
+        Library { drums: GenreMap::new(), bass: GenreMap::new(), synth: GenreMap::new() }
+    }
+
     /// Genre names in file order for a given role.
     pub fn genres(&self, role: LibRole) -> Vec<&str> {
         let map = match role {

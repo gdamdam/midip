@@ -1,7 +1,7 @@
 use midip::devices::profiles;
 use midip::engine::{run_engine_headless, EngineEvent, UiCommand};
 use midip::engine::scheduler::step_dur_micros;
-use midip::link::{step_from_beat, FakeLink, LinkClock};
+use midip::link::{step_from_beat, FakeLink};
 use midip::midi::message::MidiMessage;
 use midip::midi::ports::RecordingSink;
 use midip::pattern::model::{

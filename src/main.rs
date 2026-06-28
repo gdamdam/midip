@@ -17,7 +17,7 @@ use midip::devices::profiles::{default_profiles, DeviceProfile};
 use midip::engine::spawn_engine;
 use midip::link::AbletonLink;
 use midip::midi::ports::{connect, list_output_ports, match_port, MidiSink, NullSink};
-use midip::pattern::library::{GenreMap, Library};
+use midip::pattern::library::Library;
 use midip::pattern::model::Set;
 
 /// Map each profile to a detected output-port index by its `port_match` substring.
@@ -42,9 +42,9 @@ impl Drop for TermGuard {
 
 fn main() -> Result<()> {
     enable_raw_mode()?;
+    let _guard = TermGuard; // restores even if run() errors / panics-unwinds
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
-    let _guard = TermGuard; // restores even if run() errors / panics-unwinds
     let backend = CrosstermBackend::new(stdout);
     let terminal = Terminal::new(backend)?;
     run(terminal)
@@ -57,7 +57,7 @@ fn run(mut terminal: Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
     let (library, lib_status) = match Library::load(&midip::config::patterns_dir()) {
         Ok(lib) => (lib, String::from("library loaded")),
         Err(e) => (
-            Library { drums: GenreMap::new(), bass: GenreMap::new(), synth: GenreMap::new() },
+            Library::empty(),
             format!("library load failed: {e} (running with empty library)"),
         ),
     };
