@@ -199,6 +199,7 @@ pub fn key_to_action(key: KeyEvent, mode: Mode, kind: LaneKind) -> Action {
                     'C' => return Action::CancelQueue,       // cancel pending queued launch
                     'A' => return Action::OpenSaveUserPattern, // save focused lane as user pattern
                     'Z' => return Action::OpenClearPattern, // clear focused lane (confirm if material)
+                    'L' => return Action::DoubleLength,     // double pattern length, repeat content
                     _ => {}
                 }
 
@@ -1064,6 +1065,30 @@ mod tests {
                 Action::OpenClearPattern,
                 "'Z' in Edit must be OpenClearPattern"
             );
+        }
+    }
+
+    #[test]
+    fn edit_mode_shift_l_maps_to_double_length() {
+        // 'L' (shift+l) must map to DoubleLength in Edit mode for both lane kinds.
+        for kind in [LaneKind::Drums, LaneKind::Melodic] {
+            assert_eq!(
+                key_to_action(k(KeyCode::Char('L')), Mode::Edit, kind),
+                Action::DoubleLength,
+                "'L' in Edit must be DoubleLength"
+            );
+        }
+    }
+
+    #[test]
+    fn shift_l_was_unbound_before_double_length() {
+        // Verify that the key resolves to DoubleLength (was Action::None before this
+        // feature was added; the assertion here proves the binding is present and
+        // NOT falling through to None).
+        for kind in [LaneKind::Drums, LaneKind::Melodic] {
+            let action = key_to_action(k(KeyCode::Char('L')), Mode::Edit, kind);
+            assert_ne!(action, Action::None, "'L' must not be unbound in Edit mode");
+            assert_eq!(action, Action::DoubleLength);
         }
     }
 }

@@ -184,6 +184,10 @@ pub enum Action {
     OpenClearPattern,
     // ── User-pattern load ─────────────────────────────────────────────
     LoadUserPattern(std::path::PathBuf),
+    /// Double the focused lane's pattern length, filling new steps by repeating the
+    /// existing content cyclically (e.g. 16→32: steps 17–32 mirror 1–16).
+    /// Capped at 64. No-op with status toast when already at 64.
+    DoubleLength,
     None,
 }
 
@@ -650,6 +654,33 @@ impl App {
                 lane.pattern.length = new_len;
                 self.clamp_cursor();
                 cmds.push(self.load_focused());
+            }
+            Action::DoubleLength => {
+                let len = self.set.lanes[self.focus].pattern.length;
+                if len >= 64 {
+                    self.set_status("Already at max length (64)");
+                } else {
+                    let new_len = (len * 2).min(64);
+                    self.snapshot();
+                    let lane = &mut self.set.lanes[self.focus];
+                    match &mut lane.pattern.data {
+                        PatternData::Drums(steps) => {
+                            steps.resize(new_len, Vec::new());
+                            for i in len..new_len {
+                                steps[i] = steps[i % len].clone();
+                            }
+                        }
+                        PatternData::Melodic(steps) => {
+                            steps.resize(new_len, Option::None);
+                            for i in len..new_len {
+                                steps[i] = steps[i % len].clone();
+                            }
+                        }
+                    }
+                    lane.pattern.length = new_len;
+                    self.set_status(format!("Length {} \u{2192} {}", len, new_len));
+                    cmds.push(self.load_focused());
+                }
             }
             Action::AdjustProb(d) => {
                 if self.adjust_prob(d) {
@@ -4868,5 +4899,114 @@ mod tests {
             32,
             "name_input must be capped at 32 chars"
         );
+    }
+
+    // ── DoubleLength tests ────────────────────────────────────────────────
+
+    /// Build a 16-step drum pattern with hits at steps 0, 4, 8, 12.
+    fn app_with_drum_hits() -> App {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(0)); // lane 0 is drums
+                                         // Ensure the pattern is exactly 16 steps (default).
+        if let PatternData::Drums(ref mut steps) = app.set.lanes[0].pattern.data {
+            *steps = vec![Vec::new(); 16];
+            let hit = DrumHit {
+                note: 36,
+                vel: 100,
+                prob: 1.0,
+                ratchet: 1,
+            };
+            steps[0] = vec![hit.clone()];
+            steps[4] = vec![hit.clone()];
+            steps[8] = vec![hit.clone()];
+            steps[12] = vec![hit.clone()];
+        }
+        app.set.lanes[0].pattern.length = 16;
+        app
+    }
+
+    #[test]
+    fn double_length_repeats_content_and_doubles() {
+        let mut app = app_with_drum_hits();
+        assert_eq!(app.focused_lane().pattern.length, 16);
+
+        app.apply(Action::DoubleLength);
+
+        let lane = app.focused_lane();
+        assert_eq!(lane.pattern.length, 32, "length must be 32");
+        if let PatternData::Drums(steps) = &lane.pattern.data {
+            assert_eq!(steps.len(), 32, "data vec must have 32 entries");
+            // Original hits preserved.
+            assert!(!steps[0].is_empty(), "hit at step 0");
+            assert!(!steps[4].is_empty(), "hit at step 4");
+            assert!(!steps[8].is_empty(), "hit at step 8");
+            assert!(!steps[12].is_empty(), "hit at step 12");
+            // Mirrored hits in the second half.
+            assert!(!steps[16].is_empty(), "mirrored hit at step 16");
+            assert!(!steps[20].is_empty(), "mirrored hit at step 20");
+            assert!(!steps[24].is_empty(), "mirrored hit at step 24");
+            assert!(!steps[28].is_empty(), "mirrored hit at step 28");
+            // Empty steps remain empty.
+            assert!(steps[1].is_empty(), "step 1 stays empty");
+            assert!(steps[17].is_empty(), "step 17 stays empty");
+        } else {
+            panic!("expected drums data");
+        }
+        assert!(app.dirty, "dirty must be set after DoubleLength");
+        assert!(!app.undo.is_empty(), "snapshot must have been taken");
+    }
+
+    #[test]
+    fn double_length_caps_at_64() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(0));
+        // Set pattern to length 40 manually.
+        if let PatternData::Drums(ref mut steps) = app.set.lanes[0].pattern.data {
+            *steps = vec![Vec::new(); 40];
+            let hit = DrumHit {
+                note: 36,
+                vel: 100,
+                prob: 1.0,
+                ratchet: 1,
+            };
+            steps[3] = vec![hit.clone()];
+        }
+        app.set.lanes[0].pattern.length = 40;
+
+        app.apply(Action::DoubleLength);
+        assert_eq!(app.focused_lane().pattern.length, 64, "40*2 capped to 64");
+        if let PatternData::Drums(steps) = &app.focused_lane().pattern.data {
+            assert_eq!(steps.len(), 64);
+            // step 3 mirrored: 40+3=43
+            assert!(!steps[43].is_empty(), "step 43 should mirror step 3");
+        }
+
+        // Already at 64 → no-op.
+        let undo_len_before = app.undo.len();
+        app.apply(Action::DoubleLength);
+        assert_eq!(app.focused_lane().pattern.length, 64, "stays at 64");
+        assert_eq!(app.undo.len(), undo_len_before, "no snapshot when at max");
+        assert!(app.status.contains("max length"), "status toast set");
+    }
+
+    #[test]
+    fn double_length_is_undoable() {
+        let mut app = app_with_drum_hits();
+        let orig_len = app.focused_lane().pattern.length;
+
+        app.apply(Action::DoubleLength);
+        assert_eq!(app.focused_lane().pattern.length, orig_len * 2);
+
+        app.apply(Action::Undo);
+        assert_eq!(
+            app.focused_lane().pattern.length,
+            orig_len,
+            "undo must restore original length"
+        );
+        // Original hits still present.
+        if let PatternData::Drums(steps) = &app.focused_lane().pattern.data {
+            assert!(!steps[0].is_empty(), "step 0 hit restored after undo");
+            assert!(!steps[4].is_empty(), "step 4 hit restored after undo");
+        }
     }
 }

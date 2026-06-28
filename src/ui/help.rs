@@ -33,7 +33,7 @@ pub fn render_help(f: &mut Frame, area: Rect) {
         row("[!]            full MIDI panic"),
         row("[t]            type BPM (Enter confirm, Esc cancel)   [; / ']  BPM −/+"),
         row("[T]            tap tempo   [k]  toggle Ableton Link"),
-        row("[< / >]        swing   [{ / }]  pattern length"),
+        row("[< / >]        swing   [{ / }]  pattern length   [L]  double length (repeat content)"),
         blank(),
         // ── Edit (common) ────────────────────────────────────────────
         header("Edit"),
