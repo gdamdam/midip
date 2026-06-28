@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::Context;
@@ -62,6 +63,7 @@ pub fn parse_drum_file(json: &str) -> anyhow::Result<GenreMap> {
                 .collect();
             parsed.push(Pattern {
                 name: format!("{} #{:02}", genre, idx + 1),
+                desc: String::new(),
                 length,
                 data: PatternData::Drums(data),
             });
@@ -96,6 +98,7 @@ pub fn parse_melodic_file(json: &str, gate_fraction: f32) -> anyhow::Result<Genr
                 .collect();
             parsed.push(Pattern {
                 name: format!("{} #{:02}", genre, idx + 1),
+                desc: String::new(),
                 length,
                 data: PatternData::Melodic(data),
             });
@@ -103,6 +106,77 @@ pub fn parse_melodic_file(json: &str, gate_fraction: f32) -> anyhow::Result<Genr
         out.insert(genre, parsed);
     }
     Ok(out)
+}
+
+// --- catalog.json shapes --------------------------------------------------
+
+#[derive(Deserialize)]
+struct CatalogEntry {
+    name: String,
+    desc: String,
+}
+
+#[derive(Deserialize)]
+struct CatalogGenre {
+    name: String,
+    patterns: Vec<CatalogEntry>,
+}
+
+#[derive(Deserialize)]
+struct CatalogS1 {
+    genres: Vec<CatalogGenre>,
+}
+
+#[derive(Deserialize)]
+struct CatalogT8 {
+    drum_genres: Vec<CatalogGenre>,
+    bass_genres: Vec<CatalogGenre>,
+}
+
+#[derive(Deserialize)]
+struct CatalogRoot {
+    s1: CatalogS1,
+    t8: CatalogT8,
+}
+
+/// Parse catalog.json and return genre → [(name, desc)] for the given role.
+/// Returns an empty map on any parse error (non-fatal).
+pub fn parse_catalog(json: &str, role: LibRole) -> anyhow::Result<HashMap<String, Vec<(String, String)>>> {
+    let root: CatalogRoot = serde_json::from_str(json).context("parsing catalog.json")?;
+    let genres: Vec<CatalogGenre> = match role {
+        LibRole::Drums => root.t8.drum_genres,
+        LibRole::Bass => root.t8.bass_genres,
+        LibRole::Synth => root.s1.genres,
+    };
+    let mut map = HashMap::new();
+    for g in genres {
+        let entries = g.patterns.into_iter().map(|e| (e.name, e.desc)).collect();
+        map.insert(g.name, entries);
+    }
+    Ok(map)
+}
+
+/// Sort a GenreMap alphabetically by genre name.
+fn sort_genres(map: GenreMap) -> GenreMap {
+    let mut entries: Vec<(String, Vec<Pattern>)> = map.into_iter().collect();
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    entries.into_iter().collect()
+}
+
+/// Overlay catalog names+descs onto a GenreMap. Patterns not found in catalog keep their
+/// fallback name and an empty desc.
+fn overlay_catalog(mut map: GenreMap, catalog: &HashMap<String, Vec<(String, String)>>) -> GenreMap {
+    for (genre, patterns) in map.iter_mut() {
+        if let Some(entries) = catalog.get(genre) {
+            for (i, pat) in patterns.iter_mut().enumerate() {
+                if let Some((name, desc)) = entries.get(i) {
+                    pat.name = name.clone();
+                    pat.desc = desc.clone();
+                }
+            }
+        }
+    }
+    map
 }
 
 impl Library {
@@ -115,11 +189,26 @@ impl Library {
         let synth_json = std::fs::read_to_string(dir.join("patterns-s1.json"))
             .context("reading patterns-s1.json")?;
 
-        Ok(Library {
-            drums: parse_drum_file(&drums_json)?,
-            bass: parse_melodic_file(&bass_json, T8_BASS.gate_fraction)?,
-            synth: parse_melodic_file(&synth_json, S1.gate_fraction)?,
-        })
+        // Catalog is optional — failure is non-fatal; patterns still load with fallback names.
+        let catalog_json = std::fs::read_to_string(dir.join("catalog.json")).ok();
+        let drums_cat = catalog_json
+            .as_deref()
+            .and_then(|j| parse_catalog(j, LibRole::Drums).ok())
+            .unwrap_or_default();
+        let bass_cat = catalog_json
+            .as_deref()
+            .and_then(|j| parse_catalog(j, LibRole::Bass).ok())
+            .unwrap_or_default();
+        let synth_cat = catalog_json
+            .as_deref()
+            .and_then(|j| parse_catalog(j, LibRole::Synth).ok())
+            .unwrap_or_default();
+
+        let drums = sort_genres(overlay_catalog(parse_drum_file(&drums_json)?, &drums_cat));
+        let bass = sort_genres(overlay_catalog(parse_melodic_file(&bass_json, T8_BASS.gate_fraction)?, &bass_cat));
+        let synth = sort_genres(overlay_catalog(parse_melodic_file(&synth_json, S1.gate_fraction)?, &synth_cat));
+
+        Ok(Library { drums, bass, synth })
     }
 
     /// Construct an empty library (no patterns in any role).
@@ -218,16 +307,66 @@ mod tests {
     }
 
     #[test]
+    fn parse_catalog_extracts_entries_by_role() {
+        let json = r#"{
+            "s1": { "genres": [
+                { "name": "techno", "patterns": [
+                    { "name": "Iron Grid", "desc": "relentless" },
+                    { "name": "Acid Drive", "desc": "squelchy" }
+                ]}
+            ]},
+            "t8": {
+                "drum_genres": [
+                    { "name": "techno", "patterns": [
+                        { "name": "Four on Floor", "desc": "4/4 kick" }
+                    ]}
+                ],
+                "bass_genres": [
+                    { "name": "techno", "patterns": [
+                        { "name": "Bass Walk", "desc": "walking" }
+                    ]}
+                ]
+            },
+            "keys": [],
+            "octave_min": -2,
+            "octave_max": 2
+        }"#;
+        let drums = parse_catalog(json, LibRole::Drums).unwrap();
+        assert_eq!(drums["techno"][0], ("Four on Floor".to_string(), "4/4 kick".to_string()));
+
+        let bass = parse_catalog(json, LibRole::Bass).unwrap();
+        assert_eq!(bass["techno"][0], ("Bass Walk".to_string(), "walking".to_string()));
+
+        let synth = parse_catalog(json, LibRole::Synth).unwrap();
+        assert_eq!(synth["techno"][0], ("Iron Grid".to_string(), "relentless".to_string()));
+        assert_eq!(synth["techno"][1], ("Acid Drive".to_string(), "squelchy".to_string()));
+    }
+
+    #[test]
     fn load_reads_real_vendored_files() {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/patterns");
         let lib = Library::load(&dir).unwrap();
 
-        // Each role: 20 genres in file order.
+        // Each role: 20 genres.
         assert_eq!(lib.genres(LibRole::Drums).len(), 20);
         assert_eq!(lib.genres(LibRole::Bass).len(), 20);
         assert_eq!(lib.genres(LibRole::Synth).len(), 20);
 
-        // First drum genre has 20 patterns, each 16 steps.
+        // Genres are alphabetical — "acid-techno" sorts before everything else.
+        assert_eq!(lib.genres(LibRole::Drums)[0], "acid-techno");
+        assert_eq!(lib.genres(LibRole::Bass)[0], "acid-techno");
+        assert_eq!(lib.genres(LibRole::Synth)[0], "acid-techno");
+
+        // Catalog names applied: drums techno[0] == "Four on Floor".
+        let drums_techno = &lib.drums["techno"];
+        assert_eq!(drums_techno[0].name, "Four on Floor");
+        assert!(!drums_techno[0].desc.is_empty(), "desc should be non-empty from catalog");
+
+        // Synth techno[0] == "Iron Grid".
+        let synth_techno = &lib.synth["techno"];
+        assert_eq!(synth_techno[0].name, "Iron Grid");
+
+        // First drum genre (alphabetically) has 20 patterns, each 16 steps.
         let first_drum_genre = lib.genres(LibRole::Drums)[0];
         let pats = &lib.drums[first_drum_genre];
         assert_eq!(pats.len(), 20);

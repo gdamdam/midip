@@ -601,6 +601,7 @@ mod sequencer_tests {
             profile: T8_DRUMS,
             pattern: Pattern {
                 name: "four".to_string(),
+                desc: String::new(),
                 length: 16,
                 data: PatternData::Drums(steps),
             },
@@ -617,6 +618,7 @@ mod sequencer_tests {
             profile: if profile_bass { T8_BASS } else { S1 },
             pattern: Pattern {
                 name: "mel".to_string(),
+                desc: String::new(),
                 length: len,
                 data: PatternData::Melodic(notes),
             },
@@ -836,6 +838,7 @@ mod sequencer_tests {
             profile: T8_DRUMS,
             pattern: Pattern {
                 name: format!("len{length}"),
+                desc: String::new(),
                 length,
                 data: PatternData::Drums(steps),
             },
@@ -947,6 +950,7 @@ mod sequencer_tests {
             profile: T8_DRUMS,
             pattern: Pattern {
                 name: "one".to_string(),
+                desc: String::new(),
                 length: 16,
                 data: PatternData::Drums(steps),
             },
@@ -995,7 +999,7 @@ mod sequencer_tests {
         }
         let lane = Lane {
             profile: T8_DRUMS,
-            pattern: Pattern { name: "row".to_string(), length: 16, data: PatternData::Drums(steps) },
+            pattern: Pattern { name: "row".to_string(), desc: String::new(), length: 16, data: PatternData::Drums(steps) },
             mute: false, solo: false, transpose: 0, octave: 0,
         };
         let run_once = |seed: u64| -> Vec<u64> {

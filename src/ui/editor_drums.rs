@@ -175,6 +175,7 @@ mod tests {
         steps[0] = vec![DrumHit { note: 36, vel: 127, prob: 1.0, ratchet: 1 }];
         set.lanes[0].pattern = Pattern {
             name: "test".to_string(),
+            desc: String::new(),
             length: 16,
             data: PatternData::Drums(steps),
         };

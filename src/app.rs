@@ -754,7 +754,7 @@ mod tests {
         dsteps[2] = vec![DrumHit { note: 38, vel: 90, prob: 1.0, ratchet: 1 }];
         drums.insert(
             "techno".into(),
-            vec![Pattern { name: "lib-drum".into(), length: 16, data: PatternData::Drums(dsteps) }],
+            vec![Pattern { name: "lib-drum".into(), desc: String::new(), length: 16, data: PatternData::Drums(dsteps) }],
         );
 
         let mut bass: GenreMap = GenreMap::new();
@@ -762,13 +762,13 @@ mod tests {
         bsteps[0] = Some(MelodicNote { semi: 3, vel: 1.0, slide: false, len: 0.5, prob: 1.0, ratchet: 1 });
         bass.insert(
             "acid".into(),
-            vec![Pattern { name: "lib-bass".into(), length: 16, data: PatternData::Melodic(bsteps) }],
+            vec![Pattern { name: "lib-bass".into(), desc: String::new(), length: 16, data: PatternData::Melodic(bsteps) }],
         );
 
         let mut synth: GenreMap = GenreMap::new();
         synth.insert(
             "dub".into(),
-            vec![Pattern { name: "lib-synth".into(), length: 16, data: PatternData::Melodic(vec![None; 16]) }],
+            vec![Pattern { name: "lib-synth".into(), desc: String::new(), length: 16, data: PatternData::Melodic(vec![None; 16]) }],
         );
 
         Library { drums, bass, synth }

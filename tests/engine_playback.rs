@@ -21,6 +21,7 @@ fn three_lane_set() -> Set {
     }
     let drums = Pattern {
         name: "kick".into(),
+        desc: String::new(),
         length: 16,
         data: PatternData::Drums(drum_steps),
     };
@@ -30,6 +31,7 @@ fn three_lane_set() -> Set {
     bass_steps[8] = Some(MelodicNote { semi: 0, vel: 1.0, slide: false, len: 0.5, prob: 1.0, ratchet: 1 });
     let bass = Pattern {
         name: "bass".into(),
+        desc: String::new(),
         length: 16,
         data: PatternData::Melodic(bass_steps),
     };
@@ -38,6 +40,7 @@ fn three_lane_set() -> Set {
     synth_steps[4] = Some(MelodicNote { semi: 12, vel: 1.0, slide: false, len: 0.9, prob: 1.0, ratchet: 1 });
     let synth = Pattern {
         name: "synth".into(),
+        desc: String::new(),
         length: 16,
         data: PatternData::Melodic(synth_steps),
     };

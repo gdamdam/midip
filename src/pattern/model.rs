@@ -41,6 +41,8 @@ pub enum PatternData {
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Pattern {
     pub name: String,
+    #[serde(default)]
+    pub desc: String,
     pub length: usize, // 1..=64
     pub data: PatternData,
 }
@@ -56,6 +58,7 @@ impl Pattern {
     pub fn empty_drums(length: usize) -> Pattern {
         Pattern {
             name: "init".to_string(),
+            desc: String::new(),
             length,
             data: PatternData::Drums(vec![Vec::new(); length]),
         }
@@ -65,6 +68,7 @@ impl Pattern {
     pub fn empty_melodic(length: usize) -> Pattern {
         Pattern {
             name: "init".to_string(),
+            desc: String::new(),
             length,
             data: PatternData::Melodic(vec![None; length]),
         }
@@ -170,6 +174,7 @@ mod tests {
     fn drum_pattern_serde_round_trips() {
         let p = Pattern {
             name: "techno #03".to_string(),
+            desc: "a cool pattern".to_string(),
             length: 2,
             data: PatternData::Drums(vec![
                 vec![DrumHit { note: 36, vel: 120, prob: 1.0, ratchet: 1 }, DrumHit { note: 42, vel: 100, prob: 1.0, ratchet: 1 }],
@@ -185,6 +190,7 @@ mod tests {
     fn melodic_pattern_serde_round_trips() {
         let p = Pattern {
             name: "acid #11".to_string(),
+            desc: "another pattern".to_string(),
             length: 2,
             data: PatternData::Melodic(vec![
                 Some(MelodicNote { semi: 0, vel: 1.0, slide: false, len: 0.5, prob: 1.0, ratchet: 1 }),
@@ -194,6 +200,15 @@ mod tests {
         let json = serde_json::to_string(&p).unwrap();
         let back: Pattern = serde_json::from_str(&json).unwrap();
         assert_eq!(p, back);
+    }
+
+    #[test]
+    fn pattern_without_desc_deserializes_desc_to_empty() {
+        // Old saved sets won't have the "desc" field; serde(default) fills it as "".
+        let json = r#"{"name":"old #01","length":1,"data":{"Drums":[[]]}}"#;
+        let p: Pattern = serde_json::from_str(json).unwrap();
+        assert_eq!(p.name, "old #01");
+        assert_eq!(p.desc, "");
     }
 
     #[test]
