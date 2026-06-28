@@ -7,6 +7,23 @@ feature milestone is a minor bump).
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-06-28 — Quantized launch · audition · set/pattern management
+
+### Added
+- **Quantized pattern launching** — loading a pattern while playing now QUEUES it and launches it
+  exactly once on the next bar (or next beat), restarting that lane at step 1 without disturbing the
+  others. Lanes show ACTIVE and `QUEUED⟶` markers; `b` toggles next-bar/next-beat; `C` cancels a queue.
+- **Gated, non-destructive audition** — cueing a library pattern (`a`) is allowed only when the focused
+  lane is stopped or muted (so it never collides with a live lane), never mutates the saved pattern,
+  and is reverted by changing focus or closing the library.
+- **Set management** — save-as, rename, duplicate, new, and delete, with confirmation before discarding
+  unsaved work or deleting files (from the set browser, `o`).
+- **Pattern management** — save the focused lane as a user pattern (`A`), clear a lane (`Z`, with
+  confirmation), and duplicate/rename/delete user patterns; user patterns are loadable from the library
+  (a "User" section). Vendored library patterns remain immutable.
+- **Double-length edit** (`L`) — doubles a pattern's length and repeats its content (16→32), capped at
+  64; the lane overview strip now reads correctly for patterns longer than 16 steps.
+
 ## [0.4.0] — 2026-06-28 — Virtual mirror output
 
 ### Added
