@@ -948,6 +948,10 @@ impl App {
                 self.set.bpm = bpm;
                 self.set_status(format!("Tap: {} BPM", bpm.round() as u32));
             }
+            // M3 Task 1: a queued per-lane launch fired in the engine. The ACTIVE/QUEUED
+            // display handling lands in Task 2; for now this is a no-op so the match stays
+            // exhaustive.
+            EngineEvent::Launched { .. } => {}
         }
     }
 

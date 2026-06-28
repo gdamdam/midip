@@ -3,7 +3,7 @@
 
 use crate::midi::ports::MidiSink;
 use crate::midi::MidiMessage;
-use crate::pattern::model::{Lane, PatternData, Set};
+use crate::pattern::model::{Lane, Pattern, PatternData, Set};
 
 /// Ownership domain of a sounding note (design §3.1). M1 only produces Playback;
 /// the field + release_domain exist so M3 audition / M15 preview can reuse the registry.
@@ -13,6 +13,24 @@ pub enum NoteDomain {
     Audition,
     Preview,
     Performance,
+}
+
+/// Quantization grid for a queued per-lane launch (design §1: launch grid = the
+/// GLOBAL 4/4 bar of 16 sixteenth steps). `NextBar` launches on a bar boundary
+/// (absolute step % 16 == 0); `NextBeat` on a beat boundary (% 4 == 0).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Quant {
+    NextBar,
+    NextBeat,
+}
+
+/// True when absolute `step` lands on quant `q`'s grid. Both grids are true at
+/// step 0 (a queue placed before play would launch on the very first step — fine).
+pub fn is_boundary(step: usize, q: Quant) -> bool {
+    match q {
+        Quant::NextBar => step.is_multiple_of(16),
+        Quant::NextBeat => step.is_multiple_of(4),
+    }
 }
 
 /// A note currently sounding, tracked by the authoritative registry.
@@ -115,6 +133,17 @@ pub struct Sequencer {
     /// Authoritative registry of every currently-sounding note with its owner.
     /// Updated at emit time: NoteOn inserts, NoteOff removes by (channel, note).
     pub sounding: Vec<SoundingNote>,
+    /// M3 launch queue — one slot per lane (index parallels `set.lanes`). A queued
+    /// `(Pattern, Quant)` is applied at the next matching global boundary, exactly once.
+    /// Replacing a queued launch overwrites the slot (no stacking).
+    queued: Vec<Option<(Pattern, Quant)>>,
+    /// Absolute step at which each lane last (re)started its local clock. 0 for a lane
+    /// that has never been launched, so `(step - 0) % len` is byte-identical to today's
+    /// `step % len`. A launch sets this to the boundary step, restarting the lane at local 0.
+    launch_offset: Vec<usize>,
+    /// Scratch: lanes that launched during the most recent `tick`. Drained by
+    /// `take_launched` so the engine can emit one `Launched` event per lane.
+    just_launched: Vec<usize>,
 }
 
 /// Default PRNG seed (a fixed nonzero constant so playback is reproducible).
@@ -134,6 +163,9 @@ impl Sequencer {
             current: 0,
             rng: DEFAULT_SEED,
             sounding: Vec::new(),
+            queued: vec![None; n],
+            launch_offset: vec![0; n],
+            just_launched: Vec::new(),
         }
     }
 
@@ -303,6 +335,15 @@ impl Sequencer {
         for a in self.active.iter_mut() {
             *a = None;
         }
+        // M3: a fresh play restarts every lane's local clock at global 0 (offset 0)
+        // and discards any pending launches from a previous run.
+        for off in self.launch_offset.iter_mut() {
+            *off = 0;
+        }
+        for q in self.queued.iter_mut() {
+            *q = None;
+        }
+        self.just_launched.clear();
         // Step 0 (and all other steps) are materialized by tick() once
         // now_micros >= step_start. This avoids double-emit when the first
         // tick lands exactly on the origin (step_start == now_micros).
@@ -318,6 +359,10 @@ impl Sequencer {
         self.release_all(at_micros, sink);
         self.playing = false;
         self.queue.clear();
+        // M3: stopping discards any pending launches (they were relative to this run).
+        for q in self.queued.iter_mut() {
+            *q = None;
+        }
     }
 
     /// All-notes-off / all-sound-off live recovery. Releases every sounding note via
@@ -341,6 +386,10 @@ impl Sequencer {
 
     /// Lane `idx`'s LOCAL step within its own pattern length. A length of 0 is treated
     /// as 1 so each lane wraps independently (polymeter) without a divide-by-zero.
+    ///
+    /// M3: the lane's local clock is relative to `launch_offset[idx]` — the absolute
+    /// step at which it last (re)started. For a never-launched lane the offset is 0, so
+    /// `(current - 0) % len` reduces exactly to the pre-M3 `current % len`.
     pub fn lane_step(&self, idx: usize) -> usize {
         let len = self
             .set
@@ -348,7 +397,29 @@ impl Sequencer {
             .get(idx)
             .map(|l| l.pattern.length.max(1))
             .unwrap_or(1);
-        self.current % len
+        let off = self.launch_offset.get(idx).copied().unwrap_or(0);
+        self.current.wrapping_sub(off) % len
+    }
+
+    /// M3: queue `pattern` to launch on lane `lane` at the next `q` boundary. Replaces
+    /// any existing queued launch for that lane (no stacking). No-op if `lane` is out of range.
+    pub fn queue_launch(&mut self, lane: usize, pattern: Pattern, q: Quant) {
+        if let Some(slot) = self.queued.get_mut(lane) {
+            *slot = Some((pattern, q));
+        }
+    }
+
+    /// M3: clear any queued launch on `lane` (no-op if none / out of range).
+    pub fn cancel_launch(&mut self, lane: usize) {
+        if let Some(slot) = self.queued.get_mut(lane) {
+            *slot = None;
+        }
+    }
+
+    /// M3: drain and return the lanes that launched during the most recent `tick`.
+    /// The engine maps each to an `EngineEvent::Launched`.
+    pub fn take_launched(&mut self) -> Vec<usize> {
+        std::mem::take(&mut self.just_launched)
     }
 
     pub fn set_bpm(&mut self, bpm: f64) {
@@ -429,6 +500,14 @@ impl Sequencer {
                 break;
             }
             let step = self.next_step;
+            // M3: apply any queued launches whose boundary matches THIS step, BEFORE
+            // materializing it. For each such lane: release its sounding/held notes at
+            // the step's fire time (no hang), swap in the queued pattern, set the lane's
+            // launch_offset to this step (so its local clock restarts at 0 here), clear
+            // the queue slot (exactly-once), and record it for take_launched(). The
+            // subsequent materialize_step_at then emits the NEW pattern's local-0 step
+            // for that lane. Other lanes are untouched.
+            self.apply_due_launches(step, step_due, sink);
             // Pass the actual fire time into materialize so event timestamps
             // reflect the accumulated position, not origin + step * dur.
             self.materialize_step_at(step, dur, step_due);
@@ -484,6 +563,37 @@ impl Sequencer {
 
     // --- internals -------------------------------------------------------
 
+    /// M3: apply every lane whose queued launch matches absolute `step`'s boundary,
+    /// at fire time `at_micros`. Releases the launching lane's sounding/held notes,
+    /// swaps in the queued pattern, restarts its local clock at this step, clears the
+    /// queue slot (exactly-once), and records it for `take_launched`. Called BEFORE the
+    /// step is materialized so the new pattern's local-0 step fires this same tick.
+    fn apply_due_launches(&mut self, step: usize, at_micros: u64, sink: &mut dyn MidiSink) {
+        // Collect due lanes first so we can take ownership of each pattern without
+        // holding a borrow of `self.queued` across the &mut self release/update calls.
+        let mut due: Vec<(usize, Pattern)> = Vec::new();
+        for (lane, slot) in self.queued.iter_mut().enumerate() {
+            let fire = matches!(slot, Some((_, q)) if is_boundary(step, *q));
+            if fire {
+                // take() leaves None → exactly-once (the slot is cleared on apply).
+                if let Some((pattern, _)) = slot.take() {
+                    due.push((lane, pattern));
+                }
+            }
+        }
+        for (lane, pattern) in due {
+            // Release this lane's sounding + held notes so a swap can't hang a note.
+            self.release_lanes(&[lane], at_micros, sink);
+            if let Some(l) = self.set.lanes.get_mut(lane) {
+                l.pattern = pattern;
+            }
+            if let Some(off) = self.launch_offset.get_mut(lane) {
+                *off = step;
+            }
+            self.just_launched.push(lane);
+        }
+    }
+
     /// Materialize step `step` at the given absolute fire time `step_at`.
     /// `dur` is the step duration at this step's tempo (for gate/swing calculations).
     fn materialize_step_at(&mut self, step: usize, dur: u64, step_at: u64) {
@@ -522,10 +632,19 @@ impl Sequencer {
         }
     }
 
+    /// M3: lane `lane_idx`'s LOCAL index for absolute `step`, relative to its
+    /// `launch_offset`. For a never-launched lane (offset 0) this is exactly `step % count`,
+    /// so pre-M3 polymeter/timing behavior is preserved bit-for-bit. `count` is the caller's
+    /// already-clamped pattern length (`>= 1`), so the modulo never divides by zero.
+    fn local_step_for(&self, lane_idx: usize, step: usize, count: usize) -> usize {
+        let off = self.launch_offset.get(lane_idx).copied().unwrap_or(0);
+        step.wrapping_sub(off) % count
+    }
+
     fn materialize_drum_step(&mut self, lane_idx: usize, step: usize, swung: u64, dur: u64) {
         let lane = &self.set.lanes[lane_idx];
         let count = lane.pattern.step_count().max(1);
-        let local = step % count;
+        let local = self.local_step_for(lane_idx, step, count);
         // Emit on the route channel (route override else profile) so the channel the
         // scheduler emits on matches the channel the route plan keys on (no mis-route).
         let channel = lane.route_channel();
@@ -577,7 +696,7 @@ impl Sequencer {
 
         let lane = &self.set.lanes[lane_idx];
         let count = lane.pattern.step_count().max(1);
-        let local = step % count;
+        let local = self.local_step_for(lane_idx, step, count);
         // Emit on the route channel (route override else profile) so emission and the
         // route plan agree on the channel (no mis-route / dropped notes).
         let channel = lane.route_channel();
@@ -729,9 +848,13 @@ impl Sequencer {
     /// report whether it has `slide=true`. Bounded to one pattern length so a fully
     /// rested remainder terminates the scan.
     fn next_played_note_slides(&self, lane_idx: usize, step: usize, count: usize) -> bool {
+        // Walk forward from the lane's LOCAL position (offset-relative). For an
+        // un-launched lane (offset 0) the base equals `step % count`, so this is
+        // identical to the pre-M3 `(step + offset) % count`.
+        let base = self.local_step_for(lane_idx, step, count);
         if let PatternData::Melodic(steps) = &self.set.lanes[lane_idx].pattern.data {
             for offset in 1..=count {
-                let local = (step + offset) % count;
+                let local = (base + offset) % count;
                 if let Some(Some(n)) = steps.get(local) {
                     return n.slide;
                 }
@@ -2356,6 +2479,354 @@ mod sequencer_tests {
             sink.events.len(),
             before,
             "backward sync_to_beat must be a no-op (no re-emitted steps)"
+        );
+    }
+
+    // =========================================================================
+    // M3 Task 1: quantized per-lane launch queue + boundary launch
+    // =========================================================================
+
+    /// A 16-step drum lane firing the given kick `note` on LOCAL step 0 only.
+    fn drum_lane_step0_note(note: u8) -> Lane {
+        let mut steps: Vec<Vec<DrumHit>> = vec![Vec::new(); 16];
+        steps[0].push(DrumHit {
+            note,
+            vel: 100,
+            prob: 1.0,
+            ratchet: 1,
+        });
+        Lane {
+            profile: T8_DRUMS,
+            pattern: Pattern {
+                name: format!("k{note}"),
+                desc: String::new(),
+                length: 16,
+                data: PatternData::Drums(steps),
+                id: crate::persist::Id::nil(),
+            },
+            mute: false,
+            solo: false,
+            transpose: 0,
+            octave: 0,
+            route: None,
+        }
+    }
+
+    /// The pattern half of `drum_lane_step0_note` (for queuing).
+    fn drum_pattern_step0_note(note: u8) -> Pattern {
+        drum_lane_step0_note(note).pattern
+    }
+
+    fn kick_note_on_abs_steps(sink: &RecordingSink, note: u8, dur: u64) -> Vec<u64> {
+        sink.events
+            .iter()
+            .filter(|(_, m)| {
+                *m == MidiMessage::NoteOn {
+                    channel: 9,
+                    note,
+                    vel: 100,
+                }
+            })
+            .map(|(t, _)| *t / dur)
+            .collect()
+    }
+
+    #[test]
+    fn is_boundary_matches_bar_and_beat_grids() {
+        // NextBar: multiples of 16. NextBeat: multiples of 4. Both true at 0.
+        assert!(is_boundary(0, Quant::NextBar));
+        assert!(is_boundary(16, Quant::NextBar));
+        assert!(is_boundary(32, Quant::NextBar));
+        assert!(!is_boundary(4, Quant::NextBar));
+        assert!(!is_boundary(15, Quant::NextBar));
+
+        assert!(is_boundary(0, Quant::NextBeat));
+        assert!(is_boundary(4, Quant::NextBeat));
+        assert!(is_boundary(8, Quant::NextBeat));
+        assert!(!is_boundary(3, Quant::NextBeat));
+        assert!(!is_boundary(5, Quant::NextBeat));
+    }
+
+    #[test]
+    fn queued_pattern_does_not_launch_before_boundary() {
+        let dur = step_dur_micros(120.0);
+        // Lane 0 plays kick note 36 on local step 0. Queue a pattern with note 50
+        // (NextBar). Before step 16, the new pattern (note 50) must never fire.
+        let mut seq = Sequencer::new(set_with(vec![drum_lane_step0_note(36)]));
+        let mut sink = RecordingSink::new();
+        seq.play(0);
+        // Run up to (but not reaching) step 16: stop strictly before 16*dur.
+        // Queue at step 3 (NextBar).
+        let mut now = 0u64;
+        while now < 16 * dur {
+            if now == 3 * dur {
+                seq.queue_launch(0, drum_pattern_step0_note(50), Quant::NextBar);
+            }
+            seq.tick(now, &mut sink);
+            now += 1_000;
+        }
+
+        let new_pattern_ons = sink
+            .events
+            .iter()
+            .filter(|(_, m)| matches!(m, MidiMessage::NoteOn { note: 50, .. }))
+            .count();
+        assert_eq!(
+            new_pattern_ons, 0,
+            "queued pattern must not fire before the bar boundary"
+        );
+        // The original pattern (note 36) DID fire at step 0.
+        assert!(
+            sink.events
+                .iter()
+                .any(|(_, m)| matches!(m, MidiMessage::NoteOn { note: 36, .. })),
+            "original pattern must still play before the boundary"
+        );
+    }
+
+    #[test]
+    fn queued_pattern_launches_at_bar_and_starts_local_0() {
+        let dur = step_dur_micros(120.0);
+        // Original: note 36 on local 0. Queue note 50 (NextBar) at step 2.
+        // At GLOBAL step 16 the new pattern's LOCAL step 0 must fire (note 50 at abs 16).
+        let mut seq = Sequencer::new(set_with(vec![drum_lane_step0_note(36)]));
+        let mut sink = RecordingSink::new();
+        seq.play(0);
+        let mut now = 0u64;
+        while now <= 17 * dur {
+            if now == 2 * dur {
+                seq.queue_launch(0, drum_pattern_step0_note(50), Quant::NextBar);
+            }
+            seq.tick(now, &mut sink);
+            now += 1_000;
+        }
+
+        // New pattern (note 50) fires at absolute step 16 (its local step 0).
+        let new_ons = kick_note_on_abs_steps(&sink, 50, dur);
+        assert!(
+            new_ons.contains(&16),
+            "new pattern's local-0 hit must fire at global step 16; got {new_ons:?}"
+        );
+        // The launch is recorded for the engine to confirm (just_launched accumulates
+        // across ticks until drained), and the offset aligned local-0 to the bar.
+        let launched = seq.take_launched();
+        assert!(
+            launched.contains(&0),
+            "lane 0 must be reported as launched; got {launched:?}"
+        );
+    }
+
+    #[test]
+    fn next_beat_launches_at_next_multiple_of_4() {
+        let dur = step_dur_micros(120.0);
+        // Queue at step 1 with NextBeat → must launch at step 4 (next multiple of 4),
+        // NOT before, and the new pattern's local-0 fires at absolute step 4.
+        let mut seq = Sequencer::new(set_with(vec![drum_lane_step0_note(36)]));
+        let mut sink = RecordingSink::new();
+        seq.play(0);
+        let mut now = 0u64;
+        while now <= 5 * dur {
+            if now == dur {
+                seq.queue_launch(0, drum_pattern_step0_note(50), Quant::NextBeat);
+            }
+            seq.tick(now, &mut sink);
+            now += 1_000;
+        }
+        let new_ons = kick_note_on_abs_steps(&sink, 50, dur);
+        assert!(
+            new_ons.contains(&4),
+            "NextBeat launch must fire the new pattern's local-0 at step 4; got {new_ons:?}"
+        );
+        // Must not have launched earlier (steps 2 or 3 are not beat boundaries).
+        assert!(
+            !new_ons.iter().any(|&s| s < 4),
+            "new pattern must not fire before step 4; got {new_ons:?}"
+        );
+    }
+
+    #[test]
+    fn launch_is_exactly_once() {
+        let dur = step_dur_micros(120.0);
+        // Queue note 50 (NextBar) at step 2; run two full bars. The new pattern's
+        // local-0 fires at abs 16 (launch) and then at abs 32 (its OWN wrap, len 16),
+        // but it must NOT re-launch (re-apply the queue) at step 32. We detect a
+        // double application by the launch_offset only being set once: the new
+        // pattern wraps with len 16 so its local-0 falls on abs {16, 32}. A re-launch
+        // would reset the offset to 32 and ALSO re-release — observed via take_launched.
+        let mut seq = Sequencer::new(set_with(vec![drum_lane_step0_note(36)]));
+        let mut sink = RecordingSink::new();
+        seq.play(0);
+        let mut launched_events: Vec<usize> = Vec::new();
+        let mut now = 0u64;
+        while now <= 33 * dur {
+            if now == 2 * dur {
+                seq.queue_launch(0, drum_pattern_step0_note(50), Quant::NextBar);
+            }
+            seq.tick(now, &mut sink);
+            launched_events.extend(seq.take_launched());
+            now += 1_000;
+        }
+        // The lane launched exactly once (at the first boundary), never re-applied.
+        assert_eq!(
+            launched_events.len(),
+            1,
+            "launch must happen exactly once; got {launched_events:?}"
+        );
+        // Sanity: the new pattern still wraps normally afterward (abs 16 and 32 both fire).
+        let new_ons = kick_note_on_abs_steps(&sink, 50, dur);
+        assert!(new_ons.contains(&16) && new_ons.contains(&32));
+    }
+
+    #[test]
+    fn cancel_launch_prevents_it() {
+        let dur = step_dur_micros(120.0);
+        let mut seq = Sequencer::new(set_with(vec![drum_lane_step0_note(36)]));
+        let mut sink = RecordingSink::new();
+        seq.play(0);
+        let mut now = 0u64;
+        while now <= 17 * dur {
+            if now == 2 * dur {
+                seq.queue_launch(0, drum_pattern_step0_note(50), Quant::NextBar);
+            }
+            if now == 5 * dur {
+                seq.cancel_launch(0);
+            }
+            seq.tick(now, &mut sink);
+            now += 1_000;
+        }
+        // Cancelled before the boundary → new pattern never fires.
+        let new_ons = sink
+            .events
+            .iter()
+            .filter(|(_, m)| matches!(m, MidiMessage::NoteOn { note: 50, .. }))
+            .count();
+        assert_eq!(new_ons, 0, "cancelled launch must not fire");
+        // Original pattern keeps playing (note 36 fires at abs 0 and 16).
+        let orig = kick_note_on_abs_steps(&sink, 36, dur);
+        assert!(
+            orig.contains(&0) && orig.contains(&16),
+            "original pattern must keep playing after cancel; got {orig:?}"
+        );
+    }
+
+    #[test]
+    fn other_lanes_unaffected_by_a_lane_launch() {
+        let dur = step_dur_micros(120.0);
+        // Lane 0: note 36 local0. Lane 1: note 40 local0 (independent). Launch lane 0.
+        // Lane 1 must keep firing note 40 at abs {0,16,32} regardless.
+        let mut seq = Sequencer::new(set_with(vec![
+            drum_lane_step0_note(36),
+            drum_lane_step0_note(40),
+        ]));
+        let mut sink = RecordingSink::new();
+        seq.play(0);
+        let mut now = 0u64;
+        while now <= 17 * dur {
+            if now == 2 * dur {
+                seq.queue_launch(0, drum_pattern_step0_note(50), Quant::NextBar);
+            }
+            seq.tick(now, &mut sink);
+            now += 1_000;
+        }
+        // Lane 1 (note 40) fired at its own local-0 positions abs 0 and 16, untouched
+        // by lane 0's launch and offset.
+        let lane1 = kick_note_on_abs_steps(&sink, 40, dur);
+        assert!(
+            lane1.contains(&0) && lane1.contains(&16),
+            "untouched lane must keep its original local-0 schedule; got {lane1:?}"
+        );
+        // Lane 0's launch took effect (note 50 at abs 16).
+        let lane0_new = kick_note_on_abs_steps(&sink, 50, dur);
+        assert!(lane0_new.contains(&16), "launching lane DID launch");
+    }
+
+    #[test]
+    fn launch_releases_held_slide_note() {
+        let dur = step_dur_micros(120.0);
+        // Lane 0: a slide-held melodic note on step 0 (held, off_at=None). Queue a
+        // drum pattern (NextBar). At the boundary the held note must be released
+        // (NoteOff for note 45 on channel 1) before the new pattern materializes.
+        let mut seq = Sequencer::new(set_with(vec![melodic_lane_slide_held()]));
+        let mut sink = RecordingSink::new();
+        seq.play(0);
+        // Tick step 0 so the held note sounds.
+        seq.tick(0, &mut sink);
+        let held_pitch = 45u8;
+        assert!(
+            sink.events.iter().any(|(_, m)| *m
+                == MidiMessage::NoteOn {
+                    channel: 1,
+                    note: held_pitch,
+                    vel: 100
+                }),
+            "held slide note must have sounded"
+        );
+        // No NoteOff yet (slide-held).
+        assert_eq!(
+            sink.events
+                .iter()
+                .filter(|(_, m)| *m
+                    == MidiMessage::NoteOff {
+                        channel: 1,
+                        note: held_pitch
+                    })
+                .count(),
+            0,
+            "held note must not be released before launch"
+        );
+        // Queue a replacement pattern (a 4-step drum lane) at NextBar.
+        seq.queue_launch(0, drum_pattern_step0_note(50), Quant::NextBar);
+        // Run to the bar boundary (step 16).
+        let mut now = 1_000u64;
+        while now <= 16 * dur + dur {
+            seq.tick(now, &mut sink);
+            now += 1_000;
+        }
+        // The held note got a NoteOff at/after the boundary (release on launch).
+        assert!(
+            sink.events.iter().any(|(at, m)| *at >= 16 * dur
+                && *m
+                    == MidiMessage::NoteOff {
+                        channel: 1,
+                        note: held_pitch
+                    }),
+            "launch must release the lane's held slide note at the boundary; got {:?}",
+            sink.events
+        );
+    }
+
+    #[test]
+    fn launch_under_link_fires_at_boundary() {
+        let dur = step_dur_micros(120.0);
+        // Drive the absolute step counter via sync_to_beat (Link), not manual interval
+        // accumulation. Queue note 50 (NextBar) while at an early beat; advance the
+        // beat across step 16 and confirm the new pattern's local-0 fires there.
+        let mut seq = Sequencer::new(set_with(vec![drum_lane_step0_note(36)]));
+        let mut sink = RecordingSink::new();
+        seq.play(0);
+
+        // beat 0.0 → step 0; fire it.
+        seq.sync_to_beat(0.0, 120.0);
+        seq.tick(0, &mut sink);
+
+        // Queue at step 0..boundary.
+        seq.queue_launch(0, drum_pattern_step0_note(50), Quant::NextBar);
+
+        // Link advances to beat 4.0 → step 16 (the bar boundary). tick materializes it.
+        seq.sync_to_beat(4.0, 120.0); // step_from_beat(4.0) = 16
+        seq.tick(16 * dur, &mut sink);
+
+        let new_ons = kick_note_on_abs_steps(&sink, 50, dur);
+        assert!(
+            new_ons.contains(&16),
+            "under Link, the queued pattern must launch at global step 16; got {new_ons:?}"
+        );
+        // Exactly-once: take_launched reports lane 0 launched.
+        // (Drained inside tick via the engine; here we drain manually.)
+        let launched = seq.take_launched();
+        assert!(
+            launched.contains(&0),
+            "take_launched must report lane 0 launched; got {launched:?}"
         );
     }
 }
