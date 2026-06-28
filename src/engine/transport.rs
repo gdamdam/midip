@@ -42,8 +42,15 @@ impl Transport {
 
     /// Record a tap at `now_micros` and update `manual_bpm` from the average
     /// inter-tap interval. Keeps up to 8 recent taps in a ring; needs ≥2 taps
-    /// before it can compute a tempo.
+    /// before it can compute a tempo. Resets the tap ring if there's a gap
+    /// >2 seconds since the last tap (to avoid garbage BPM from long pauses).
     pub fn tap(&mut self, now_micros: u64) {
+        // Reset if there's a stale gap (>2 seconds) since the last tap.
+        if let Some(&last) = self.taps.last() {
+            if now_micros.saturating_sub(last) > 2_000_000 {
+                self.taps.clear();
+            }
+        }
         self.taps.push(now_micros);
         // Keep only the most recent 8 taps.
         if self.taps.len() > 8 {
@@ -105,5 +112,30 @@ mod tests {
         t.tap(1_000_000);
         t.tap(1_500_000);
         assert!((t.manual_bpm - 120.0).abs() < 1.0, "got {}", t.manual_bpm);
+    }
+
+    #[test]
+    fn tap_tempo_resets_after_stale_gap() {
+        // Tap at 120 BPM (500_000 µs intervals), then a long gap, then at 140 BPM
+        // (428_571 µs intervals). The long gap should clear the old taps,
+        // so the final BPM reflects only the new tempo.
+        let mut t = Transport::new();
+        // Initial 120 BPM sequence (3 taps).
+        t.tap(0);
+        t.tap(500_000);
+        t.tap(1_000_000);
+        assert!((t.manual_bpm - 120.0).abs() < 1.0, "initial tempo");
+
+        // Tap after >2 seconds (>2_000_000 µs).
+        // This should reset the tap ring.
+        t.tap(5_000_000);
+        // After the reset + 1 new tap, we only have 1 tap, so BPM doesn't update yet.
+        assert!((t.manual_bpm - 120.0).abs() < 1.0, "unchanged after first post-gap tap");
+
+        // Now tap again at ~140 BPM intervals (428_571 µs).
+        t.tap(5_428_571);
+        t.tap(5_857_142);
+        // Should see ~140 BPM, not something skewed by the old 120 BPM taps.
+        assert!((t.manual_bpm - 140.0).abs() < 2.0, "new tempo after gap, got {}", t.manual_bpm);
     }
 }
