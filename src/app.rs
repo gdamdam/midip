@@ -17,6 +17,7 @@ pub enum Mode {
     Edit,
     Library,
     Help,
+    TempoEntry,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -47,6 +48,12 @@ pub enum Action {
     SetBpm(f64),
     Tap,
     ToggleLink,
+    OpenTempo,
+    TempoDigit(char),
+    TempoBackspace,
+    TempoCommit,
+    TempoCancel,
+    AdjustBpm(i32),
     AdjustSwing(i8),       // transport swing param (distinct from AdjustLen = melodic note len)
     AdjustPatternLen(i8),  // resize the focused lane's pattern length
     AdjustProb(i8),        // per-step probability on the cursor cell (±0.1 per unit)
@@ -87,6 +94,7 @@ pub struct App {
     pub redo: Vec<Set>,
     pub status: String,
     pub should_quit: bool,
+    pub tempo_input: String,
 }
 
 /// Default melodic velocity multiplier when placing a note (1.0 -> MIDI 100).
@@ -119,6 +127,7 @@ impl App {
             redo: Vec::new(),
             status: String::new(),
             should_quit: false,
+            tempo_input: String::new(),
         }
     }
 
@@ -239,6 +248,35 @@ impl App {
             Action::ToggleLink => {
                 self.link_enabled = !self.link_enabled;
                 cmds.push(UiCommand::ToggleLink(self.link_enabled));
+            }
+            Action::OpenTempo => {
+                self.mode = Mode::TempoEntry;
+                self.tempo_input.clear();
+            }
+            Action::TempoDigit(c) => {
+                if c.is_ascii_digit() && self.tempo_input.len() < 3 {
+                    self.tempo_input.push(c);
+                }
+            }
+            Action::TempoBackspace => {
+                self.tempo_input.pop();
+            }
+            Action::TempoCommit => {
+                self.mode = Mode::Edit;
+                if let Ok(bpm) = self.tempo_input.parse::<f64>() {
+                    let bpm = bpm.clamp(20.0, 300.0);
+                    self.set.bpm = bpm;
+                    cmds.push(UiCommand::SetBpm(bpm));
+                }
+                self.tempo_input.clear();
+            }
+            Action::TempoCancel => {
+                self.mode = Mode::Edit;
+                self.tempo_input.clear();
+            }
+            Action::AdjustBpm(d) => {
+                self.set.bpm = (self.set.bpm + d as f64).clamp(20.0, 300.0);
+                cmds.push(UiCommand::SetBpm(self.set.bpm));
             }
             Action::AdjustSwing(d) => {
                 // Swing mutates the Set, so it is snapshotted per the undo invariant.
@@ -1117,6 +1155,131 @@ mod tests {
         let cmds = app.apply(Action::Euclid { dp: 1, dr: 0 });
         assert!(cmds.is_empty());
         assert!(app.undo.is_empty());
+    }
+
+    // --- BPM control reducer ---------------------------------------------
+
+    #[test]
+    fn open_tempo_sets_mode_and_clears_buffer() {
+        let mut app = new_app();
+        app.tempo_input = "99".to_string();
+        let cmds = app.apply(Action::OpenTempo);
+        assert_eq!(app.mode, Mode::TempoEntry);
+        assert_eq!(app.tempo_input, "");
+        assert!(cmds.is_empty());
+    }
+
+    #[test]
+    fn typing_digits_then_commit_sets_bpm_and_returns_to_edit() {
+        let mut app = new_app();
+        app.apply(Action::OpenTempo);
+        app.apply(Action::TempoDigit('1'));
+        app.apply(Action::TempoDigit('2'));
+        let cmds = app.apply(Action::TempoDigit('4'));
+        assert!(cmds.is_empty()); // no command on digit
+        assert_eq!(app.tempo_input, "124");
+
+        let cmds = app.apply(Action::TempoCommit);
+        assert_eq!(app.mode, Mode::Edit);
+        assert_eq!(app.tempo_input, "");
+        assert!((app.set.bpm - 124.0).abs() < 1e-9);
+        assert_eq!(cmds, vec![UiCommand::SetBpm(124.0)]);
+    }
+
+    #[test]
+    fn commit_clamps_low_value() {
+        let mut app = new_app();
+        app.apply(Action::OpenTempo);
+        app.apply(Action::TempoDigit('5')); // "5" < 20 -> clamp to 20
+        let cmds = app.apply(Action::TempoCommit);
+        assert!((app.set.bpm - 20.0).abs() < 1e-9);
+        assert_eq!(cmds, vec![UiCommand::SetBpm(20.0)]);
+    }
+
+    #[test]
+    fn commit_clamps_high_value() {
+        let mut app = new_app();
+        app.apply(Action::OpenTempo);
+        app.apply(Action::TempoDigit('9'));
+        app.apply(Action::TempoDigit('9'));
+        app.apply(Action::TempoDigit('9')); // "999" > 300 -> clamp to 300
+        let cmds = app.apply(Action::TempoCommit);
+        assert!((app.set.bpm - 300.0).abs() < 1e-9);
+        assert_eq!(cmds, vec![UiCommand::SetBpm(300.0)]);
+    }
+
+    #[test]
+    fn commit_empty_input_leaves_bpm_unchanged_returns_edit() {
+        let mut app = new_app();
+        let original_bpm = app.set.bpm;
+        app.apply(Action::OpenTempo);
+        // No digits typed
+        let cmds = app.apply(Action::TempoCommit);
+        assert_eq!(app.mode, Mode::Edit);
+        assert!((app.set.bpm - original_bpm).abs() < 1e-9);
+        assert!(cmds.is_empty());
+    }
+
+    #[test]
+    fn tempo_cancel_leaves_bpm_unchanged() {
+        let mut app = new_app();
+        let original_bpm = app.set.bpm;
+        app.apply(Action::OpenTempo);
+        app.apply(Action::TempoDigit('2'));
+        app.apply(Action::TempoDigit('0'));
+        app.apply(Action::TempoDigit('0'));
+        let cmds = app.apply(Action::TempoCancel);
+        assert_eq!(app.mode, Mode::Edit);
+        assert_eq!(app.tempo_input, "");
+        assert!((app.set.bpm - original_bpm).abs() < 1e-9);
+        assert!(cmds.is_empty());
+    }
+
+    #[test]
+    fn tempo_backspace_removes_last_char() {
+        let mut app = new_app();
+        app.apply(Action::OpenTempo);
+        app.apply(Action::TempoDigit('1'));
+        app.apply(Action::TempoDigit('2'));
+        app.apply(Action::TempoBackspace);
+        assert_eq!(app.tempo_input, "1");
+        let cmds = app.apply(Action::TempoBackspace);
+        assert_eq!(app.tempo_input, "");
+        assert!(cmds.is_empty());
+    }
+
+    #[test]
+    fn tempo_digit_capped_at_three_chars() {
+        let mut app = new_app();
+        app.apply(Action::OpenTempo);
+        app.apply(Action::TempoDigit('1'));
+        app.apply(Action::TempoDigit('2'));
+        app.apply(Action::TempoDigit('3'));
+        app.apply(Action::TempoDigit('4')); // should be ignored
+        assert_eq!(app.tempo_input, "123");
+    }
+
+    #[test]
+    fn adjust_bpm_increments_and_clamps() {
+        let mut app = new_app();
+        app.set.bpm = 120.0;
+        let cmds = app.apply(Action::AdjustBpm(1));
+        assert!((app.set.bpm - 121.0).abs() < 1e-9);
+        assert_eq!(cmds, vec![UiCommand::SetBpm(121.0)]);
+
+        let cmds = app.apply(Action::AdjustBpm(-1));
+        assert!((app.set.bpm - 120.0).abs() < 1e-9);
+        assert_eq!(cmds, vec![UiCommand::SetBpm(120.0)]);
+
+        // Clamp at 300
+        app.set.bpm = 299.5;
+        app.apply(Action::AdjustBpm(1));
+        assert!((app.set.bpm - 300.0).abs() < 1e-9);
+
+        // Clamp at 20
+        app.set.bpm = 20.5;
+        app.apply(Action::AdjustBpm(-1));
+        assert!((app.set.bpm - 20.0).abs() < 1e-9);
     }
 
     // --- undo invariant --------------------------------------------------

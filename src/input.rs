@@ -40,6 +40,15 @@ pub fn key_to_action(key: KeyEvent, mode: Mode, kind: LaneKind) -> Action {
             _ => {}
         },
         Mode::Help => return Action::Help,
+        Mode::TempoEntry => {
+            return match key.code {
+                KeyCode::Char(c) if c.is_ascii_digit() => Action::TempoDigit(c),
+                KeyCode::Backspace => Action::TempoBackspace,
+                KeyCode::Enter => Action::TempoCommit,
+                KeyCode::Esc => Action::TempoCancel,
+                _ => Action::None,
+            };
+        }
         Mode::Edit => {}
     }
 
@@ -95,9 +104,11 @@ pub fn key_to_action(key: KeyEvent, mode: Mode, kind: LaneKind) -> Action {
                     'u' => return Action::Undo,
                     'm' => return Action::ToggleMute,
                     'S' => return Action::ToggleSolo,
-                    't' => return Action::SetBpm(120.0), // fixed prompt value for v1
+                    't' => return Action::OpenTempo,
                     'T' => return Action::Tap,
                     'k' => return Action::ToggleLink,
+                    ';' => return Action::AdjustBpm(-1),
+                    '\'' => return Action::AdjustBpm(1),
                     '<' => return Action::AdjustSwing(-1),
                     '>' => return Action::AdjustSwing(1),
                     '{' => return Action::AdjustPatternLen(-1),
@@ -234,6 +245,67 @@ mod tests {
         assert_eq!(
             key_to_action(k(KeyCode::Up), Mode::Edit, LaneKind::Drums),
             Action::MoveCursor(-1, 0)
+        );
+    }
+
+    // --- BPM control keys -------------------------------------------------
+
+    #[test]
+    fn t_opens_tempo_entry() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('t')), Mode::Edit, LaneKind::Drums),
+            Action::OpenTempo
+        );
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('t')), Mode::Edit, LaneKind::Melodic),
+            Action::OpenTempo
+        );
+    }
+
+    #[test]
+    fn semicolon_and_quote_nudge_bpm() {
+        for kind in [LaneKind::Drums, LaneKind::Melodic] {
+            assert_eq!(
+                key_to_action(k(KeyCode::Char(';')), Mode::Edit, kind),
+                Action::AdjustBpm(-1)
+            );
+            assert_eq!(
+                key_to_action(k(KeyCode::Char('\'')), Mode::Edit, kind),
+                Action::AdjustBpm(1)
+            );
+        }
+    }
+
+    #[test]
+    fn tempo_entry_mode_digit_backspace_commit_cancel() {
+        // Digits → TempoDigit
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('1')), Mode::TempoEntry, LaneKind::Drums),
+            Action::TempoDigit('1')
+        );
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('9')), Mode::TempoEntry, LaneKind::Melodic),
+            Action::TempoDigit('9')
+        );
+        // Non-digit char → None
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('x')), Mode::TempoEntry, LaneKind::Drums),
+            Action::None
+        );
+        // Backspace → TempoBackspace
+        assert_eq!(
+            key_to_action(k(KeyCode::Backspace), Mode::TempoEntry, LaneKind::Drums),
+            Action::TempoBackspace
+        );
+        // Enter → TempoCommit
+        assert_eq!(
+            key_to_action(k(KeyCode::Enter), Mode::TempoEntry, LaneKind::Drums),
+            Action::TempoCommit
+        );
+        // Esc → TempoCancel
+        assert_eq!(
+            key_to_action(k(KeyCode::Esc), Mode::TempoEntry, LaneKind::Drums),
+            Action::TempoCancel
         );
     }
 

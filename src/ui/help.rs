@@ -23,7 +23,7 @@ pub fn render_help(f: &mut Frame, area: Rect) {
         Line::from("[ctrl+z] / [u]  undo   [ctrl+y]  redo"),
         Line::from("[m]  mute   [S]  solo"),
         Line::from("[esc]  panic / all-notes-off (does not stop transport)"),
-        Line::from("[t]  set tempo   [T]  tap   [k]  toggle Link"),
+        Line::from("[t]  set tempo (type BPM, Enter to confirm, Esc to cancel)   [; / ']  BPM −/+   [T]  tap   [k]  toggle Link"),
         Line::from("[l]  library   [s]  save   [?]  help   [q]  quit"),
     ];
     // Clear behind the overlay so it sits on top of the editor.

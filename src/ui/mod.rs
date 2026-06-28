@@ -14,7 +14,7 @@ use crate::app::{App, Mode};
 use crate::pattern::model::LaneKind;
 
 const FOOTER: &str = "[space]play [tab]lane [↑↓←→]move/pitch [g]slide [enter]toggle [0-9]vel \
-[<>]swing [{}]len [^z]undo [esc]panic [l]ibrary [s]ave [t]empo [k]link [?]help [q]uit";
+[<>]swing [{}]len [^z]undo [esc]panic [l]ibrary [s]ave [t]empo [;/']BPM−/+ [k]link [?]help [q]uit";
 
 /// Centered rect helper for overlays.
 fn centered(area: Rect, pct_x: u16, pct_y: u16) -> Rect {
@@ -63,7 +63,7 @@ pub fn render(f: &mut Frame, app: &App) {
     match app.mode {
         Mode::Library => library::render_library(f, centered(area, 90, 70), app),
         Mode::Help => help::render_help(f, centered(area, 60, 70)),
-        Mode::Edit => {}
+        Mode::Edit | Mode::TempoEntry => {}
     }
 }
 
