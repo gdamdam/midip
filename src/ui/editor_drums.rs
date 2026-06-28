@@ -43,14 +43,17 @@ fn combined_cursor_playhead_style() -> Style {
 /// Render the drum editor into `area`.
 pub fn render_drum_editor(f: &mut Frame, area: Rect, app: &App) {
     let lane = app.focused_lane();
+    // During an audition the focused lane shows the cued (preview) pattern; otherwise
+    // the committed lane pattern. The lane's profile/octave still drive layout.
+    let pattern = app.display_pattern(app.focus);
     let voices = lane.profile.drum_voices;
-    let len = lane.pattern.step_count();
+    let len = pattern.step_count();
 
     // Polymeter: render the playhead at the focused lane's LOCAL step.
     let local_playhead = if len == 0 { 0 } else { app.playhead % len };
     let accent = lane_color(lane.profile.id);
 
-    let steps: &[Vec<crate::pattern::model::DrumHit>] = match &lane.pattern.data {
+    let steps: &[Vec<crate::pattern::model::DrumHit>] = match &pattern.data {
         PatternData::Drums(s) => s,
         PatternData::Melodic(_) => &[],
     };
@@ -68,7 +71,7 @@ pub fn render_drum_editor(f: &mut Frame, area: Rect, app: &App) {
     let title = format!(
         " EDIT · {} · \"{}\" · {} steps · ch{}{} ",
         lane.profile.label,
-        lane.pattern.name,
+        pattern.name,
         len,
         lane.profile.channel + 1,
         scroll_indicator,

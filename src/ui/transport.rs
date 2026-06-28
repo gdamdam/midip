@@ -54,8 +54,12 @@ pub fn render_transport(f: &mut Frame, area: Rect, app: &App) {
     let accent = lane_color(app.focused_lane().profile.id);
 
     // --- play/stop ----------------------------------------------------------
-    let (play_glyph, play_label) = if app.playing {
+    // Drive from engine-confirmed state, not the optimistic `playing` flag.
+    // Three states: armed (waiting for Link boundary), playing, stopped.
+    let (play_glyph, play_label) = if app.engine_playing {
         ("▶ ", "PLAY")
+    } else if app.armed {
+        ("▶ ", "PLAY...")
     } else {
         ("■ ", "STOP")
     };
@@ -180,14 +184,20 @@ mod tests {
     }
 
     #[test]
-    fn shows_play_when_playing() {
+    fn shows_play_when_engine_playing() {
         let mut app = make_app();
-        app.playing = true;
+        // Drive from engine-confirmed field, not the optimistic `playing` flag.
+        app.engine_playing = true;
         let text = render(&app);
         assert!(text.contains("PLAY"), "expected PLAY, got: {text:?}");
         assert!(
             !text.contains("STOP"),
             "should not show STOP when playing, got: {text:?}"
+        );
+        // Must not show the armed marker when fully playing.
+        assert!(
+            !text.contains("PLAY..."),
+            "should not show armed marker when engine_playing, got: {text:?}"
         );
     }
 
@@ -199,6 +209,21 @@ mod tests {
         assert!(
             !text.contains("PLAY"),
             "should not show PLAY when stopped, got: {text:?}"
+        );
+    }
+
+    #[test]
+    fn shows_armed_marker_when_armed() {
+        let mut app = make_app();
+        app.armed = true;
+        let text = render(&app);
+        assert!(
+            text.contains("PLAY..."),
+            "expected PLAY... (armed marker) when armed, got: {text:?}"
+        );
+        assert!(
+            !text.contains("STOP"),
+            "should not show STOP when armed, got: {text:?}"
         );
     }
 

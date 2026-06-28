@@ -70,6 +70,17 @@ fn main() -> Result<()> {
     run(terminal)
 }
 
+/// Send a command to the engine; on channel failure set a visible status toast.
+fn send_or_toast(
+    tx: &crossbeam_channel::Sender<midip::engine::UiCommand>,
+    cmd: midip::engine::UiCommand,
+    app: &mut App,
+) {
+    if tx.send(cmd).is_err() {
+        app.set_status("engine unavailable");
+    }
+}
+
 fn run(mut terminal: Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
     let profiles = default_profiles();
 
@@ -91,7 +102,7 @@ fn run(mut terminal: Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
     let engine = spawn_engine(set.clone(), link, profiles);
 
     let mut app = App::new(set, library);
-    app.status = lib_status;
+    app.set_status(lib_status);
 
     loop {
         terminal.draw(|f| midip::ui::render(f, &app))?;
@@ -102,7 +113,7 @@ fn run(mut terminal: Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
                 let action = midip::input::key_to_action(key, app.mode, app.focused_kind());
                 let cmds = app.apply(action);
                 for cmd in cmds {
-                    let _ = engine.tx.send(cmd);
+                    send_or_toast(&engine.tx, cmd, &mut app);
                 }
             }
         }
@@ -112,8 +123,11 @@ fn run(mut terminal: Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
             app.on_engine_event(ev);
         }
 
+        // Expire status toasts after ~3 s (STATUS_TTL_FRAMES × 16 ms poll timeout).
+        app.tick_status();
+
         if app.should_quit {
-            let _ = engine.tx.send(midip::engine::UiCommand::Quit);
+            send_or_toast(&engine.tx, midip::engine::UiCommand::Quit, &mut app);
             break;
         }
     }

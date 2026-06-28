@@ -23,14 +23,17 @@ fn combined_cursor_playhead_style() -> Style {
 /// Render the melodic editor into `area`.
 pub fn render_melodic_editor(f: &mut Frame, area: Rect, app: &App) {
     let lane = app.focused_lane();
-    let len = lane.pattern.step_count();
+    // During an audition the focused lane shows the cued (preview) pattern; otherwise
+    // the committed lane pattern. The lane's profile/octave/transpose still drive layout.
+    let pattern = app.display_pattern(app.focus);
+    let len = pattern.step_count();
     let root = lane.profile.root_note;
 
     // Polymeter: render the playhead at the focused lane's LOCAL step.
     let local_playhead = if len == 0 { 0 } else { app.playhead % len };
     let accent = lane_color(lane.profile.id);
 
-    let steps: &[Option<MelodicNote>] = match &lane.pattern.data {
+    let steps: &[Option<MelodicNote>] = match &pattern.data {
         PatternData::Melodic(s) => s,
         PatternData::Drums(_) => &[],
     };
@@ -48,7 +51,7 @@ pub fn render_melodic_editor(f: &mut Frame, area: Rect, app: &App) {
     let title = format!(
         " EDIT · {} · \"{}\" · {} steps · ch{} · root {}{} ",
         lane.profile.label,
-        lane.pattern.name,
+        pattern.name,
         len,
         lane.profile.channel + 1,
         note_name(root),

@@ -73,6 +73,16 @@ pub enum EngineEvent {
         connected: bool,
         port: String,
     },
+    /// Engine-confirmed: Play was received with Link enabled; waiting for the quantized bar
+    /// boundary. The sequencer is NOT yet running — the UI should show an "armed" indicator.
+    Armed,
+    /// Engine-confirmed: sequencer has started playing (step 0 on manual; bar boundary on Link).
+    Started { at_step: usize },
+    /// Engine-confirmed: sequencer has stopped.
+    Stopped,
+    /// Engine-resolved tempo after a Tap or SetBpm command. Carries the BPM that
+    /// the engine actually applied so the UI can update its displayed value.
+    Tempo { bpm: f64 },
 }
 
 /// Handle returned by `spawn_engine`.
@@ -85,15 +95,16 @@ pub struct EngineHandle {
 /// Emit a `LinkStatus` event roughly this often (in ticks) to avoid flooding.
 const LINK_STATUS_EVERY: u64 = 200;
 
-/// Check for hot-plug / send-failure every this many ticks (~1 s at 1 ms/tick).
-const HOTPLUG_CHECK_EVERY: u64 = 1_000;
-
 /// Mutable engine state shared by both drivers.
 struct EngineState {
     seq: Sequencer,
     clock: ClockGen,
     transport: Transport,
     link_enabled: bool,
+    /// True after a Link-gated Play: waiting for the quantized bar boundary before
+    /// actually starting the sequencer. While armed, `seq.playing` is false so no
+    /// notes escape.
+    armed: bool,
     last_step: Option<usize>,
     bar: u32,
     tick_count: u64,
@@ -110,6 +121,7 @@ impl EngineState {
             clock: ClockGen::new(),
             transport,
             link_enabled: false,
+            armed: false,
             last_step: None,
             bar: 0,
             tick_count: 0,
@@ -125,18 +137,29 @@ fn apply_command(
     now: u64,
     link: &mut dyn LinkClock,
     sink: &mut dyn MidiSink,
+    events: &mut Vec<EngineEvent>,
 ) -> bool {
     match cmd {
         UiCommand::Play => {
-            st.seq.play(now);
-            st.clock.start(now); // begin Clock ticks only — no MIDI Start (would run the device's own sequencer)
             if link.enabled() {
-                link.request_start(now, 4.0); // quantized start: align to next bar
+                // Link mode: defer sequencer start to the quantized bar boundary.
+                // While armed, seq.playing is false so no notes escape.
+                link.request_start(now, 4.0);
+                st.clock.start(now);
+                st.armed = true;
+                events.push(EngineEvent::Armed);
+            } else {
+                // Manual mode: start immediately and confirm.
+                st.seq.play(now);
+                st.clock.start(now); // begin Clock ticks only — no MIDI Start (would run the device's own sequencer)
+                events.push(EngineEvent::Started { at_step: 0 });
             }
         }
         UiCommand::Stop => {
             st.seq.stop(now, sink); // releases sounding notes (all-notes-off)
             st.clock.stop(); // cease Clock ticks; no MIDI Stop sent
+            st.armed = false;
+            events.push(EngineEvent::Stopped);
         }
         UiCommand::SetBpm(bpm) => {
             st.transport.manual_bpm = bpm;
@@ -147,6 +170,9 @@ fn apply_command(
             st.transport.tap(now);
             st.transport.source = TempoSource::Manual(st.transport.manual_bpm);
             st.seq.set_bpm(st.transport.manual_bpm);
+            events.push(EngineEvent::Tempo {
+                bpm: st.transport.manual_bpm,
+            });
         }
         UiCommand::SetSwing(s) => {
             st.seq.set_swing(s);
@@ -159,6 +185,13 @@ fn apply_command(
             } else {
                 TempoSource::Manual(st.transport.manual_bpm)
             };
+            // If we were armed waiting for a Link boundary and Link is turned off,
+            // start the sequencer immediately.
+            if !on && st.armed {
+                st.seq.play(now);
+                st.armed = false;
+                events.push(EngineEvent::Started { at_step: 0 });
+            }
         }
         UiCommand::LoadPattern { lane, pattern } => {
             if let Some(existing) = st.seq.lane(lane) {
@@ -203,8 +236,18 @@ fn apply_command(
             }
         }
         UiCommand::SetSet(set) => {
+            // Grab the new BPM before `set` is moved into Sequencer::new.
+            let new_bpm = set.bpm;
             let playing = st.seq.is_playing();
+            // Release every sounding note via the registry before dropping the old sequencer
+            // (P2: slide/held notes would otherwise hang on hardware).
+            st.seq.release_all(now, sink);
             st.seq = Sequencer::new(set);
+            // Sync transport so the MIDI clock and note timing agree on the new BPM (bug 2).
+            st.transport.manual_bpm = new_bpm;
+            if !st.link_enabled {
+                st.transport.source = TempoSource::Manual(new_bpm);
+            }
             if playing {
                 st.seq.play(now);
             }
@@ -240,7 +283,7 @@ fn step_engine(
     while i < pending.len() {
         if pending[i].0 <= now {
             let (_, cmd) = pending.remove(i);
-            if apply_command(st, cmd, now, link, sink) {
+            if apply_command(st, cmd, now, link, sink, events) {
                 quit = true;
             }
         } else {
@@ -261,6 +304,14 @@ fn step_engine(
         None
     };
     let bpm = st.transport.effective_bpm(link_tempo);
+
+    // Link-gated start: once the quantized bar boundary is reached (beat >= 0),
+    // fire the sequencer. While armed, seq.playing is false so tick emits nothing.
+    if st.armed && st.link_enabled && link.beat_at(now, 4.0) >= 0.0 {
+        st.seq.play(now);
+        st.armed = false;
+        events.push(EngineEvent::Started { at_step: 0 });
+    }
 
     if st.link_enabled {
         let beat = link.beat_at(now, 4.0);
@@ -345,12 +396,11 @@ pub fn run_engine_headless(
 // per physical port…" and which this port-level model preserves.
 // ---------------------------------------------------------------------------
 
-/// One connection per distinct physical port. `port_match` is the substring that
-/// identifies the port; `sink` is the single live connection (or `NullSink` when
-/// disconnected). Health + hot-plug operate at this PORT level.
+/// One connection per distinct physical port. `sink` is the single live connection (or
+/// `NullSink` when disconnected). The device-watcher thread owns the port_match → sink
+/// mapping (it holds the distinct `port_match` list itself), so the engine only carries
+/// the installed sink + its last-known state for change-detection and per-lane status.
 struct PortSink {
-    /// The port_match substring shared by every lane mapped to this port.
-    port_match: &'static str,
     /// The single sink for this port (NullSink when not connected).
     sink: Box<dyn MidiSink>,
     /// Last-known connection state (for change-detection / dedupe).
@@ -361,10 +411,10 @@ struct PortSink {
 
 /// Distinct-port plan derived purely from profiles — NO hardware access.
 ///
-/// Returns `(ports, lane_to_port)` where `ports[i].port_match` is the i-th distinct
-/// `port_match` in first-seen order, and `lane_to_port[lane]` is the index into `ports`
-/// for that lane. Lanes sharing a `port_match` map to the SAME port index — this is the
-/// dedup that guarantees one connection per physical port. Mirrors the old `unique_ports`.
+/// Returns `(distinct, lane_to_port)` where `distinct[i]` is the i-th distinct `port_match`
+/// substring in first-seen order, and `lane_to_port[lane]` is the index into `distinct` for
+/// that lane. Lanes sharing a `port_match` map to the SAME port index — this is the dedup
+/// that guarantees one connection per physical port. Mirrors the old `unique_ports`.
 fn map_lanes_to_ports(profiles: &[DeviceProfile; 3]) -> (Vec<&'static str>, [usize; 3]) {
     let mut distinct: Vec<&'static str> = Vec::new();
     let mut lane_to_port = [0usize; 3];
@@ -379,6 +429,134 @@ fn map_lanes_to_ports(profiles: &[DeviceProfile; 3]) -> (Vec<&'static str>, [usi
         lane_to_port[lane] = idx;
     }
     (distinct, lane_to_port)
+}
+
+/// All lanes that resolve to the given port index, in lane order. Used to release the
+/// correct notes when a port connects/disconnects/fails (lanes sharing a port move
+/// together — the registry tracks per-lane ownership). Pure; UNIT-TESTED.
+fn lanes_of(lane_to_port: &[usize; 3], port_idx: usize) -> Vec<usize> {
+    lane_to_port
+        .iter()
+        .enumerate()
+        .filter(|(_, &p)| p == port_idx)
+        .map(|(lane, _)| lane)
+        .collect()
+}
+
+/// What the device-watcher should do for a single port this scan. Pure data — no hardware.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PortAction {
+    Connect(usize),
+    Drop(usize),
+}
+
+/// Pure connection planner (UNIT-TESTED): compares the just-enumerated presence of each
+/// port against its last-known connection state. `present && !connected` → Connect;
+/// `!present && connected` → Drop; otherwise nothing. No hardware access — the watcher
+/// thread executes the resulting actions.
+fn plan_port_actions(present: &[bool], connected: &[bool]) -> Vec<PortAction> {
+    let mut actions = Vec::new();
+    for (idx, (&p, &c)) in present.iter().zip(connected.iter()).enumerate() {
+        if p && !c {
+            actions.push(PortAction::Connect(idx));
+        } else if !p && c {
+            actions.push(PortAction::Drop(idx));
+        }
+    }
+    actions
+}
+
+/// watcher → engine. `Box<dyn MidiSink>` is `Send` (`MidiSink: Send`), so a ready-made
+/// connection can be moved across the channel — the engine only installs it.
+enum PortUpdate {
+    Connected {
+        idx: usize,
+        sink: Box<dyn MidiSink>,
+        name: String,
+    },
+    Disconnected {
+        idx: usize,
+    },
+}
+
+/// engine → watcher. `Reconnect` is sent after the engine drops an unhealthy port so the
+/// watcher rebuilds it; `Quit` (or a closed channel) tells the watcher to exit.
+enum PortRequest {
+    Reconnect(usize),
+    Quit,
+}
+
+/// Watcher scan cadence. Blocking enumeration/connection is fine here — this is a
+/// dedicated thread, never the timing loop.
+const WATCHER_SCAN_MS: u64 = 250;
+
+/// Device-watcher thread body. OWNS all port enumeration/connection (the ONLY place that
+/// calls `list_output_ports()` / `connect()` in the real engine), so a double-connect is
+/// structurally impossible. The first scan runs immediately (no initial sleep) so startup
+/// connects within ~one iteration.
+fn run_port_watcher(
+    port_matches: Vec<&'static str>,
+    updates: crossbeam_channel::Sender<PortUpdate>,
+    requests: crossbeam_channel::Receiver<PortRequest>,
+) {
+    // Local mirror of each port's connection state; only this thread mutates it.
+    let mut connected = vec![false; port_matches.len()];
+    let mut first = true;
+    loop {
+        if !first {
+            std::thread::sleep(std::time::Duration::from_millis(WATCHER_SCAN_MS));
+        }
+        first = false;
+
+        // Drain engine requests: Reconnect marks a port stale so the planner rebuilds it;
+        // Quit (or a dropped sender) ends the thread.
+        loop {
+            match requests.try_recv() {
+                Ok(PortRequest::Reconnect(idx)) => {
+                    if let Some(c) = connected.get_mut(idx) {
+                        *c = false;
+                    }
+                }
+                Ok(PortRequest::Quit) => return,
+                Err(crossbeam_channel::TryRecvError::Empty) => break,
+                Err(crossbeam_channel::TryRecvError::Disconnected) => return,
+            }
+        }
+
+        let available = list_output_ports();
+        let present: Vec<bool> = port_matches
+            .iter()
+            .map(|m| match_port(&available, m).is_some())
+            .collect();
+
+        for action in plan_port_actions(&present, &connected) {
+            match action {
+                PortAction::Connect(idx) => {
+                    if let Ok(sink) = connect(port_matches[idx]) {
+                        let name = port_display_name(&available, port_matches[idx]);
+                        if updates
+                            .send(PortUpdate::Connected {
+                                idx,
+                                sink: Box::new(sink),
+                                name,
+                            })
+                            .is_err()
+                        {
+                            return; // engine gone
+                        }
+                        connected[idx] = true;
+                    }
+                    // Connect failure: leave `connected=false`; retried next scan.
+                }
+                PortAction::Drop(idx) => {
+                    if updates.send(PortUpdate::Disconnected { idx }).is_err() {
+                        return;
+                    }
+                    connected[idx] = false;
+                }
+            }
+        }
+    }
 }
 
 /// Look up the actual port display name for a `port_match` in the available list,
@@ -405,93 +583,16 @@ fn emit_lane_status(ports: &[PortSink], lane_to_port: &[usize; 3], events: &mut 
     }
 }
 
-/// Build ONE sink per distinct physical port and emit one initial `DeviceStatus` per lane
-/// (derived from the shared port state). Opens at most one connection per port_match.
-fn build_port_sinks(
-    profiles: &[DeviceProfile; 3],
-    events: &mut Vec<EngineEvent>,
-) -> (Vec<PortSink>, [usize; 3]) {
-    let (distinct, lane_to_port) = map_lanes_to_ports(profiles);
-    let available = list_output_ports();
-    let mut ports: Vec<PortSink> = Vec::with_capacity(distinct.len());
-
-    for port_match in distinct {
-        let mut ps = PortSink {
-            port_match,
-            sink: Box::new(NullSink),
-            connected: false,
-            port_name: String::new(),
-        };
-        // Connect exactly once if the port is present.
-        if match_port(&available, port_match).is_some() {
-            if let Ok(midir_sink) = connect(port_match) {
-                ps.sink = Box::new(midir_sink);
-                ps.connected = true;
-                ps.port_name = port_display_name(&available, port_match);
-            }
-        }
-        ports.push(ps);
-    }
-
-    // Per-lane DeviceStatus derived from the (single) port state.
-    emit_lane_status(&ports, &lane_to_port, events);
-    (ports, lane_to_port)
-}
-
-/// Rescan health + port presence at the PORT level. Emits per-lane `DeviceStatus` only when
-/// a port's state CHANGES (so both lanes on a shared port flip together, consistently).
-///
-/// Runs in the engine thread every ~1 s (HOTPLUG_CHECK_EVERY ticks). Handles:
-/// - Send-failure: `MidiSink::health()` flips false after a failed write → port → NullSink.
-/// - Device vanished: port no longer in `list_output_ports()` → port → NullSink.
-/// - Device reappeared: port back in list for a disconnected port → reconnect ONCE.
-///
-/// Not unit-tested (touches real MIDI hardware); logic kept simple and well-commented.
-fn rescan_port_sinks(
-    ports: &mut [PortSink],
-    lane_to_port: &[usize; 3],
-    events: &mut Vec<EngineEvent>,
-) {
-    let available = list_output_ports();
-    let mut changed = false;
-
-    for ps in ports.iter_mut() {
-        let port_present = match_port(&available, ps.port_match).is_some();
-        let sink_healthy = ps.sink.health();
-
-        if ps.connected {
-            // Vanished or unhealthy → drop the single connection.
-            if !port_present || !sink_healthy {
-                ps.sink = Box::new(NullSink);
-                ps.connected = false;
-                ps.port_name.clear();
-                changed = true;
-            }
-        } else if port_present {
-            // Reappeared → reconnect exactly one connection for this port.
-            if let Ok(midir_sink) = connect(ps.port_match) {
-                ps.sink = Box::new(midir_sink);
-                ps.connected = true;
-                ps.port_name = port_display_name(&available, ps.port_match);
-                changed = true;
-            }
-        }
-    }
-
-    // Re-derive per-lane status only when something changed (dedupe).
-    if changed {
-        emit_lane_status(ports, lane_to_port, events);
-    }
-}
-
 /// Spawn the real engine on its own thread, driven by a monotonic clock. NOT unit-tested
 /// (non-deterministic timing); shares `step_engine` with the headless driver.
 ///
-/// Takes `profiles` instead of pre-built sinks so the engine thread owns the full
-/// sink lifecycle (initial connect + periodic hot-plug rescan). Builds ONE connection
-/// per distinct physical port (shared-port lanes collapse — no double-clock). Initial
-/// `DeviceStatus` events are emitted per lane (derived from port state) before the first
-/// tick so the UI receives them via `on_engine_event`.
+/// Takes `profiles` instead of pre-built sinks. All `PortSink`s start as `NullSink`/
+/// disconnected — a dedicated device-watcher thread (the ONLY caller of
+/// `list_output_ports()`/`connect()`) owns the entire connection lifecycle and hands the
+/// engine ready-made sinks over a channel. The timing loop never enumerates or connects:
+/// it only installs delivered sinks, releases notes on loss/route-change (P1), and detects
+/// health failures (asking the watcher to reconnect). One connection per distinct physical
+/// port (shared-port lanes collapse — no double-clock).
 pub fn spawn_engine(
     set: Set,
     mut link: Box<dyn LinkClock>,
@@ -506,22 +607,94 @@ pub fn spawn_engine(
         let mut events: Vec<EngineEvent> = Vec::new();
         let start = std::time::Instant::now();
 
-        // Build ONE sink per distinct port; emit initial per-lane DeviceStatus.
-        let (mut port_sinks, lane_to_port) = build_port_sinks(&profiles, &mut events);
+        // Distinct-port plan from profiles only (no hardware access on this thread).
+        let (distinct, lane_to_port) = map_lanes_to_ports(&profiles);
 
-        // Flush initial DeviceStatus events before the first step.
+        // Every port starts disconnected (NullSink); the watcher will connect present ports.
+        let mut port_sinks: Vec<PortSink> = distinct
+            .iter()
+            .map(|_| PortSink {
+                sink: Box::new(NullSink),
+                connected: false,
+                port_name: String::new(),
+            })
+            .collect();
+
+        // Spawn the device-watcher: it owns enumeration/connection and streams PortUpdates.
+        let (update_tx, update_rx) = crossbeam_channel::unbounded::<PortUpdate>();
+        let (request_tx, request_rx) = crossbeam_channel::unbounded::<PortRequest>();
+        let watcher = {
+            let port_matches = distinct.clone();
+            std::thread::spawn(move || run_port_watcher(port_matches, update_tx, request_rx))
+        };
+
+        // Emit initial (all-disconnected) per-lane DeviceStatus before the first tick;
+        // the watcher's first scan (immediate, no initial sleep) flips present ports shortly.
+        emit_lane_status(&port_sinks, &lane_to_port, &mut events);
         for ev in events.drain(..) {
             if evt_tx.send(ev).is_err() {
+                let _ = request_tx.send(PortRequest::Quit);
+                let _ = watcher.join();
                 return;
             }
+        }
+
+        // Helper: forward queued events to the UI; on a closed channel, shut the watcher
+        // down and exit. Returns true if the engine should stop.
+        macro_rules! flush_events {
+            () => {{
+                let mut closed = false;
+                for ev in events.drain(..) {
+                    if evt_tx.send(ev).is_err() {
+                        closed = true;
+                        break;
+                    }
+                }
+                closed
+            }};
         }
 
         loop {
             let now = start.elapsed().as_micros() as u64;
 
-            // Drain channel into the pending queue (timestamped at `now`).
-            while let Ok(cmd) = cmd_rx.try_recv() {
-                pending.push((now, cmd));
+            // --- Install ready-made sinks from the watcher (NON-BLOCKING; no enumerate/connect). ---
+            while let Ok(update) = update_rx.try_recv() {
+                match update {
+                    PortUpdate::Connected { idx, sink, name } => {
+                        // Route change: if this slot was already live, release its lanes'
+                        // notes before swapping so nothing hangs on the outgoing connection.
+                        if port_sinks[idx].connected {
+                            let lanes = lanes_of(&lane_to_port, idx);
+                            let mut fanout = PortFanoutSink {
+                                ports: &mut port_sinks,
+                            };
+                            st.seq.release_lanes(&lanes, now, &mut fanout);
+                        }
+                        let ps = &mut port_sinks[idx];
+                        ps.sink = sink;
+                        ps.connected = true;
+                        ps.port_name = name;
+                        emit_lane_status(&port_sinks, &lane_to_port, &mut events);
+                    }
+                    PortUpdate::Disconnected { idx } => {
+                        // P1: release this port's sounding notes BEFORE swapping to NullSink,
+                        // so the NoteOffs go out the still-live connection (not into the void).
+                        // `release_lanes` selects by lane, but the fanout broadcasts the NoteOffs to
+                        // every port (deliberate, harmless: devices ignore notes on channels they
+                        // never sounded — matches the pre-existing per-port fanout model; M4 routing
+                        // will make sends port-targeted).
+                        let lanes = lanes_of(&lane_to_port, idx);
+                        let mut fanout = PortFanoutSink {
+                            ports: &mut port_sinks,
+                        };
+                        st.seq.release_lanes(&lanes, now, &mut fanout);
+                        let ps = &mut port_sinks[idx];
+                        ps.sink = Box::new(NullSink);
+                        ps.connected = false;
+                        ps.port_name.clear();
+                        emit_lane_status(&port_sinks, &lane_to_port, &mut events);
+                    }
+                }
             }
 
             // Fan out once per PORT (a shared port gets each message — incl. clock — ONCE).
@@ -537,24 +710,42 @@ pub fn spawn_engine(
                 &mut events,
             );
 
-            // Forward any events to the UI; drop on disconnect.
-            for ev in events.drain(..) {
-                if evt_tx.send(ev).is_err() {
-                    return;
+            // --- Health: detect connected ports whose sink failed; release notes, drop, ask
+            //     the watcher to reconnect. Gather unhealthy indices in an immutable pass
+            //     first (borrow checker), then mutate. NO enumerate/connect here. ---
+            let unhealthy: Vec<usize> = port_sinks
+                .iter()
+                .enumerate()
+                .filter(|(_, ps)| ps.connected && !ps.sink.health())
+                .map(|(idx, _)| idx)
+                .collect();
+            for idx in unhealthy {
+                let lanes = lanes_of(&lane_to_port, idx);
+                {
+                    let mut fanout = PortFanoutSink {
+                        ports: &mut port_sinks,
+                    };
+                    st.seq.release_lanes(&lanes, now, &mut fanout);
                 }
-            }
-            if quit {
-                return;
+                let ps = &mut port_sinks[idx];
+                ps.sink = Box::new(NullSink);
+                ps.connected = false;
+                ps.port_name.clear();
+                emit_lane_status(&port_sinks, &lane_to_port, &mut events);
+                let _ = request_tx.send(PortRequest::Reconnect(idx));
             }
 
-            // Periodic hot-plug rescan: check health + port presence every ~1 s.
-            if st.tick_count.is_multiple_of(HOTPLUG_CHECK_EVERY) && st.tick_count > 0 {
-                rescan_port_sinks(&mut port_sinks, &lane_to_port, &mut events);
-                for ev in events.drain(..) {
-                    if evt_tx.send(ev).is_err() {
-                        return;
-                    }
-                }
+            // Drain command channel into the pending queue (timestamped at `now`).
+            while let Ok(cmd) = cmd_rx.try_recv() {
+                pending.push((now, cmd));
+            }
+
+            // Forward any events to the UI.
+            if flush_events!() || quit {
+                // Engine stopping (Quit or UI gone): shut the watcher down; don't leak it.
+                let _ = request_tx.send(PortRequest::Quit);
+                let _ = watcher.join();
+                return;
             }
 
             // ~1 ms loop; cheap and keeps timing tight enough for 24 PPQN.
@@ -661,6 +852,128 @@ mod tests {
         assert_eq!(t.effective_bpm(None), 120.0);
     }
 
+    /// P2: SetSet must release every sounding note BEFORE replacing the sequencer.
+    /// Scenario: play a set with a single long melodic note on step 0, tick far enough that
+    /// the NoteOn fires, then send SetSet. The sink must contain a NoteOff (or CC123) for
+    /// that note at the swap time — proving release_all ran before the drop.
+    #[test]
+    fn setset_releases_sounding_notes_before_swap() {
+        use crate::midi::MidiMessage;
+        use crate::pattern::model::{MelodicNote, Pattern, PatternData};
+
+        // Build a set whose lane 2 (S-1, melodic) has a single long note on step 0.
+        let mut set = default_set();
+        // 16-step melodic pattern: step 0 has a long (full-bar) note, rest silent.
+        let mut steps = vec![None; 16];
+        steps[0] = Some(MelodicNote {
+            semi: 0,
+            vel: 1.0,
+            slide: false,
+            len: 4.0, // 4 steps long — much longer than our tick window
+            prob: 1.0,
+            ratchet: 1,
+        });
+        set.lanes[2].pattern = Pattern {
+            name: "test".into(),
+            desc: String::new(),
+            length: 16,
+            data: PatternData::Melodic(steps),
+        };
+        set.bpm = 120.0; // step_dur = 125_000 µs
+
+        let other = default_set(); // second set — content irrelevant
+
+        let mut link = FakeLink::new();
+        let mut sink = RecordingSink::new();
+
+        // Play at t=0, tick past the first step (step fires at t=0), then SetSet at t=10_000.
+        // step 0 fires at origin_micros (0), so NoteOn is at t=0. The note len is 4 steps =
+        // 500_000 µs — the NoteOff would normally fire much later. SetSet at 10_000 should
+        // emit release_all which produces a NoteOff immediately (at t=10_000).
+        let _ = run_engine_headless(
+            set,
+            &mut link,
+            &mut sink,
+            vec![(0, UiCommand::Play), (10_000, UiCommand::SetSet(other))],
+            50_000,
+            1_000,
+        );
+
+        // After the SetSet there should be a NoteOff or CC123 (release_all) in the sink.
+        let has_release = sink.events.iter().any(|(at, msg)| {
+            *at >= 10_000
+                && matches!(
+                    msg,
+                    MidiMessage::NoteOff { .. }
+                        | MidiMessage::ControlChange {
+                            controller: 123,
+                            ..
+                        }
+                )
+        });
+        assert!(
+            has_release,
+            "SetSet must emit NoteOff/CC123 for sounding notes before replacing the sequencer; \
+             got events: {:?}",
+            sink.events
+        );
+    }
+
+    /// Bug 2: After SetSet the transport BPM must match the new set's BPM so that MIDI
+    /// Clock spacing reflects the NEW set's tempo, not the old one.
+    /// Approach: load initial set at 100 BPM, SetSet to 150 BPM while not playing, then
+    /// Play. Collect Clock messages and verify consecutive spacing ≈ 16_666 µs (150 BPM),
+    /// NOT 25_000 µs (100 BPM).  Window: 200_000 µs at tick 500 µs gives ≥10 clock pulses.
+    #[test]
+    fn setset_syncs_clock_bpm_to_new_set() {
+        use crate::midi::MidiMessage;
+
+        let mut set = default_set();
+        set.bpm = 100.0;
+        let mut other = default_set();
+        other.bpm = 150.0;
+
+        let mut link = FakeLink::new();
+        let mut sink = RecordingSink::new();
+
+        // SetSet at t=1_000 (while stopped), then Play at t=2_000.
+        let _ = run_engine_headless(
+            set,
+            &mut link,
+            &mut sink,
+            vec![(1_000, UiCommand::SetSet(other)), (2_000, UiCommand::Play)],
+            200_000,
+            500,
+        );
+
+        // Collect Clock timestamps after Play started (t >= 2_000).
+        let clock_times: Vec<u64> = sink
+            .events
+            .iter()
+            .filter(|(at, msg)| *at >= 2_000 && matches!(msg, MidiMessage::Clock))
+            .map(|(at, _)| *at)
+            .collect();
+
+        assert!(
+            clock_times.len() >= 2,
+            "need at least 2 Clock messages to measure spacing; got {:?}",
+            clock_times
+        );
+
+        // Expected spacing at 150 BPM = 60_000_000 / (150 * 24) = 16_666 µs.
+        // Allow ±one tick (500 µs) of quantization error.
+        let expected = 60_000_000u64 / (150 * 24);
+        let old_expected = 60_000_000u64 / (100 * 24);
+
+        // Check first consecutive pair.
+        let spacing = clock_times[1] - clock_times[0];
+        assert!(
+            spacing.abs_diff(expected) <= 1_000,
+            "Clock spacing should be ≈{expected} µs (150 BPM) but got {spacing} µs \
+             (old 100 BPM spacing would be {old_expected} µs)"
+        );
+    }
+
     /// Headless engine emits LinkStatus{enabled:false} before ToggleLink.
     #[test]
     fn headless_emits_link_status_disabled_initially() {
@@ -695,5 +1008,203 @@ mod tests {
             enabled_ev,
             "expected LinkStatus{{enabled:true}} after ToggleLink"
         );
+    }
+
+    /// Bug 1b: with Link enabled and beat < 0 (pre-boundary countdown), Play must NOT
+    /// start the sequencer immediately — no NoteOn and no Started event.
+    #[test]
+    fn link_play_defers_notes_until_boundary() {
+        use crate::midi::MidiMessage;
+
+        let set = default_set();
+        let mut link = FakeLink::new();
+        link.set_enabled(true);
+        link.set_beat(-1.0); // still counting down; boundary not yet reached
+
+        let mut sink = RecordingSink::new();
+        let evs = run_engine_headless(
+            set,
+            &mut link,
+            &mut sink,
+            vec![(0, UiCommand::ToggleLink(true)), (0, UiCommand::Play)],
+            5_000,
+            1_000,
+        );
+
+        assert!(
+            !sink
+                .events
+                .iter()
+                .any(|(_, m)| matches!(m, MidiMessage::NoteOn { .. })),
+            "no NoteOn should fire before the Link bar boundary; got: {:?}",
+            sink.events
+        );
+        assert!(
+            !evs.iter().any(|e| matches!(e, EngineEvent::Started { .. })),
+            "no Started event should be emitted before boundary; got: {:?}",
+            evs
+        );
+    }
+
+    /// Regression: without Link, Play must start the sequencer immediately and emit Started.
+    #[test]
+    fn manual_play_starts_immediately() {
+        use crate::midi::MidiMessage;
+        use crate::pattern::model::{DrumHit, Pattern, PatternData};
+
+        let mut set = default_set();
+        set.bpm = 120.0; // step_dur = 125_000 µs
+
+        // Add a drum hit on lane 0 step 0 so a NoteOn fires immediately.
+        let mut steps: Vec<Vec<DrumHit>> = vec![Vec::new(); 16];
+        steps[0].push(DrumHit {
+            note: 36,
+            vel: 100,
+            prob: 1.0,
+            ratchet: 1,
+        });
+        set.lanes[0].pattern = Pattern {
+            name: "test".into(),
+            desc: String::new(),
+            length: 16,
+            data: PatternData::Drums(steps),
+        };
+
+        let mut link = FakeLink::new(); // link disabled
+        let mut sink = RecordingSink::new();
+        let evs = run_engine_headless(
+            set,
+            &mut link,
+            &mut sink,
+            vec![(0, UiCommand::Play)],
+            500,
+            100,
+        );
+
+        assert!(
+            sink.events
+                .iter()
+                .any(|(_, m)| matches!(m, MidiMessage::NoteOn { .. })),
+            "NoteOn must fire at t=0 in manual (no-Link) mode; got: {:?}",
+            sink.events
+        );
+        assert!(
+            evs.iter()
+                .any(|e| matches!(e, EngineEvent::Started { at_step: 0 })),
+            "Started{{at_step:0}} must be emitted immediately in manual mode; got: {:?}",
+            evs
+        );
+    }
+
+    /// Task 5 pure planner: present&&!connected → Connect; !present&&connected → Drop; else nothing.
+    #[test]
+    fn plan_connects_present_unconnected_and_drops_absent_connected() {
+        assert_eq!(
+            plan_port_actions(&[true, false], &[false, false]),
+            vec![PortAction::Connect(0)]
+        );
+        assert_eq!(
+            plan_port_actions(&[false, true], &[true, true]),
+            vec![PortAction::Drop(0)]
+        );
+        assert!(plan_port_actions(&[true, true], &[true, true]).is_empty());
+    }
+
+    /// Task 5: lanes_of groups every lane that shares a port. Default profiles =
+    /// [T-8 drums, T-8 bass, S-1]: the T-8 port owns lanes [0,1]; the S-1 port owns [2].
+    #[test]
+    fn lanes_of_port_groups_shared_port_lanes() {
+        let profiles = default_profiles();
+        let (distinct, lane_to_port) = map_lanes_to_ports(&profiles);
+        let t8_idx = distinct.iter().position(|m| *m == "T-8").unwrap();
+        let s1_idx = distinct.iter().position(|m| *m == "S-1").unwrap();
+        assert_eq!(lanes_of(&lane_to_port, t8_idx), vec![0, 1]);
+        assert_eq!(lanes_of(&lane_to_port, s1_idx), vec![2]);
+    }
+
+    /// Link-gated start fires at the boundary: armed at beat=-1, boundary crossed at beat=0.
+    /// Tests step_engine directly since FakeLink's beat is static across run_engine_headless.
+    #[test]
+    fn link_play_starts_at_boundary() {
+        let set = default_set();
+        let mut st = EngineState::new(set);
+        let mut link = FakeLink::new();
+        link.set_enabled(true);
+        link.set_beat(-1.0); // pre-boundary
+
+        let mut sink = crate::midi::ports::RecordingSink::new();
+        let mut events: Vec<EngineEvent> = Vec::new();
+
+        // Arm the engine: send Play command through step_engine
+        let mut pending = vec![(0u64, UiCommand::ToggleLink(true)), (0u64, UiCommand::Play)];
+        step_engine(&mut st, 0, &mut pending, &mut link, &mut sink, &mut events);
+
+        // After arming: no Started yet, sequencer not playing
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, EngineEvent::Started { .. })),
+            "no Started before boundary; got: {:?}",
+            events
+        );
+        assert!(!st.seq.is_playing(), "seq must NOT be playing while armed");
+        assert!(st.armed, "engine must be armed");
+
+        // Now cross the boundary
+        link.set_beat(0.0);
+        events.clear();
+        let mut pending2: Vec<(u64, UiCommand)> = vec![];
+        step_engine(
+            &mut st,
+            1_000,
+            &mut pending2,
+            &mut link,
+            &mut sink,
+            &mut events,
+        );
+
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, EngineEvent::Started { at_step: 0 })),
+            "Started{{at_step:0}} must be emitted when beat >= 0; got: {:?}",
+            events
+        );
+        assert!(
+            st.seq.is_playing(),
+            "sequencer must be playing after boundary"
+        );
+        assert!(!st.armed, "armed must be cleared after boundary");
+    }
+
+    /// Tap tempo: two taps 500 ms apart → engine emits EngineEvent::Tempo{bpm≈120}.
+    #[test]
+    fn tap_tempo_emits_tempo_event() {
+        let set = default_set();
+        let mut link = FakeLink::new();
+        let mut sink = RecordingSink::new();
+        // Two taps: t=0 and t=500_000 µs → interval 500 ms → 120 BPM.
+        let evs = run_engine_headless(
+            set,
+            &mut link,
+            &mut sink,
+            vec![(0, UiCommand::Tap), (500_000, UiCommand::Tap)],
+            600_000,
+            1_000,
+        );
+        let tempo_event = evs.iter().find_map(|e| {
+            if let EngineEvent::Tempo { bpm } = e {
+                Some(*bpm)
+            } else {
+                None
+            }
+        });
+        assert!(
+            tempo_event.is_some(),
+            "expected a Tempo event after two taps, got: {:?}",
+            evs
+        );
+        let bpm = tempo_event.unwrap();
+        assert!((bpm - 120.0).abs() < 2.0, "expected bpm ≈ 120, got {bpm}");
     }
 }
