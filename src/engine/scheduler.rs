@@ -39,11 +39,9 @@ pub struct ScheduledEvent {
     pub msg: MidiMessage,
 }
 
-/// Convert a musical beat position to an absolute 16th-step index.
-/// 1 beat = 4 16th steps, so `step = floor(beat * 4)`.
-/// (Task 11 will expose this from `crate::link`; defined here for Task 9.)
+/// Delegate to the canonical implementation in `crate::link`.
 fn step_from_beat(beat: f64) -> usize {
-    (beat * 4.0).floor() as usize
+    crate::link::step_from_beat(beat)
 }
 
 /// A melodic note currently sounding on a lane, tracked for slide/legato and stop.
