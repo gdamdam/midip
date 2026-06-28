@@ -7,10 +7,17 @@ feature milestone is a minor bump).
 
 ## [Unreleased]
 
-### Planned
-- Optional virtual `midip` MIDI output (additive, alongside hardware) with a **mirror toggle**
-  (default off) that feeds the full stream + MIDI clock to a virtual source for layering with
-  hardware. Never disturbs USB routing.
+## [0.4.0] — 2026-06-28 — Virtual mirror output
+
+### Added
+- **Optional virtual `midip` MIDI output** — midip can create a virtual MIDI source named `midip`
+  (macOS/Linux) that other apps on the same machine can subscribe to.
+- **Mirror toggle** (`M`, default off, with a `MIR` indicator) — when on, midip's full output
+  stream (all lanes' notes/CC on their channels + the 24 PPQN MIDI clock) is ALSO sent to the
+  virtual port, for layering with hardware and letting external apps tempo-sync. The mirror
+  preference is persisted across runs.
+- The mirror is purely **additive**: it never replaces or disturbs USB/hardware routing, and the
+  hardware output is identical whether the mirror is on or off (no double-clock).
 
 ## [0.3.0] — 2026-06-28 — Milestone 2: versioned persistence + configurable routing
 

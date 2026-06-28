@@ -58,6 +58,9 @@ pub enum UiCommand {
     },
     /// All-notes-off / all-sound-off live recovery; does not stop transport.
     Panic,
+    /// Enable or disable the virtual-port mirror (T2: toggled by the UI toggle).
+    /// Safe to receive in headless mode — just sets the flag; no port is opened.
+    SetMirror(bool),
     Quit,
 }
 
@@ -120,6 +123,10 @@ struct EngineState {
     /// re-spawn the device watcher. `apply_command` cannot touch the loop's
     /// port_sinks/watcher, so it flags here and the loop reacts. Ignored headless.
     route_dirty: bool,
+    /// Whether the virtual "midip" output mirror is active. Default off.
+    /// When on, `TeeSink` forwards every message to the virtual port IN ADDITION TO the
+    /// hardware fanout — purely additive; hardware path is byte-identical either way.
+    mirror_on: bool,
 }
 
 impl EngineState {
@@ -138,6 +145,7 @@ impl EngineState {
             bar: 0,
             tick_count: 0,
             route_dirty: false,
+            mirror_on: false,
         }
     }
 }
@@ -283,6 +291,9 @@ fn apply_command(
             // All-notes-off / all-sound-off on every lane channel. Does NOT touch the
             // transport or clock — playback keeps running while stuck notes are cleared.
             st.seq.panic(now, sink);
+        }
+        UiCommand::SetMirror(on) => {
+            st.mirror_on = on;
         }
         UiCommand::Quit => {
             // Release all sounding notes before exiting — avoids hanging notes on hardware.
@@ -743,6 +754,15 @@ pub fn spawn_engine(set: Set, mut link: Box<dyn LinkClock>) -> EngineHandle {
             })
             .collect();
 
+        // Create the virtual "midip" output ONCE before the loop — this opens a CoreMIDI
+        // virtual source that other apps on the machine can subscribe to. No-op on non-Unix
+        // or if CoreMIDI is unavailable; the engine runs without it in both cases.
+        // The virtual sink is wrapped by `TeeSink` each iteration (see below) so it is
+        // NEVER part of the `PortFanoutSink`/watcher path — hardware routing is untouched.
+        let mut virtual_sink: Option<Box<dyn MidiSink>> =
+            crate::midi::ports::create_virtual_output("midip")
+                .map(|s| Box::new(s) as Box<dyn MidiSink>);
+
         // Spawn the device-watcher: it owns enumeration/connection and streams PortUpdates.
         // Each distinct port is matched by its stable_key (falling back to name). Re-spawned
         // on a SetRoute that changes the distinct port set, so these handles are `mut`.
@@ -826,19 +846,35 @@ pub fn spawn_engine(set: Set, mut link: Box<dyn LinkClock>) -> EngineHandle {
             // Route-targeted fan-out: each channel message reaches ONLY its mapped port;
             // Clock reaches each clock-out port ONCE (a shared port appears once — no
             // double-clock). NO enumerate/connect here — the watcher owns connections.
-            let mut fanout = PortFanoutSink {
-                ports: &mut port_sinks,
-                channel_to_port: &channel_to_port,
-                clock_ports: &clock_ports,
+            //
+            // `TeeSink` wraps `fanout` so that when the mirror is on, every message is
+            // ALSO forwarded to the virtual port. The hardware path is byte-identical
+            // whether the mirror is on or off — `TeeSink` never replaces the fanout.
+            //
+            // `fanout` and `tee` are scoped to the inner block so their borrows of
+            // `port_sinks` and `virtual_sink` are fully dropped before the health-check /
+            // route-replan below re-borrows them. `&mut virtual_sink` borrows the Option
+            // container per iteration; `TeeSink::send` derefs it — NLL accepts this safely.
+            let quit = {
+                let mut fanout = PortFanoutSink {
+                    ports: &mut port_sinks,
+                    channel_to_port: &channel_to_port,
+                    clock_ports: &clock_ports,
+                };
+                let mut tee = TeeSink {
+                    primary: &mut fanout,
+                    mirror: &mut virtual_sink,
+                    mirror_on: st.mirror_on,
+                };
+                step_engine(
+                    &mut st,
+                    now,
+                    &mut pending,
+                    link.as_mut(),
+                    &mut tee,
+                    &mut events,
+                )
             };
-            let quit = step_engine(
-                &mut st,
-                now,
-                &mut pending,
-                link.as_mut(),
-                &mut fanout,
-                &mut events,
-            );
 
             // --- Health: detect connected ports whose sink failed; release notes, drop, ask
             //     the watcher to reconnect. Gather unhealthy indices in an immutable pass
@@ -989,6 +1025,46 @@ impl<'a> MidiSink for PortFanoutSink<'a> {
                 ps.sink.send(msg.clone(), at_micros);
             }
         }
+    }
+}
+
+/// Additive tee: always forwards every message to `primary`; if `mirror_on` and `mirror`
+/// is `Some`, ALSO forwards an identical copy to the mirror sink.
+///
+/// The mirror receives the RAW full stream (all channels + MIDI clock) — independent of
+/// `route_targets` — so the virtual port carries everything. The hardware path through
+/// `primary` is byte-identical whether the mirror is on or off.
+///
+/// Two distinct lifetimes prevent the borrow checker from tying `primary` and `mirror`
+/// to the same scope, which would propagate the mirror's borrow into the surrounding loop
+/// and block subsequent uses of the port-sink / virtual-sink locals.
+///
+/// `mirror` borrows the `Option` CONTAINER (`&mut Option<Box<dyn MidiSink>>`) rather than
+/// an `Option<&mut dyn MidiSink>`. Borrowing the container — and dereferencing inside
+/// `send()` — keeps the borrow trivially scoped per loop iteration, which NLL accepts
+/// cleanly. (An `Option<&mut dyn ..>` reborrow tripped an NLL false-positive because the
+/// `Option<Box<..>>` destructor at the enclosing scope's exit appeared to extend the
+/// borrow across iterations.) All safe — no `unsafe`/raw pointers.
+struct TeeSink<'p, 'm> {
+    primary: &'p mut dyn MidiSink,
+    mirror: &'m mut Option<Box<dyn MidiSink>>,
+    mirror_on: bool,
+}
+
+impl<'p, 'm> MidiSink for TeeSink<'p, 'm> {
+    fn send(&mut self, msg: crate::midi::message::MidiMessage, at_micros: u64) {
+        // Primary always receives the message — hardware path unchanged.
+        self.primary.send(msg.clone(), at_micros);
+        // Mirror is purely additive: only when enabled AND a mirror sink exists.
+        if self.mirror_on {
+            if let Some(m) = self.mirror.as_mut() {
+                m.send(msg, at_micros);
+            }
+        }
+    }
+
+    fn health(&self) -> bool {
+        self.primary.health()
     }
 }
 
@@ -1776,6 +1852,135 @@ mod tests {
         );
         let bpm = tempo_event.unwrap();
         assert!((bpm - 120.0).abs() < 2.0, "expected bpm ≈ 120, got {bpm}");
+    }
+
+    // --- TeeSink / virtual mirror tests ---
+
+    /// Mirror sink that records into a shared buffer the test can inspect after the boxed
+    /// sink is type-erased into `Box<dyn MidiSink>` (as the engine stores `virtual_sink`).
+    /// `Arc<Mutex<..>>` (not `Rc`) because `MidiSink: Send`.
+    #[derive(Clone)]
+    struct SharedRecordingSink {
+        events: std::sync::Arc<std::sync::Mutex<Vec<(u64, crate::midi::MidiMessage)>>>,
+    }
+    impl SharedRecordingSink {
+        fn new() -> Self {
+            SharedRecordingSink {
+                events: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            }
+        }
+    }
+    impl MidiSink for SharedRecordingSink {
+        fn send(&mut self, msg: crate::midi::MidiMessage, at_micros: u64) {
+            self.events.lock().unwrap().push((at_micros, msg));
+        }
+    }
+
+    /// With mirror_on=false the primary always records the message; the mirror does not.
+    #[test]
+    fn tee_forwards_to_primary_always() {
+        let mut primary = RecordingSink::new();
+        let mirror = SharedRecordingSink::new();
+        let mirror_events = mirror.events.clone();
+        let mut mirror_opt: Option<Box<dyn MidiSink>> = Some(Box::new(mirror));
+        {
+            let mut tee = TeeSink {
+                primary: &mut primary,
+                mirror: &mut mirror_opt,
+                mirror_on: false,
+            };
+            tee.send(crate::midi::MidiMessage::Clock, 42);
+        }
+        assert_eq!(
+            primary.events.len(),
+            1,
+            "primary must always receive the message"
+        );
+        assert_eq!(
+            mirror_events.lock().unwrap().len(),
+            0,
+            "mirror must NOT receive the message when mirror_on=false"
+        );
+    }
+
+    /// With mirror_on=true BOTH primary and mirror record the same message + timestamp.
+    #[test]
+    fn tee_mirrors_when_on() {
+        let mut primary = RecordingSink::new();
+        let mirror = SharedRecordingSink::new();
+        let mirror_events = mirror.events.clone();
+        let mut mirror_opt: Option<Box<dyn MidiSink>> = Some(Box::new(mirror));
+        let msg = crate::midi::MidiMessage::NoteOn {
+            channel: 1,
+            note: 60,
+            vel: 100,
+        };
+        {
+            let mut tee = TeeSink {
+                primary: &mut primary,
+                mirror: &mut mirror_opt,
+                mirror_on: true,
+            };
+            tee.send(msg.clone(), 999);
+        }
+        assert_eq!(
+            primary.events,
+            vec![(999, msg.clone())],
+            "primary must record the message"
+        );
+        assert_eq!(
+            *mirror_events.lock().unwrap(),
+            vec![(999, msg)],
+            "mirror must record the same message when mirror_on=true"
+        );
+    }
+
+    /// With mirror=None and mirror_on=true only primary records; no panic.
+    #[test]
+    fn tee_no_mirror_when_none() {
+        let mut primary = RecordingSink::new();
+        let mut mirror_opt: Option<Box<dyn MidiSink>> = None;
+        {
+            let mut tee = TeeSink {
+                primary: &mut primary,
+                mirror: &mut mirror_opt,
+                mirror_on: true,
+            };
+            tee.send(crate::midi::MidiMessage::Clock, 1);
+        }
+        assert_eq!(
+            primary.events.len(),
+            1,
+            "primary must still receive the message"
+        );
+    }
+
+    /// SetMirror(true) sets mirror_on; SetMirror(false) clears it.
+    #[test]
+    fn set_mirror_toggles_flag() {
+        let mut st = EngineState::new(default_set());
+        assert!(!st.mirror_on, "mirror_on should start false");
+
+        let mut events: Vec<EngineEvent> = Vec::new();
+        apply_command(
+            &mut st,
+            UiCommand::SetMirror(true),
+            0,
+            &mut FakeLink::default(),
+            &mut RecordingSink::default(),
+            &mut events,
+        );
+        assert!(st.mirror_on, "SetMirror(true) must set mirror_on");
+
+        apply_command(
+            &mut st,
+            UiCommand::SetMirror(false),
+            0,
+            &mut FakeLink::default(),
+            &mut RecordingSink::default(),
+            &mut events,
+        );
+        assert!(!st.mirror_on, "SetMirror(false) must clear mirror_on");
     }
 
     /// SetSet must mark `route_dirty` so the engine loop re-plans ports / re-spawns the

@@ -109,6 +109,7 @@ pub enum Action {
     RecoveryRecover,
     RecoveryDiscard,
     RecoveryOpenSaved,
+    ToggleMirror,
     None,
 }
 
@@ -185,6 +186,7 @@ pub struct App {
     pub route_editor_field: RouteField,
     /// Available MIDI output port names, refreshed when the editor opens.
     pub route_editor_ports: Vec<String>,
+    pub mirror_on: bool,
 }
 
 /// Default melodic velocity multiplier when placing a note (1.0 -> MIDI 100).
@@ -238,6 +240,7 @@ impl App {
             route_editor_lane: 0,
             route_editor_field: RouteField::Port,
             route_editor_ports: Vec::new(),
+            mirror_on: false,
         }
     }
 
@@ -855,6 +858,21 @@ impl App {
                         .unwrap_or_default();
                 self.set_sel = 0;
                 self.mode = Mode::SetBrowser;
+            }
+            Action::ToggleMirror => {
+                self.mirror_on = !self.mirror_on;
+                self.set_status(if self.mirror_on {
+                    "Mirror on (midip virtual port)"
+                } else {
+                    "Mirror off"
+                });
+                let _ = crate::pattern::store::save_prefs(
+                    &crate::config::data_dir(),
+                    &crate::pattern::store::Prefs {
+                        mirror_on: self.mirror_on,
+                    },
+                );
+                cmds.push(crate::engine::UiCommand::SetMirror(self.mirror_on));
             }
             Action::None => {}
         }
@@ -3444,5 +3462,28 @@ mod tests {
             "RecoveryOpenSaved must go to SetBrowser mode"
         );
         assert!(cmds.is_empty());
+    }
+
+    #[test]
+    fn toggle_mirror_flips_and_emits_set_mirror() {
+        let set =
+            crate::pattern::model::Set::default_set(crate::devices::profiles::default_profiles());
+        let lib = crate::pattern::library::Library::empty();
+        let mut app = App::new(set, lib);
+        assert!(!app.mirror_on, "starts false");
+
+        let cmds = app.apply(Action::ToggleMirror);
+        assert!(app.mirror_on, "must flip to true");
+        assert!(
+            cmds.contains(&crate::engine::UiCommand::SetMirror(true)),
+            "must emit SetMirror(true)"
+        );
+
+        let cmds2 = app.apply(Action::ToggleMirror);
+        assert!(!app.mirror_on, "must flip back to false");
+        assert!(
+            cmds2.contains(&crate::engine::UiCommand::SetMirror(false)),
+            "must emit SetMirror(false)"
+        );
     }
 }
