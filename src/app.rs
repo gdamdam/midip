@@ -18,6 +18,13 @@ pub enum Mode {
     Library,
     Help,
     TempoEntry,
+    SetBrowser,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum LibCol {
+    Genre,
+    Pattern,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -64,6 +71,10 @@ pub enum Action {
     CloseLibrary,
     LibNav(i32, i32),
     LibLoad,
+    OpenSetBrowser,
+    SetBrowserNav(i32),
+    SetBrowserLoad,
+    CloseSetBrowser,
     Save,
     Help,
     Quit,
@@ -92,8 +103,11 @@ pub struct App {
     pub device_status: Vec<(bool, String)>,
     pub library: Library,
     pub lib_role: LibRole,
+    pub lib_col: LibCol,
     pub lib_genre: usize,
     pub lib_pattern: usize,
+    pub set_files: Vec<std::path::PathBuf>,
+    pub set_sel: usize,
     pub clipboard: Option<PatternData>,
     pub undo: Vec<Set>,
     pub redo: Vec<Set>,
@@ -130,8 +144,11 @@ impl App {
             device_status: vec![(false, String::new()); n],
             library,
             lib_role: role,
+            lib_col: LibCol::Genre,
             lib_genre: 0,
             lib_pattern: 0,
+            set_files: Vec::new(),
+            set_sel: 0,
             clipboard: Option::None,
             undo: Vec::new(),
             redo: Vec::new(),
@@ -320,6 +337,7 @@ impl App {
                 // Swing mutates the Set, so it is snapshotted per the undo invariant.
                 self.snapshot();
                 self.set.swing = (self.set.swing + d as f32 * 0.02).clamp(0.5, 0.66);
+                self.status = format!("Swing {}%", (self.set.swing * 100.0).round() as i64);
                 cmds.push(UiCommand::SetSwing(self.set.swing));
             }
             Action::AdjustPatternLen(d) => {
@@ -365,7 +383,7 @@ impl App {
             }
             Action::OpenLibrary => self.mode = Mode::Library,
             Action::CloseLibrary => self.mode = Mode::Edit,
-            Action::LibNav(dg, dp) => self.lib_nav(dg, dp),
+            Action::LibNav(dx, dy) => self.lib_nav(dx, dy),
             Action::LibLoad => {
                 if let Some(pat) = self.selected_lib_pattern().cloned() {
                     self.status = format!("Loaded {}", pat.name);
@@ -373,6 +391,44 @@ impl App {
                     self.set.lanes[self.focus].pattern = pat;
                     cmds.push(self.load_focused());
                 }
+            }
+            Action::OpenSetBrowser => {
+                self.set_files = crate::pattern::store::list_sets(
+                    &crate::config::data_dir().join("sets")
+                ).unwrap_or_default();
+                self.set_sel = 0;
+                self.mode = Mode::SetBrowser;
+            }
+            Action::SetBrowserNav(d) => {
+                if !self.set_files.is_empty() {
+                    let n = self.set_files.len();
+                    self.set_sel = (self.set_sel as i64 + d as i64).clamp(0, n as i64 - 1) as usize;
+                }
+            }
+            Action::SetBrowserLoad => {
+                if !self.set_files.is_empty() {
+                    match crate::pattern::store::load_set(&self.set_files[self.set_sel]) {
+                        Ok(set) => {
+                            let stem = self.set_files[self.set_sel]
+                                .file_stem()
+                                .and_then(|s| s.to_str())
+                                .unwrap_or("set")
+                                .to_string();
+                            self.set = set;
+                            self.dirty = false;
+                            self.status = format!("Loaded {}", stem);
+                            self.mode = Mode::Edit;
+                            cmds.push(UiCommand::SetSet(self.set.clone()));
+                        }
+                        Err(e) => {
+                            self.status = format!("Load failed: {e}");
+                            // stay in SetBrowser
+                        }
+                    }
+                }
+            }
+            Action::CloseSetBrowser => {
+                self.mode = Mode::Edit;
             }
             Action::Save => {
                 // Cross-task dependency: `config::data_dir()` is defined in Task 21.
@@ -426,6 +482,7 @@ impl App {
     fn set_focus(&mut self, i: usize) {
         self.focus = i;
         self.lib_role = role_for_profile(self.set.lanes[i].profile.id);
+        self.lib_col = LibCol::Genre;
         self.lib_genre = 0;
         self.lib_pattern = 0;
         self.euclid_rotation = 0; // focus changed -> reset euclid rotation
@@ -480,9 +537,10 @@ impl App {
                 LaneKind::Drums   => "EDIT DRUM",
                 LaneKind::Melodic => "EDIT MELODIC",
             },
-            Mode::Library   => "LIBRARY",
-            Mode::Help      => "HELP",
+            Mode::Library    => "LIBRARY",
+            Mode::Help       => "HELP",
             Mode::TempoEntry => "TEMPO",
+            Mode::SetBrowser => "OPEN SET",
         }
     }
 
@@ -895,18 +953,41 @@ impl App {
         }
     }
 
-    fn lib_nav(&mut self, dg: i32, dp: i32) {
-        let genre_count = self.current_genre_map().len();
-        if genre_count == 0 {
-            return;
+    fn lib_nav(&mut self, dx: i32, dy: i32) {
+        // dx: column switch (Left=-1 → Genre, Right=+1 → Pattern)
+        // dy: move selection within the focused column
+        if dx != 0 {
+            self.lib_col = if dx > 0 { LibCol::Pattern } else { LibCol::Genre };
+            // Switching to Genre resets pattern selection so the two are in sync.
+            if self.lib_col == LibCol::Genre {
+                self.lib_pattern = 0;
+            }
         }
-        let new_genre = (self.lib_genre as i32 + dg).clamp(0, genre_count as i32 - 1) as usize;
-        self.lib_genre = new_genre;
-        let pat_count = self.current_genre_map().get_index(new_genre).map(|(_, v)| v.len()).unwrap_or(0);
-        if pat_count == 0 {
-            self.lib_pattern = 0;
-        } else {
-            self.lib_pattern = (self.lib_pattern as i32 + dp).clamp(0, pat_count as i32 - 1) as usize;
+
+        if dy != 0 {
+            let genre_count = self.current_genre_map().len();
+            match self.lib_col {
+                LibCol::Genre => {
+                    if genre_count == 0 {
+                        return;
+                    }
+                    self.lib_genre = (self.lib_genre as i32 + dy)
+                        .clamp(0, genre_count as i32 - 1) as usize;
+                    // Changing genre always resets pattern selection.
+                    self.lib_pattern = 0;
+                }
+                LibCol::Pattern => {
+                    let pat_count = self.current_genre_map()
+                        .get_index(self.lib_genre)
+                        .map(|(_, v)| v.len())
+                        .unwrap_or(0);
+                    if pat_count == 0 {
+                        return;
+                    }
+                    self.lib_pattern = (self.lib_pattern as i32 + dy)
+                        .clamp(0, pat_count as i32 - 1) as usize;
+                }
+            }
         }
     }
 
@@ -1765,5 +1846,128 @@ mod tests {
             assert!(!app.dirty(), "dirty should be false after a successful Save");
         }
         // If save failed (no fs), dirty remains true — that's correct behavior.
+    }
+
+    // --- Task 1: Library column nav tests -----------------------------------
+
+    #[test]
+    fn lib_nav_right_switches_col_to_pattern() {
+        let mut app = new_app();
+        app.apply(Action::OpenLibrary);
+        assert_eq!(app.lib_col, LibCol::Genre);
+        app.apply(Action::LibNav(1, 0)); // dx=+1 → switch to Pattern
+        assert_eq!(app.lib_col, LibCol::Pattern);
+    }
+
+    #[test]
+    fn lib_nav_left_switches_col_to_genre_and_resets_pattern() {
+        let mut app = new_app();
+        app.apply(Action::OpenLibrary);
+        app.apply(Action::LibNav(1, 0)); // to Pattern col
+        app.lib_pattern = 0; // already 0, but be explicit
+        app.apply(Action::LibNav(-1, 0)); // dx=-1 → Genre
+        assert_eq!(app.lib_col, LibCol::Genre);
+        assert_eq!(app.lib_pattern, 0);
+    }
+
+    #[test]
+    fn lib_nav_dy_with_genre_col_advances_genre_and_resets_pattern() {
+        let mut app = new_app();
+        app.apply(Action::OpenLibrary);
+        // test_library has one genre ("techno") for drums, so genre nav is clamped at 0.
+        // We check that dy moves genre and resets pattern.
+        app.lib_pattern = 0;
+        app.apply(Action::LibNav(0, 1)); // dy=+1, genre col → advance genre (clamped to 0 since only one)
+        assert_eq!(app.lib_col, LibCol::Genre);
+        assert_eq!(app.lib_pattern, 0, "genre nav resets pattern");
+    }
+
+    #[test]
+    fn lib_nav_dy_with_pattern_col_advances_pattern() {
+        let mut app = new_app();
+        app.apply(Action::OpenLibrary);
+        // Switch to pattern column first.
+        app.apply(Action::LibNav(1, 0));
+        assert_eq!(app.lib_col, LibCol::Pattern);
+        // test_library drums has 1 pattern, so pattern nav clamps at 0.
+        app.apply(Action::LibNav(0, 1));
+        assert_eq!(app.lib_pattern, 0); // clamped — only 1 pattern
+        assert_eq!(app.lib_col, LibCol::Pattern, "column should not change on dy");
+    }
+
+    // --- Task 2: SetBrowser tests -------------------------------------------
+
+    #[test]
+    fn set_browser_nav_clamps_at_bounds() {
+        let mut app = new_app();
+        // Populate set_files manually (no real fs needed).
+        app.set_files = vec![
+            std::path::PathBuf::from("/tmp/a.json"),
+            std::path::PathBuf::from("/tmp/b.json"),
+        ];
+        app.set_sel = 0;
+        app.mode = Mode::SetBrowser;
+
+        app.apply(Action::SetBrowserNav(-1)); // clamp low → stays 0
+        assert_eq!(app.set_sel, 0);
+
+        app.apply(Action::SetBrowserNav(1)); // → 1
+        assert_eq!(app.set_sel, 1);
+
+        app.apply(Action::SetBrowserNav(1)); // clamp high → stays 1
+        assert_eq!(app.set_sel, 1);
+    }
+
+    #[test]
+    fn set_browser_load_sets_state_and_emits_set_set() {
+        use crate::pattern::store;
+        // Write a real set to a temp dir and load it back.
+        let dir = std::env::temp_dir().join(format!(
+            "midip_test_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .subsec_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let mut app = new_app();
+        let saved_path = store::save_set(&dir, &app.set).unwrap();
+
+        app.set_files = vec![saved_path];
+        app.set_sel = 0;
+        app.mode = Mode::SetBrowser;
+
+        let cmds = app.apply(Action::SetBrowserLoad);
+        assert_eq!(app.mode, Mode::Edit, "mode should return to Edit after load");
+        assert!(!app.dirty, "dirty should be false after load");
+        assert!(app.status.starts_with("Loaded"), "status should say Loaded");
+        assert!(
+            cmds.iter().any(|c| matches!(c, UiCommand::SetSet(_))),
+            "SetSet command should be emitted"
+        );
+
+        // Cleanup.
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn context_label_set_browser() {
+        let mut app = new_app();
+        app.mode = Mode::SetBrowser;
+        assert_eq!(app.context_label(), "OPEN SET");
+    }
+
+    // --- Task 4: Swing toast ------------------------------------------------
+
+    #[test]
+    fn adjust_swing_sets_status_toast() {
+        let mut app = new_app();
+        app.apply(Action::AdjustSwing(1));
+        assert!(
+            app.status.contains("Swing"),
+            "status should contain 'Swing' after AdjustSwing, got: {:?}",
+            app.status
+        );
     }
 }

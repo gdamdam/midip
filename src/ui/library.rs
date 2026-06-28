@@ -6,7 +6,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 
-use crate::app::App;
+use crate::app::{App, LibCol};
 use crate::devices::profiles::{drum_label, resolve_melodic_pitch, T8_DRUMS};
 use crate::pattern::library::{GenreMap, LibRole};
 use crate::pattern::model::{Pattern, PatternData};
@@ -141,9 +141,16 @@ fn build_preview_lines(pattern: &Pattern, width: usize, max_height: usize) -> Ve
     lines
 }
 
+/// Number of items visible in a genre/pattern list at once before scrolling.
+const VISIBLE_HEIGHT: usize = 12;
+
 /// Render the library browser into `area`.
 pub fn render_library(f: &mut Frame, area: Rect, app: &App) {
     let map = map_for_role(app, app.lib_role);
+
+    let genre_focused = app.lib_col == LibCol::Genre;
+    let genre_title = if genre_focused { " ▸GENRE " } else { " GENRE " };
+    let pattern_title = if !genre_focused { " ▸PATTERN " } else { " PATTERN " };
 
     let outer = Block::default()
         .borders(Borders::ALL)
@@ -160,44 +167,52 @@ pub fn render_library(f: &mut Frame, area: Rect, app: &App) {
         ])
         .split(inner);
 
-    // Column 1: genre list with counts.
+    // Column 1: genre list with counts + scroll window + position indicator.
     let genres: Vec<(&String, &Vec<crate::pattern::model::Pattern>)> = map.iter().collect();
-    let genre_lines: Vec<Line> = genres
-        .iter()
-        .enumerate()
-        .map(|(i, (name, pats))| {
-            let marker = if i == app.lib_genre { "▸" } else { " " };
-            let style = if i == app.lib_genre {
-                Style::default().add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-            };
-            Line::from(Span::styled(
-                format!("{marker}{:<14}({:>2})", name, pats.len()),
-                style,
-            ))
-        })
-        .collect();
+    let genre_total = genres.len();
+    let genre_scroll = app.lib_genre.saturating_sub(VISIBLE_HEIGHT / 2)
+        .min(genre_total.saturating_sub(VISIBLE_HEIGHT));
+    let mut genre_lines: Vec<Line> = Vec::new();
+    genre_lines.push(Line::from(Span::styled(genre_title, Style::default().add_modifier(Modifier::BOLD))));
+    for (i, (name, pats)) in genres.iter().enumerate().skip(genre_scroll).take(VISIBLE_HEIGHT) {
+        let marker = if i == app.lib_genre { "▸" } else { " " };
+        let style = if i == app.lib_genre {
+            Style::default().add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        };
+        genre_lines.push(Line::from(Span::styled(
+            format!("{marker}{:<14}({:>2})", name, pats.len()),
+            style,
+        )));
+    }
+    if genre_total > 0 {
+        genre_lines.push(Line::from(Span::raw(format!("{}/{}", app.lib_genre + 1, genre_total))));
+    }
     f.render_widget(Paragraph::new(genre_lines), cols[0]);
 
-    // Column 2: pattern list for the selected genre.
+    // Column 2: pattern list for the selected genre + scroll window + position indicator.
     let selected_patterns: &[crate::pattern::model::Pattern] = genres
         .get(app.lib_genre)
         .map(|(_, pats)| pats.as_slice())
         .unwrap_or(&[]);
-    let pattern_lines: Vec<Line> = selected_patterns
-        .iter()
-        .enumerate()
-        .map(|(i, p)| {
-            let marker = if i == app.lib_pattern { "▸" } else { " " };
-            let style = if i == app.lib_pattern {
-                Style::default().add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-            };
-            Line::from(Span::styled(format!("{marker}{:02} {}", i + 1, p.name), style))
-        })
-        .collect();
+    let pat_total = selected_patterns.len();
+    let pat_scroll = app.lib_pattern.saturating_sub(VISIBLE_HEIGHT / 2)
+        .min(pat_total.saturating_sub(VISIBLE_HEIGHT));
+    let mut pattern_lines: Vec<Line> = Vec::new();
+    pattern_lines.push(Line::from(Span::styled(pattern_title, Style::default().add_modifier(Modifier::BOLD))));
+    for (i, p) in selected_patterns.iter().enumerate().skip(pat_scroll).take(VISIBLE_HEIGHT) {
+        let marker = if i == app.lib_pattern { "▸" } else { " " };
+        let style = if i == app.lib_pattern {
+            Style::default().add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        };
+        pattern_lines.push(Line::from(Span::styled(format!("{marker}{:02} {}", i + 1, p.name), style)));
+    }
+    if pat_total > 0 {
+        pattern_lines.push(Line::from(Span::raw(format!("{}/{}", app.lib_pattern + 1, pat_total))));
+    }
     f.render_widget(Paragraph::new(pattern_lines), cols[1]);
 
     // Column 3: detailed preview for the selected pattern + load hint.
@@ -211,6 +226,39 @@ pub fn render_library(f: &mut Frame, area: Rect, app: &App) {
     }
     preview_lines.push(Line::from(Span::raw("[enter] load → focused lane")));
     f.render_widget(Paragraph::new(preview_lines), cols[2]);
+}
+
+/// Render the saved-set browser into `area`.
+pub fn render_set_browser(f: &mut Frame, area: Rect, app: &App) {
+    let outer = Block::default()
+        .borders(Borders::ALL)
+        .title(" OPEN SET ");
+    let inner = outer.inner(area);
+    f.render_widget(outer, area);
+
+    let mut lines: Vec<Line> = Vec::new();
+
+    if app.set_files.is_empty() {
+        lines.push(Line::from(Span::raw("No saved sets — press s to save")));
+    } else {
+        let total = app.set_files.len();
+        let scroll = app.set_sel.saturating_sub(VISIBLE_HEIGHT / 2)
+            .min(total.saturating_sub(VISIBLE_HEIGHT));
+
+        for (i, path) in app.set_files.iter().enumerate().skip(scroll).take(VISIBLE_HEIGHT) {
+            let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("?");
+            let marker = if i == app.set_sel { "▸" } else { " " };
+            let style = if i == app.set_sel {
+                Style::default().add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            lines.push(Line::from(Span::styled(format!("{marker}{}", stem), style)));
+        }
+        lines.push(Line::from(Span::raw(format!("{}/{}", app.set_sel + 1, total))));
+    }
+    lines.push(Line::from(Span::raw("[enter] load  [esc/o] cancel")));
+    f.render_widget(Paragraph::new(lines), inner);
 }
 
 #[cfg(test)]
@@ -284,6 +332,54 @@ mod tests {
         assert!(whole.contains("Four on Floor"), "expected pattern name in: {whole:?}");
         assert!(whole.contains("Classic"), "expected desc text in: {whole:?}");
         assert!(whole.contains("BD"), "expected BD voice label in: {whole:?}");
+    }
+
+    fn render_set_browser_to_string(app: &App) -> String {
+        let backend = TestBackend::new(120, 20);
+        let mut term = Terminal::new(backend).unwrap();
+        term.draw(|f| render_set_browser(f, f.area(), app)).unwrap();
+        term.backend().buffer().content().iter().map(|c| c.symbol()).collect()
+    }
+
+    #[test]
+    fn render_library_shows_position_indicator() {
+        let set = Set::default_set(default_profiles());
+        let mut app = App::new(set, library_with_drums());
+        app.lib_role = LibRole::Drums;
+        app.lib_genre = 0;
+        app.lib_pattern = 0;
+
+        let whole = render_to_string(&app);
+        // With 1 genre and 1 pattern, position indicators "1/1" should appear.
+        assert!(whole.contains("1/1"), "expected position indicator '1/1' in: {whole:?}");
+    }
+
+    #[test]
+    fn render_set_browser_shows_filename_and_indicator() {
+        let set = Set::default_set(default_profiles());
+        let mut app = App::new(set, library_with_drums());
+        app.set_files = vec![
+            std::path::PathBuf::from("/tmp/my-set.json"),
+            std::path::PathBuf::from("/tmp/another.json"),
+        ];
+        app.set_sel = 0;
+
+        let whole = render_set_browser_to_string(&app);
+        assert!(whole.contains("my-set"), "expected file stem in: {whole:?}");
+        assert!(whole.contains("1/2"), "expected position indicator '1/2' in: {whole:?}");
+    }
+
+    #[test]
+    fn render_set_browser_empty_state() {
+        let set = Set::default_set(default_profiles());
+        let app = App::new(set, library_with_drums());
+        // set_files is empty by default
+
+        let whole = render_set_browser_to_string(&app);
+        assert!(
+            whole.contains("No saved sets"),
+            "expected empty-state message in: {whole:?}"
+        );
     }
 
     #[test]

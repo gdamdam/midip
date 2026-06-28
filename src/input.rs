@@ -39,12 +39,19 @@ pub fn key_to_action(key: KeyEvent, mode: Mode, kind: LaneKind) -> Action {
 
     match mode {
         Mode::Library => match key.code {
-            KeyCode::Up => return Action::LibNav(-1, 0),
-            KeyCode::Down => return Action::LibNav(1, 0),
-            KeyCode::Left => return Action::LibNav(0, -1),
-            KeyCode::Right => return Action::LibNav(0, 1),
+            KeyCode::Left  => return Action::LibNav(-1, 0),  // switch to Genre column
+            KeyCode::Right => return Action::LibNav(1, 0),   // switch to Pattern column
+            KeyCode::Up    => return Action::LibNav(0, -1),  // move up in focused list
+            KeyCode::Down  => return Action::LibNav(0, 1),   // move down in focused list
             KeyCode::Enter => return Action::LibLoad,
             KeyCode::Char('l') | KeyCode::Esc => return Action::CloseLibrary,
+            _ => {}
+        },
+        Mode::SetBrowser => match key.code {
+            KeyCode::Up    => return Action::SetBrowserNav(-1),
+            KeyCode::Down  => return Action::SetBrowserNav(1),
+            KeyCode::Enter => return Action::SetBrowserLoad,
+            KeyCode::Esc | KeyCode::Char('o') => return Action::CloseSetBrowser,
             _ => {}
         },
         Mode::Help => return Action::Help,
@@ -120,6 +127,7 @@ pub fn key_to_action(key: KeyEvent, mode: Mode, kind: LaneKind) -> Action {
                     'y' => return Action::AdjustRatchet(-1),
                     'Y' => return Action::AdjustRatchet(1),
                     'l' => return Action::OpenLibrary,
+                    'o' => return Action::OpenSetBrowser,
                     's' => return Action::Save,
                     'q' => return Action::Quit,
                     _ => {}
@@ -182,7 +190,7 @@ mod tests {
 
     #[test]
     fn space_is_toggle_play_in_all_modes() {
-        for mode in [Mode::Edit, Mode::Library, Mode::Help, Mode::TempoEntry] {
+        for mode in [Mode::Edit, Mode::Library, Mode::Help, Mode::TempoEntry, Mode::SetBrowser] {
             assert_eq!(
                 key_to_action(k(KeyCode::Char(' ')), mode, LaneKind::Drums),
                 Action::TogglePlay,
@@ -193,7 +201,7 @@ mod tests {
 
     #[test]
     fn exclamation_is_panic_in_all_modes() {
-        for mode in [Mode::Edit, Mode::Library, Mode::Help, Mode::TempoEntry] {
+        for mode in [Mode::Edit, Mode::Library, Mode::Help, Mode::TempoEntry, Mode::SetBrowser] {
             assert_eq!(
                 key_to_action(k(KeyCode::Char('!')), mode, LaneKind::Drums),
                 Action::Panic,
@@ -398,9 +406,26 @@ mod tests {
 
     #[test]
     fn library_mode_arrows_and_enter() {
+        // Left/Right switch columns; Up/Down move within the focused list.
+        assert_eq!(
+            key_to_action(k(KeyCode::Left), Mode::Library, LaneKind::Drums),
+            Action::LibNav(-1, 0),
+            "Left → switch to Genre column"
+        );
+        assert_eq!(
+            key_to_action(k(KeyCode::Right), Mode::Library, LaneKind::Drums),
+            Action::LibNav(1, 0),
+            "Right → switch to Pattern column"
+        );
+        assert_eq!(
+            key_to_action(k(KeyCode::Up), Mode::Library, LaneKind::Drums),
+            Action::LibNav(0, -1),
+            "Up → move up in focused list"
+        );
         assert_eq!(
             key_to_action(k(KeyCode::Down), Mode::Library, LaneKind::Drums),
-            Action::LibNav(1, 0)
+            Action::LibNav(0, 1),
+            "Down → move down in focused list"
         );
         assert_eq!(
             key_to_action(k(KeyCode::Enter), Mode::Library, LaneKind::Drums),
@@ -409,6 +434,42 @@ mod tests {
         assert_eq!(
             key_to_action(k(KeyCode::Esc), Mode::Library, LaneKind::Drums),
             Action::CloseLibrary
+        );
+    }
+
+    #[test]
+    fn set_browser_mode_keys() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Up), Mode::SetBrowser, LaneKind::Drums),
+            Action::SetBrowserNav(-1)
+        );
+        assert_eq!(
+            key_to_action(k(KeyCode::Down), Mode::SetBrowser, LaneKind::Drums),
+            Action::SetBrowserNav(1)
+        );
+        assert_eq!(
+            key_to_action(k(KeyCode::Enter), Mode::SetBrowser, LaneKind::Drums),
+            Action::SetBrowserLoad
+        );
+        assert_eq!(
+            key_to_action(k(KeyCode::Esc), Mode::SetBrowser, LaneKind::Drums),
+            Action::CloseSetBrowser
+        );
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('o')), Mode::SetBrowser, LaneKind::Drums),
+            Action::CloseSetBrowser
+        );
+    }
+
+    #[test]
+    fn o_key_opens_set_browser_in_edit_mode() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('o')), Mode::Edit, LaneKind::Drums),
+            Action::OpenSetBrowser
+        );
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('o')), Mode::Edit, LaneKind::Melodic),
+            Action::OpenSetBrowser
         );
     }
 

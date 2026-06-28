@@ -63,6 +63,7 @@ pub fn render(f: &mut Frame, app: &App) {
     match app.mode {
         Mode::Library => library::render_library(f, centered(area, 90, 70), app),
         Mode::Help => help::render_help(f, centered(area, 60, 70)),
+        Mode::SetBrowser => library::render_set_browser(f, centered(area, 60, 70), app),
         Mode::Edit | Mode::TempoEntry => {}
     }
 }
