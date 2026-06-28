@@ -6,7 +6,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 
-use crate::app::App;
+use crate::app::{App, VISIBLE_STEPS};
 use crate::devices::profiles::{melodic_velocity, resolve_melodic_pitch};
 use crate::pattern::model::{MelodicNote, PatternData};
 use crate::ui::theme::{cursor_style, lane_color, note_name, playhead_style, vel_bar, vel_color};
@@ -38,13 +38,25 @@ pub fn render_melodic_editor(f: &mut Frame, area: Rect, app: &App) {
         PatternData::Drums(_) => &[],
     };
 
+    // Horizontal scroll: show at most VISIBLE_STEPS columns starting at step_scroll.
+    let scroll = app.step_scroll;
+    let visible_end = (scroll + VISIBLE_STEPS).min(len);
+    let visible_cols = scroll..visible_end;
+
+    let scroll_indicator = if len > VISIBLE_STEPS {
+        format!("  steps {}-{}/{}", scroll + 1, visible_end, len)
+    } else {
+        String::new()
+    };
+
     let title = format!(
-        " EDIT · {} · \"{}\" · {} steps · ch{} · root {} ",
+        " EDIT · {} · \"{}\" · {} steps · ch{} · root {}{} ",
         lane.profile.label,
         lane.pattern.name,
         len,
         lane.profile.channel + 1,
         note_name(root),
+        scroll_indicator,
     );
 
     // step header
@@ -53,7 +65,7 @@ pub fn render_melodic_editor(f: &mut Frame, area: Rect, app: &App) {
     let mut len_spans: Vec<Span> = vec![Span::raw("len  ")];
     let mut vel_spans: Vec<Span> = vec![Span::raw("vel  ")];
 
-    for col in 0..len {
+    for col in visible_cols {
         let is_cursor = col == app.cur_col;
         let is_playhead = app.playing && col == local_playhead;
         // Cursor and playhead use the shared theme styles (spec §7).
@@ -144,6 +156,45 @@ mod tests {
 
     fn empty_library() -> Library {
         Library { drums: GenreMap::new(), bass: GenreMap::new(), synth: GenreMap::new() }
+    }
+
+    // --- Fix #9 regression: horizontal scroll shows steps past 16 --------
+
+    #[test]
+    fn melodic_editor_shows_note_at_step_20_after_scrolling() {
+        use crate::app::Action;
+        let mut set = Set::default_set(default_profiles());
+        // Build a 32-step melodic pattern with a note at step 20.
+        let mut steps: Vec<Option<MelodicNote>> = vec![None; 32];
+        steps[20] = Some(MelodicNote { semi: 5, vel: 1.0, slide: false, len: 1.0, prob: 1.0, ratchet: 1 });
+        set.lanes[1].pattern = Pattern {
+            name: "test32".to_string(),
+            desc: String::new(),
+            length: 32,
+            data: PatternData::Melodic(steps),
+        };
+        let mut app = App::new(set, empty_library());
+        app.focus = 1;
+        // Move cursor to col 20 — triggers step_scroll to advance.
+        app.apply(Action::MoveCursor(0, 20));
+        assert_eq!(app.cur_col, 20);
+        assert!(app.step_scroll > 0, "scroll must have advanced");
+
+        let backend = TestBackend::new(120, 8);
+        let mut term = Terminal::new(backend).unwrap();
+        term.draw(|f| render_melodic_editor(f, f.area(), &app)).unwrap();
+
+        let whole: String = term
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        // Scroll indicator should appear in the title.
+        assert!(whole.contains("steps "), "expected scroll indicator, got: {whole:?}");
+        // Step 21 (1-based) should appear in the step header row.
+        assert!(whole.contains("21"), "expected step 21 visible after scroll, got: {whole:?}");
     }
 
     #[test]

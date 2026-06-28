@@ -83,13 +83,7 @@ pub fn key_to_action(key: KeyEvent, mode: Mode, kind: LaneKind) -> Action {
             KeyCode::Char(c) => {
                 // Digit keys → lane focus or velocity bucket.
                 if let Some(n) = c.to_digit(10) {
-                    let n = n as u8;
-                    match n {
-                        1 => return Action::FocusLane(0),
-                        2 => return Action::FocusLane(1),
-                        3 => return Action::FocusLane(2),
-                        _ => return Action::SetVelBucket(n),
-                    }
+                    return Action::SetVelBucket(n as u8);
                 }
 
                 // Global char bindings.
@@ -410,6 +404,45 @@ mod tests {
         assert_eq!(
             key_to_action(k(KeyCode::Char('l')), Mode::Edit, LaneKind::Drums),
             Action::OpenLibrary
+        );
+    }
+
+    // --- Fix #10 regression: 1/2/3 are now SetVelBucket, not FocusLane ---
+
+    #[test]
+    fn digits_1_2_3_map_to_set_vel_bucket_not_focus_lane() {
+        for (ch, bucket) in [('1', 1u8), ('2', 2u8), ('3', 3u8)] {
+            for kind in [LaneKind::Drums, LaneKind::Melodic] {
+                assert_eq!(
+                    key_to_action(k(KeyCode::Char(ch)), Mode::Edit, kind),
+                    Action::SetVelBucket(bucket),
+                    "'{ch}' should be SetVelBucket({bucket}), not FocusLane"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn all_digit_keys_0_through_9_map_to_set_vel_bucket() {
+        for ch in '0'..='9' {
+            let expected = Action::SetVelBucket(ch.to_digit(10).unwrap() as u8);
+            assert_eq!(
+                key_to_action(k(KeyCode::Char(ch)), Mode::Edit, LaneKind::Drums),
+                expected,
+                "'{ch}' should be SetVelBucket"
+            );
+        }
+    }
+
+    #[test]
+    fn tab_and_backtab_still_cycle_lane_focus_after_fix10() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Tab), Mode::Edit, LaneKind::Drums),
+            Action::FocusNext
+        );
+        assert_eq!(
+            key_to_action(k(KeyCode::BackTab), Mode::Edit, LaneKind::Drums),
+            Action::FocusPrev
         );
     }
 }
