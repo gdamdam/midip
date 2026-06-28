@@ -606,6 +606,12 @@ impl App {
                 self.armed = false;
                 self.engine_playing = false;
             }
+            EngineEvent::Tempo { bpm } => {
+                // Update the displayed BPM (display only — no dirty flag, no undo snapshot;
+                // tap is a performance action, not an edit).
+                self.set.bpm = bpm;
+                self.status = format!("Tap: {} BPM", bpm.round() as u32);
+            }
         }
     }
 
@@ -2580,6 +2586,21 @@ mod tests {
         assert!(
             app.status.contains("Swing"),
             "status should contain 'Swing' after AdjustSwing, got: {:?}",
+            app.status
+        );
+    }
+
+    #[test]
+    fn tempo_event_updates_displayed_bpm() {
+        let mut app = new_app();
+        app.on_engine_event(crate::engine::EngineEvent::Tempo { bpm: 124.0 });
+        assert_eq!(
+            app.set.bpm, 124.0,
+            "displayed BPM (app.set.bpm) should be updated by Tempo event"
+        );
+        assert!(
+            app.status.contains("124"),
+            "status toast should contain the new BPM, got: {:?}",
             app.status
         );
     }

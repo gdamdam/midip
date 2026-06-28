@@ -80,6 +80,9 @@ pub enum EngineEvent {
     Started { at_step: usize },
     /// Engine-confirmed: sequencer has stopped.
     Stopped,
+    /// Engine-resolved tempo after a Tap or SetBpm command. Carries the BPM that
+    /// the engine actually applied so the UI can update its displayed value.
+    Tempo { bpm: f64 },
 }
 
 /// Handle returned by `spawn_engine`.
@@ -167,6 +170,9 @@ fn apply_command(
             st.transport.tap(now);
             st.transport.source = TempoSource::Manual(st.transport.manual_bpm);
             st.seq.set_bpm(st.transport.manual_bpm);
+            events.push(EngineEvent::Tempo {
+                bpm: st.transport.manual_bpm,
+            });
         }
         UiCommand::SetSwing(s) => {
             st.seq.set_swing(s);
@@ -1169,5 +1175,36 @@ mod tests {
             "sequencer must be playing after boundary"
         );
         assert!(!st.armed, "armed must be cleared after boundary");
+    }
+
+    /// Tap tempo: two taps 500 ms apart → engine emits EngineEvent::Tempo{bpm≈120}.
+    #[test]
+    fn tap_tempo_emits_tempo_event() {
+        let set = default_set();
+        let mut link = FakeLink::new();
+        let mut sink = RecordingSink::new();
+        // Two taps: t=0 and t=500_000 µs → interval 500 ms → 120 BPM.
+        let evs = run_engine_headless(
+            set,
+            &mut link,
+            &mut sink,
+            vec![(0, UiCommand::Tap), (500_000, UiCommand::Tap)],
+            600_000,
+            1_000,
+        );
+        let tempo_event = evs.iter().find_map(|e| {
+            if let EngineEvent::Tempo { bpm } = e {
+                Some(*bpm)
+            } else {
+                None
+            }
+        });
+        assert!(
+            tempo_event.is_some(),
+            "expected a Tempo event after two taps, got: {:?}",
+            evs
+        );
+        let bpm = tempo_event.unwrap();
+        assert!((bpm - 120.0).abs() < 2.0, "expected bpm ≈ 120, got {bpm}");
     }
 }
