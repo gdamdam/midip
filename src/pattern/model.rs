@@ -132,6 +132,16 @@ pub struct Lane {
 }
 
 impl Lane {
+    /// The MIDI channel this lane emits on: the explicit route's channel when set,
+    /// else the profile channel. Allocation-free — safe for the scheduler hot path
+    /// (unlike `effective_route()`, which clones the port's `String`s).
+    pub fn route_channel(&self) -> u8 {
+        self.route
+            .as_ref()
+            .map(|r| r.channel)
+            .unwrap_or(self.profile.channel)
+    }
+
     /// The MIDI route to use for this lane.
     /// Returns the explicit `route` if set; otherwise derives from the device profile.
     pub fn effective_route(&self) -> LaneRoute {
@@ -381,6 +391,35 @@ mod tests {
         };
         let r = lane.effective_route();
         assert_eq!(r, explicit);
+    }
+
+    #[test]
+    fn route_channel_uses_route_when_set_else_profile() {
+        let profiles = crate::devices::profiles::default_profiles();
+        // No route → profile channel.
+        let lane = Lane {
+            profile: profiles[0], // channel 9
+            pattern: Pattern::empty_drums(4),
+            mute: false,
+            solo: false,
+            transpose: 0,
+            octave: 0,
+            route: None,
+        };
+        assert_eq!(lane.route_channel(), profiles[0].channel);
+
+        // Explicit route → route channel, overriding the profile.
+        let mut lane2 = lane.clone();
+        lane2.route = Some(LaneRoute {
+            port: PortRef {
+                stable_key: "X".to_string(),
+                name: "X".to_string(),
+            },
+            channel: 5,
+            clock_out: true,
+        });
+        assert_eq!(lane2.route_channel(), 5);
+        assert_ne!(lane2.route_channel(), profiles[0].channel);
     }
 
     #[test]

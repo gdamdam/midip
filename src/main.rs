@@ -99,7 +99,7 @@ fn run(mut terminal: Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
     // or sets app.device_status directly.
     let set = Set::default_set(profiles);
     let link = Box::new(AbletonLink::new(set.bpm));
-    let engine = spawn_engine(set.clone(), link, profiles);
+    let engine = spawn_engine(set.clone(), link);
 
     let mut app = App::new(set, library);
     app.set_status(lib_status);

@@ -8,10 +8,9 @@ pub mod clock;
 pub mod scheduler;
 pub mod transport;
 
-use crate::devices::profiles::DeviceProfile;
 use crate::link::LinkClock;
 use crate::midi::ports::{connect, list_output_ports, match_port, MidiSink, NullSink};
-use crate::pattern::model::{Lane, Pattern, Set};
+use crate::pattern::model::{Lane, LaneRoute, Pattern, Set};
 use clock::ClockGen;
 use scheduler::Sequencer;
 use transport::{TempoSource, Transport};
@@ -49,6 +48,14 @@ pub enum UiCommand {
         octave: i8,
     },
     SetSet(Set),
+    /// Change a single lane's MIDI route at runtime (`None` = derive from profile).
+    /// Releases the lane's sounding notes first, updates the route, then asks the real
+    /// engine loop (via `route_dirty`) to re-plan ports / re-spawn the watcher if the
+    /// distinct destination port set changed.
+    SetRoute {
+        lane: usize,
+        route: Option<LaneRoute>,
+    },
     /// All-notes-off / all-sound-off live recovery; does not stop transport.
     Panic,
     Quit,
@@ -108,6 +115,11 @@ struct EngineState {
     last_step: Option<usize>,
     bar: u32,
     tick_count: u64,
+    /// Set by `SetRoute` to ask the real `spawn_engine` loop to recompute the route
+    /// plan (channel→port / clock / lane→port) and, if the distinct port set changed,
+    /// re-spawn the device watcher. `apply_command` cannot touch the loop's
+    /// port_sinks/watcher, so it flags here and the loop reacts. Ignored headless.
+    route_dirty: bool,
 }
 
 impl EngineState {
@@ -125,6 +137,7 @@ impl EngineState {
             last_step: None,
             bar: 0,
             tick_count: 0,
+            route_dirty: false,
         }
     }
 }
@@ -251,6 +264,15 @@ fn apply_command(
             if playing {
                 st.seq.play(now);
             }
+        }
+        UiCommand::SetRoute { lane, route } => {
+            // Release the lane's sounding notes BEFORE the route changes, so the
+            // NoteOffs go out on the OLD channel (route_channel still reflects it).
+            st.seq.release_lanes(&[lane], now, sink);
+            st.seq.set_lane_route(lane, route);
+            // The real loop owns port_sinks + the watcher; flag it to re-plan. The
+            // headless driver ignores this (no ports).
+            st.route_dirty = true;
         }
         UiCommand::Panic => {
             // All-notes-off / all-sound-off on every lane channel. Does NOT touch the
@@ -651,6 +673,24 @@ fn emit_lane_status(ports: &[PortSink], lane_to_port: &[usize], events: &mut Vec
     }
 }
 
+/// Spawn a fresh device-watcher thread for the given distinct port keys, returning its
+/// join handle plus the channels the engine talks to it over. The watcher OWNS all port
+/// enumeration/connection; the engine only installs the ready-made sinks it streams back.
+/// Used at startup and again whenever a `SetRoute` changes the distinct port set (the old
+/// watcher is told to `Quit` and joined, a new one spawned for the new keys).
+fn spawn_watcher(
+    keys: Vec<String>,
+) -> (
+    std::thread::JoinHandle<()>,
+    crossbeam_channel::Receiver<PortUpdate>,
+    crossbeam_channel::Sender<PortRequest>,
+) {
+    let (update_tx, update_rx) = crossbeam_channel::unbounded::<PortUpdate>();
+    let (request_tx, request_rx) = crossbeam_channel::unbounded::<PortRequest>();
+    let handle = std::thread::spawn(move || run_port_watcher(keys, update_tx, request_rx));
+    (handle, update_rx, request_tx)
+}
+
 /// Spawn the real engine on its own thread, driven by a monotonic clock. NOT unit-tested
 /// (non-deterministic timing); shares `step_engine` with the headless driver.
 ///
@@ -661,24 +701,27 @@ fn emit_lane_status(ports: &[PortSink], lane_to_port: &[usize], events: &mut Vec
 /// loss/route-change (P1), and detects health failures (asking the watcher to reconnect).
 /// One connection per distinct destination port (shared-port lanes collapse — no
 /// double-clock). The destination ports come from the set's per-lane routes
-/// (`Lane::effective_route`), so `_profiles` is retained only for call-site compatibility.
-pub fn spawn_engine(
-    set: Set,
-    mut link: Box<dyn LinkClock>,
-    _profiles: [DeviceProfile; 3],
-) -> EngineHandle {
+/// (`Lane::effective_route`), so no device-profile array is needed — the plan is
+/// derived entirely from `set.lanes`.
+pub fn spawn_engine(set: Set, mut link: Box<dyn LinkClock>) -> EngineHandle {
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded::<UiCommand>();
     let (evt_tx, evt_rx) = crossbeam_channel::unbounded::<EngineEvent>();
 
     let join = std::thread::spawn(move || {
         // Route plan from the initial set's lanes (route-driven, NOT profile-only). Built
-        // ONCE here (static plan, T6); built before `set` is moved into EngineState::new.
-        // The watcher connects each distinct port by its key/name — for profile-derived
-        // routes the key == the old `port_match`, so default behavior is unchanged.
+        // before `set` is moved into EngineState::new. The plan is RE-derived at runtime
+        // when a `SetRoute` flags `route_dirty` (see the re-plan block in the loop), so
+        // these are `mut`. The watcher connects each distinct port by its key/name — for
+        // profile-derived routes the key == the old `port_match`, so default behavior is
+        // unchanged.
         let plan = build_route_plan(&set.lanes);
-        let channel_to_port = plan.channel_to_port;
-        let clock_ports = plan.clock_ports;
-        let lane_to_port = plan.lane_to_port;
+        let mut channel_to_port = plan.channel_to_port;
+        let mut clock_ports = plan.clock_ports;
+        let mut lane_to_port = plan.lane_to_port;
+        // Distinct port keys currently realized in `port_sinks` (parallel by index). The
+        // re-plan compares the new key set against this to decide whether to re-spawn.
+        let mut port_keys: Vec<String> =
+            plan.ports.iter().map(|p| port_key(p).to_string()).collect();
 
         let mut st = EngineState::new(set);
         let mut pending: Vec<(u64, UiCommand)> = Vec::new();
@@ -686,8 +729,7 @@ pub fn spawn_engine(
         let start = std::time::Instant::now();
 
         // Every port starts disconnected (NullSink); the watcher will connect present ports.
-        let mut port_sinks: Vec<PortSink> = plan
-            .ports
+        let mut port_sinks: Vec<PortSink> = port_keys
             .iter()
             .map(|_| PortSink {
                 sink: Box::new(NullSink),
@@ -697,14 +739,10 @@ pub fn spawn_engine(
             .collect();
 
         // Spawn the device-watcher: it owns enumeration/connection and streams PortUpdates.
-        // Each distinct port is matched by its stable_key (falling back to name).
-        let (update_tx, update_rx) = crossbeam_channel::unbounded::<PortUpdate>();
-        let (request_tx, request_rx) = crossbeam_channel::unbounded::<PortRequest>();
-        let watcher = {
-            let port_matches: Vec<String> =
-                plan.ports.iter().map(|p| port_key(p).to_string()).collect();
-            std::thread::spawn(move || run_port_watcher(port_matches, update_tx, request_rx))
-        };
+        // Each distinct port is matched by its stable_key (falling back to name). Re-spawned
+        // on a SetRoute that changes the distinct port set, so these handles are `mut`.
+        let (watcher, mut update_rx, mut request_tx) = spawn_watcher(port_keys.clone());
+        let mut watcher = Some(watcher);
 
         // Emit initial (all-disconnected) per-lane DeviceStatus before the first tick;
         // the watcher's first scan (immediate, no initial sleep) flips present ports shortly.
@@ -712,7 +750,9 @@ pub fn spawn_engine(
         for ev in events.drain(..) {
             if evt_tx.send(ev).is_err() {
                 let _ = request_tx.send(PortRequest::Quit);
-                let _ = watcher.join();
+                if let Some(w) = watcher.take() {
+                    let _ = w.join();
+                }
                 return;
             }
         }
@@ -831,8 +871,88 @@ pub fn spawn_engine(
             if flush_events!() || quit {
                 // Engine stopping (Quit or UI gone): shut the watcher down; don't leak it.
                 let _ = request_tx.send(PortRequest::Quit);
-                let _ = watcher.join();
+                if let Some(w) = watcher.take() {
+                    let _ = w.join();
+                }
                 return;
+            }
+
+            // --- Dynamic re-plan: a `SetRoute` set `route_dirty`. Recompute the route plan
+            //     from the current lanes. If the DISTINCT port KEY set changed, release all
+            //     sounding notes (the channel→port map is about to change underneath them),
+            //     then re-spawn the watcher for the new keys and rebuild `port_sinks` —
+            //     carrying over still-present connections by key, NullSink for new keys.
+            //     NO enumerate/connect here; the watcher owns that. ---
+            if st.route_dirty {
+                st.route_dirty = false;
+                let new_plan = build_route_plan(st.seq.lanes());
+                let new_keys: Vec<String> = new_plan
+                    .ports
+                    .iter()
+                    .map(|p| port_key(p).to_string())
+                    .collect();
+
+                // Always adopt the new channel/clock/lane maps (a route change can move a
+                // channel between existing ports without changing the key SET).
+                channel_to_port = new_plan.channel_to_port;
+                clock_ports = new_plan.clock_ports;
+                lane_to_port = new_plan.lane_to_port;
+
+                if new_keys != port_keys {
+                    // Release every sounding note before the topology shifts (the old
+                    // channel→port map still routes the NoteOffs to the live connections).
+                    {
+                        let mut fanout = PortFanoutSink {
+                            ports: &mut port_sinks,
+                            channel_to_port: &channel_to_port,
+                            clock_ports: &clock_ports,
+                        };
+                        st.seq.release_all(now, &mut fanout);
+                    }
+
+                    // Carry over still-present connections by key; NullSink for new keys.
+                    let mut new_sinks: Vec<PortSink> = Vec::with_capacity(new_keys.len());
+                    for key in &new_keys {
+                        if let Some(old_idx) = port_keys.iter().position(|k| k == key) {
+                            new_sinks.push(std::mem::replace(
+                                &mut port_sinks[old_idx],
+                                PortSink {
+                                    sink: Box::new(NullSink),
+                                    connected: false,
+                                    port_name: String::new(),
+                                },
+                            ));
+                        } else {
+                            new_sinks.push(PortSink {
+                                sink: Box::new(NullSink),
+                                connected: false,
+                                port_name: String::new(),
+                            });
+                        }
+                    }
+                    port_sinks = new_sinks;
+                    port_keys = new_keys;
+
+                    // Re-spawn the watcher with the new key set: signal old → Quit + join,
+                    // then spawn fresh. (NO enumerate/connect on this thread.)
+                    let _ = request_tx.send(PortRequest::Quit);
+                    if let Some(w) = watcher.take() {
+                        let _ = w.join();
+                    }
+                    let (w, urx, rtx) = spawn_watcher(port_keys.clone());
+                    watcher = Some(w);
+                    update_rx = urx;
+                    request_tx = rtx;
+
+                    emit_lane_status(&port_sinks, &lane_to_port, &mut events);
+                    if flush_events!() {
+                        let _ = request_tx.send(PortRequest::Quit);
+                        if let Some(w) = watcher.take() {
+                            let _ = w.join();
+                        }
+                        return;
+                    }
+                }
             }
 
             // ~1 ms loop; cheap and keeps timing tight enough for 24 PPQN.
@@ -1402,6 +1522,224 @@ mod tests {
             "sequencer must be playing after boundary"
         );
         assert!(!st.armed, "armed must be cleared after boundary");
+    }
+
+    // --- Task 7: route channel emission + SetRoute -------------------------
+
+    use crate::pattern::model::{LaneRoute, MelodicNote, Pattern, PatternData, PortRef};
+
+    /// A melodic note on step 0 of the given lane (full-bar length so it stays sounding).
+    fn put_long_note(set: &mut Set, lane: usize, semi: i8) {
+        let mut steps = vec![None; 16];
+        steps[0] = Some(MelodicNote {
+            semi,
+            vel: 1.0,
+            slide: false,
+            len: 4.0,
+            prob: 1.0,
+            ratchet: 1,
+        });
+        set.lanes[lane].pattern = Pattern {
+            name: "t".into(),
+            desc: String::new(),
+            length: 16,
+            data: PatternData::Melodic(steps),
+            id: crate::persist::Id::nil(),
+        };
+    }
+
+    fn route_on(channel: u8) -> LaneRoute {
+        LaneRoute {
+            port: PortRef {
+                stable_key: "S-1".to_string(),
+                name: "S-1".to_string(),
+            },
+            channel,
+            clock_out: true,
+        }
+    }
+
+    /// Important fix: a melodic lane with a route channel override emits its NoteOn on the
+    /// ROUTE channel, not the profile channel.
+    #[test]
+    fn note_emits_on_route_channel_when_overridden() {
+        use crate::midi::MidiMessage;
+        let mut set = default_set();
+        set.bpm = 120.0;
+        let profile_ch = set.lanes[2].profile.channel; // S-1 → 0
+        put_long_note(&mut set, 2, 0);
+        set.lanes[2].route = Some(route_on(5));
+
+        let mut link = FakeLink::new();
+        let mut sink = RecordingSink::new();
+        let _ = run_engine_headless(
+            set,
+            &mut link,
+            &mut sink,
+            vec![(0, UiCommand::Play)],
+            5_000,
+            500,
+        );
+
+        assert!(
+            sink.events
+                .iter()
+                .any(|(_, m)| matches!(m, MidiMessage::NoteOn { channel: 5, .. })),
+            "NoteOn must fire on the route channel 5; got {:?}",
+            sink.events
+        );
+        assert!(
+            !sink.events.iter().any(
+                |(_, m)| matches!(m, MidiMessage::NoteOn { channel, .. } if *channel == profile_ch)
+            ),
+            "no NoteOn should fire on the profile channel {profile_ch}"
+        );
+    }
+
+    /// SetRoute changes a lane's channel mid-play: subsequent NoteOns use the NEW channel,
+    /// and a NoteOff for the old channel is emitted at the switch (release before change).
+    #[test]
+    fn set_route_command_updates_lane_and_emits_on_new_channel() {
+        use crate::midi::MidiMessage;
+        let mut set = default_set();
+        set.bpm = 120.0; // step_dur 125_000 µs
+                         // Step 0: a long note (still sounding at the switch). Step 4: another
+                         // note that lands AFTER the switch (so a post-switch NoteOn exists).
+        let mut steps = vec![None; 16];
+        steps[0] = Some(MelodicNote {
+            semi: 0,
+            vel: 1.0,
+            slide: false,
+            len: 4.0,
+            prob: 1.0,
+            ratchet: 1,
+        });
+        steps[4] = Some(MelodicNote {
+            semi: 2,
+            vel: 1.0,
+            slide: false,
+            len: 1.0,
+            prob: 1.0,
+            ratchet: 1,
+        });
+        set.lanes[2].pattern = Pattern {
+            name: "t".into(),
+            desc: String::new(),
+            length: 16,
+            data: PatternData::Melodic(steps),
+            id: crate::persist::Id::nil(),
+        };
+        set.lanes[2].route = Some(route_on(3)); // start on channel 3
+
+        let mut link = FakeLink::new();
+        let mut sink = RecordingSink::new();
+        let switch_at = 50_000u64; // inside step 0's long note (still sounding) → release on switch
+        let _ = run_engine_headless(
+            set,
+            &mut link,
+            &mut sink,
+            vec![
+                (0, UiCommand::Play),
+                (
+                    switch_at,
+                    UiCommand::SetRoute {
+                        lane: 2,
+                        route: Some(route_on(8)),
+                    },
+                ),
+            ],
+            600_000,
+            500,
+        );
+
+        // A NoteOff for the old channel 3 is emitted at/after the switch (release first).
+        assert!(
+            sink.events
+                .iter()
+                .any(|(at, m)| *at >= switch_at
+                    && matches!(m, MidiMessage::NoteOff { channel: 3, .. })),
+            "SetRoute must release the old-channel note at the switch; got {:?}",
+            sink.events
+        );
+        // After the switch, NoteOns appear on the NEW channel 8.
+        assert!(
+            sink.events
+                .iter()
+                .any(|(at, m)| *at > switch_at
+                    && matches!(m, MidiMessage::NoteOn { channel: 8, .. })),
+            "after SetRoute, NoteOns must use the new channel 8; got {:?}",
+            sink.events
+        );
+        // And no NoteOn appears on channel 3 after the switch.
+        assert!(
+            !sink
+                .events
+                .iter()
+                .any(|(at, m)| *at > switch_at
+                    && matches!(m, MidiMessage::NoteOn { channel: 3, .. })),
+            "no NoteOn should fire on the old channel 3 after the switch"
+        );
+    }
+
+    /// SetRoute on a lane with a SOUNDING note emits that note's NoteOff at the switch.
+    #[test]
+    fn set_route_releases_lane_before_switch() {
+        use crate::midi::MidiMessage;
+        let mut set = default_set();
+        set.bpm = 120.0;
+        put_long_note(&mut set, 2, 0); // long note on lane 2, sounding well past the switch
+        set.lanes[2].route = Some(route_on(4));
+
+        let mut link = FakeLink::new();
+        let mut sink = RecordingSink::new();
+        let switch_at = 50_000u64; // note (len 4 steps = 500_000) is still sounding here
+        let _ = run_engine_headless(
+            set,
+            &mut link,
+            &mut sink,
+            vec![
+                (0, UiCommand::Play),
+                (
+                    switch_at,
+                    UiCommand::SetRoute {
+                        lane: 2,
+                        route: Some(route_on(9)),
+                    },
+                ),
+            ],
+            100_000,
+            500,
+        );
+
+        // NoteOff for the sounding note on the OLD channel 4, at the switch time.
+        assert!(
+            sink.events
+                .iter()
+                .any(|(at, m)| *at >= switch_at
+                    && matches!(m, MidiMessage::NoteOff { channel: 4, .. })),
+            "SetRoute must release the lane's sounding note (NoteOff ch4) at the switch; got {:?}",
+            sink.events
+        );
+    }
+
+    /// Pure: build_route_plan reflects a route change — a new channel maps to a port.
+    #[test]
+    fn build_route_plan_reflects_route_change() {
+        let mut set = default_set();
+        // Initially the S-1 lane (idx 2) is on channel 0.
+        let plan0 = build_route_plan(&set.lanes);
+        assert!(plan0.channel_to_port[0].is_some(), "ch0 mapped initially");
+        assert!(plan0.channel_to_port[6].is_none(), "ch6 unmapped initially");
+
+        // Override the S-1 lane to channel 6 on the same port.
+        set.lanes[2].route = Some(route_on(6));
+        let plan1 = build_route_plan(&set.lanes);
+        assert!(
+            plan1.channel_to_port[6].is_some(),
+            "ch6 must be mapped after the route change"
+        );
+        // Same physical port (S-1) → same number of distinct ports.
+        assert_eq!(plan0.ports.len(), plan1.ports.len());
     }
 
     /// Tap tempo: two taps 500 ms apart → engine emits EngineEvent::Tempo{bpm≈120}.
