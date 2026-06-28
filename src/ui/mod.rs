@@ -3,6 +3,7 @@ pub mod editor_melodic;
 pub mod help;
 pub mod lanes;
 pub mod library;
+pub mod mgmt;
 pub mod recovery;
 pub mod route_editor;
 pub mod theme;
@@ -19,7 +20,7 @@ use crate::pattern::model::LaneKind;
 
 fn context_footer(app: &App) -> Line<'static> {
     let label = app.context_label();
-    let hint: &str = match app.mode {
+    let hint: &str = match &app.mode {
         Mode::Edit => match app.focused_kind() {
             LaneKind::Drums => {
                 "[space]play [tab]lane [arrows]move [enter]toggle [0-9]vel [e/E][/]]euclid [?]more"
@@ -29,11 +30,15 @@ fn context_footer(app: &App) -> Line<'static> {
             }
         },
         Mode::Library => "[←→]column [↑↓]select [enter]load [esc]close",
-        Mode::SetBrowser => "[↑↓]select [enter]open [o/esc]close",
+        Mode::SetBrowser => {
+            "[↑↓]select [enter]open  [r]rename [a/S]save-as [D]dup [d]del [n]new  [o/esc]close"
+        }
         Mode::TempoEntry => "[0-9]type BPM [enter]set [esc]cancel",
         Mode::Help => "[?/esc]close",
         Mode::RouteEditor => "[↑↓]lane [←→]field [c]port [[ /]]ch [z]clk-out [esc]close",
         Mode::RecoveryPrompt => "[r/enter]recover [d/esc]discard [o]open saved",
+        Mode::NameEntry(_) => "[a-z 0-9 - #]type name [enter]confirm [esc]cancel",
+        Mode::Confirm(_) => "[y/enter]yes [n/esc]no",
     };
     let label_style = Style::default()
         .fg(Color::Black)
@@ -110,12 +115,14 @@ pub fn render(f: &mut Frame, app: &App) {
 
     f.render_widget(Paragraph::new(context_footer(app)), chunks[3]);
 
-    match app.mode {
+    match &app.mode {
         Mode::Library => library::render_library(f, centered(area, 90, 70), app),
         Mode::Help => help::render_help(f, centered(area, 60, 70)),
         Mode::SetBrowser => library::render_set_browser(f, centered(area, 60, 70), app),
         Mode::RouteEditor => route_editor::render_route_editor(f, centered(area, 80, 70), app),
         Mode::RecoveryPrompt => recovery::render_recovery_prompt(f, centered(area, 70, 60)),
+        Mode::NameEntry(_) => mgmt::render_name_entry(f, centered(area, 50, 30), app),
+        Mode::Confirm(_) => mgmt::render_confirm(f, centered(area, 50, 25), app),
         Mode::Edit | Mode::TempoEntry => {}
     }
 }

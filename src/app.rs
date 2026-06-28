@@ -14,7 +14,23 @@ use crate::pattern::model::{
     PortRef, Set,
 };
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// Purpose of a pending name-entry dialog.
+#[derive(Clone, Debug, PartialEq)]
+pub enum NamePurpose {
+    SaveSetAs,
+    RenameSet,
+    SaveUserPattern,
+}
+
+/// Action to perform when a Confirm dialog is accepted.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ConfirmAction {
+    NewSet,
+    DeleteSet(std::path::PathBuf),
+    ClearPattern,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub enum Mode {
     Edit,
     Library,
@@ -23,6 +39,10 @@ pub enum Mode {
     SetBrowser,
     RouteEditor,
     RecoveryPrompt,
+    /// Text-input dialog for naming a set or pattern.
+    NameEntry(NamePurpose),
+    /// Yes/no confirmation dialog before a destructive action.
+    Confirm(ConfirmAction),
 }
 
 /// Which field is focused in the route editor (cycles Left/Right).
@@ -143,6 +163,27 @@ pub enum Action {
     NewSet,
     /// Delete the set file at `path`. Best-effort removal.
     DeleteSet(std::path::PathBuf),
+    // ── Name-entry dialog ─────────────────────────────────────────────
+    OpenNameEntry(NamePurpose),
+    NameChar(char),
+    NameBackspace,
+    NameCommit,
+    NameCancel,
+    // ── Confirm dialog ────────────────────────────────────────────────
+    OpenConfirm(ConfirmAction),
+    ConfirmYes,
+    ConfirmNo,
+    // ── Set-browser management keys ───────────────────────────────────
+    SetBrowserRename,
+    SetBrowserSaveAs,
+    SetBrowserDuplicate,
+    SetBrowserDelete,
+    SetBrowserNewSet,
+    // ── Edit-mode pattern management ──────────────────────────────────
+    OpenSaveUserPattern,
+    OpenClearPattern,
+    // ── User-pattern load ─────────────────────────────────────────────
+    LoadUserPattern(std::path::PathBuf),
     None,
 }
 
@@ -199,6 +240,8 @@ pub struct App {
     pub status_ttl: u16,
     pub should_quit: bool,
     pub tempo_input: String,
+    /// Text buffer for the NameEntry dialog (set name / user-pattern name).
+    pub name_input: String,
     /// Armed for double-q quit: true after first Quit while playing.
     pub quit_armed: bool,
     /// True when the Set has unsaved mutations since the last successful Save.
@@ -233,6 +276,11 @@ pub struct App {
     /// The on-disk path of the currently-loaded/saved set file, so Rename/Delete can target it.
     /// None if the set has never been saved or was replaced by NewSet.
     pub current_set_path: Option<std::path::PathBuf>,
+
+    // --- M3 Task 7: management UI ---
+    /// Cached user patterns loaded from the user patterns dir; injected into the library
+    /// as a "User" genre when the library browser opens.
+    pub user_patterns: Vec<crate::pattern::model::Pattern>,
 }
 
 /// Default melodic velocity multiplier when placing a note (1.0 -> MIDI 100).
@@ -279,6 +327,7 @@ impl App {
             status_ttl: 0,
             should_quit: false,
             tempo_input: String::new(),
+            name_input: String::new(),
             quit_armed: false,
             dirty: false,
             autosave_counter: 0,
@@ -290,6 +339,7 @@ impl App {
             launch_quant: Quant::NextBar,
             queued: vec![None; n],
             current_set_path: None,
+            user_patterns: Vec::new(),
         }
     }
 
@@ -629,7 +679,10 @@ impl App {
                 // Live recovery: forward to the engine. No undo snapshot, no Set mutation.
                 cmds.push(UiCommand::Panic);
             }
-            Action::OpenLibrary => self.mode = Mode::Library,
+            Action::OpenLibrary => {
+                self.refresh_user_patterns();
+                self.mode = Mode::Library;
+            }
             Action::CloseLibrary => {
                 if self.audition.take().is_some() {
                     // Cancel audition: the committed Set was never touched, so nothing to undo.
@@ -1142,6 +1195,113 @@ impl App {
                 }
                 self.set_status("Deleted set");
             }
+            // ── Name-entry dialog ─────────────────────────────────────────────
+            Action::OpenNameEntry(purpose) => {
+                self.name_input.clear();
+                self.mode = Mode::NameEntry(purpose);
+            }
+            Action::NameChar(c) => {
+                let ok = c.is_ascii_alphanumeric() || matches!(c, ' ' | '-' | '#');
+                if ok && self.name_input.len() < 32 {
+                    self.name_input.push(c);
+                }
+            }
+            Action::NameBackspace => {
+                self.name_input.pop();
+            }
+            Action::NameCommit => {
+                let purpose = match &self.mode {
+                    Mode::NameEntry(p) => p.clone(),
+                    _ => return cmds,
+                };
+                let name = self.name_input.trim().to_string();
+                self.mode = Mode::Edit;
+                self.name_input.clear();
+                if !name.is_empty() {
+                    let sub = match purpose {
+                        NamePurpose::SaveSetAs => Action::SaveSetAs(name),
+                        NamePurpose::RenameSet => Action::RenameSet(name),
+                        NamePurpose::SaveUserPattern => Action::SaveAsUserPattern(name),
+                    };
+                    cmds.extend(self.apply(sub));
+                }
+            }
+            Action::NameCancel => {
+                self.mode = Mode::Edit;
+                self.name_input.clear();
+            }
+            // ── Confirm dialog ────────────────────────────────────────────────
+            Action::OpenConfirm(action) => {
+                self.mode = Mode::Confirm(action);
+            }
+            Action::ConfirmYes => {
+                let action = match &self.mode {
+                    Mode::Confirm(a) => a.clone(),
+                    _ => return cmds,
+                };
+                self.mode = Mode::Edit;
+                let sub = match action {
+                    ConfirmAction::NewSet => Action::NewSet,
+                    ConfirmAction::DeleteSet(path) => Action::DeleteSet(path),
+                    ConfirmAction::ClearPattern => Action::ClearPattern,
+                };
+                cmds.extend(self.apply(sub));
+            }
+            Action::ConfirmNo => {
+                self.mode = Mode::Edit;
+                self.set_status("Cancelled");
+            }
+            // ── Set-browser management ────────────────────────────────────────
+            Action::SetBrowserRename => {
+                self.name_input.clear();
+                self.mode = Mode::NameEntry(NamePurpose::RenameSet);
+            }
+            Action::SetBrowserSaveAs => {
+                self.name_input.clear();
+                self.mode = Mode::NameEntry(NamePurpose::SaveSetAs);
+            }
+            Action::SetBrowserDuplicate => {
+                cmds.extend(self.apply(Action::DuplicateSet));
+            }
+            Action::SetBrowserDelete => {
+                if !self.set_files.is_empty() {
+                    let path = self.set_files[self.set_sel].clone();
+                    self.mode = Mode::Confirm(ConfirmAction::DeleteSet(path));
+                }
+            }
+            Action::SetBrowserNewSet => {
+                if self.dirty {
+                    self.mode = Mode::Confirm(ConfirmAction::NewSet);
+                } else {
+                    cmds.extend(self.apply(Action::NewSet));
+                }
+            }
+            // ── Edit-mode pattern management ──────────────────────────────────
+            Action::OpenSaveUserPattern => {
+                self.name_input.clear();
+                self.mode = Mode::NameEntry(NamePurpose::SaveUserPattern);
+            }
+            Action::OpenClearPattern => {
+                if self.pattern_has_material() {
+                    self.mode = Mode::Confirm(ConfirmAction::ClearPattern);
+                } else {
+                    cmds.extend(self.apply(Action::ClearPattern));
+                }
+            }
+            // ── User-pattern load ─────────────────────────────────────────────
+            Action::LoadUserPattern(path) => {
+                match crate::pattern::store::load_user_pattern(&path) {
+                    Ok(pat) => {
+                        let name = pat.name.clone();
+                        self.snapshot();
+                        self.set.lanes[self.focus].pattern = pat;
+                        self.set_status(format!("Loaded user pattern {}", name));
+                        self.mode = Mode::Edit;
+                        cmds.push(self.load_focused());
+                    }
+                    Err(e) => self.set_status(format!("Load failed: {}", e)),
+                }
+            }
             Action::None => {}
         }
         cmds
@@ -1292,6 +1452,8 @@ impl App {
             Mode::SetBrowser => "OPEN SET",
             Mode::RouteEditor => "ROUTES",
             Mode::RecoveryPrompt => "RECOVERY",
+            Mode::NameEntry(_) => "NAME",
+            Mode::Confirm(_) => "CONFIRM",
         }
     }
 
@@ -1746,6 +1908,37 @@ impl App {
                     }
                 }
             }
+        }
+    }
+
+    /// True if the focused lane's pattern has at least one active step.
+    fn pattern_has_material(&self) -> bool {
+        let lane = &self.set.lanes[self.focus];
+        match &lane.pattern.data {
+            PatternData::Drums(steps) => steps.iter().any(|s| !s.is_empty()),
+            PatternData::Melodic(steps) => steps.iter().any(|s| s.is_some()),
+        }
+    }
+
+    /// Load user patterns from disk and inject them as a "User" genre in every role map.
+    /// Called when opening the library browser so saved patterns are immediately browseable.
+    pub fn refresh_user_patterns(&mut self) {
+        let dir = crate::config::data_dir().join("patterns");
+        let paths = crate::pattern::store::list_user_patterns(&dir);
+        let user_pats: Vec<crate::pattern::model::Pattern> = paths
+            .iter()
+            .filter_map(|p| crate::pattern::store::load_user_pattern(p).ok())
+            .collect();
+        self.user_patterns = user_pats.clone();
+        // Inject (or replace) a "User" genre in all three role maps so the browser
+        // shows saved user patterns regardless of focused-lane role. Only if non-empty.
+        self.library.drums.shift_remove("User");
+        self.library.bass.shift_remove("User");
+        self.library.synth.shift_remove("User");
+        if !user_pats.is_empty() {
+            self.library.drums.insert("User".into(), user_pats.clone());
+            self.library.bass.insert("User".into(), user_pats.clone());
+            self.library.synth.insert("User".into(), user_pats);
         }
     }
 
@@ -4474,6 +4667,200 @@ mod tests {
             app.status.contains("Deleted"),
             "status must say 'Deleted' but was: {}",
             app.status
+        );
+    }
+
+    // ── M3 Task 7: management UI app-layer tests ─────────────────────────────
+
+    #[test]
+    fn name_entry_char_appends_to_buffer() {
+        let mut app = new_app();
+        app.apply(Action::OpenNameEntry(NamePurpose::SaveSetAs));
+        assert_eq!(app.mode, Mode::NameEntry(NamePurpose::SaveSetAs));
+        assert!(app.name_input.is_empty());
+        app.apply(Action::NameChar('m'));
+        app.apply(Action::NameChar('y'));
+        assert_eq!(app.name_input, "my");
+    }
+
+    #[test]
+    fn name_entry_backspace_removes_last_char() {
+        let mut app = new_app();
+        app.apply(Action::OpenNameEntry(NamePurpose::RenameSet));
+        app.apply(Action::NameChar('a'));
+        app.apply(Action::NameChar('b'));
+        app.apply(Action::NameBackspace);
+        assert_eq!(app.name_input, "a");
+    }
+
+    #[test]
+    fn name_entry_cancel_returns_to_edit_and_clears() {
+        let mut app = new_app();
+        app.apply(Action::OpenNameEntry(NamePurpose::SaveSetAs));
+        app.apply(Action::NameChar('x'));
+        app.apply(Action::NameCancel);
+        assert_eq!(app.mode, Mode::Edit);
+        assert!(app.name_input.is_empty());
+    }
+
+    #[test]
+    fn name_entry_commit_save_set_as_applies_action() {
+        let mut app = new_app();
+        app.apply(Action::OpenNameEntry(NamePurpose::SaveSetAs));
+        app.apply(Action::NameChar('t'));
+        app.apply(Action::NameChar('e'));
+        app.apply(Action::NameChar('s'));
+        app.apply(Action::NameChar('t'));
+        // NameCommit → applies SaveSetAs("test") internally.
+        // Since this writes to disk and we're in a test, it may fail with a status toast,
+        // but mode should still return to Edit and name_input cleared.
+        app.apply(Action::NameCommit);
+        assert_eq!(app.mode, Mode::Edit, "NameCommit must return to Edit");
+        assert!(
+            app.name_input.is_empty(),
+            "name_input must be cleared after commit"
+        );
+    }
+
+    #[test]
+    fn confirm_yes_new_set_resets_document() {
+        let mut app = new_app();
+        // Mark dirty and put some undo history.
+        app.apply(Action::FocusLane(0));
+        app.apply(Action::MoveCursor(0, 0));
+        app.apply(Action::ToggleStep);
+        assert!(app.dirty);
+        assert!(!app.undo.is_empty());
+        // Open confirm and accept.
+        app.apply(Action::OpenConfirm(ConfirmAction::NewSet));
+        assert_eq!(app.mode, Mode::Confirm(ConfirmAction::NewSet));
+        app.apply(Action::ConfirmYes);
+        assert_eq!(app.mode, Mode::Edit);
+        assert!(!app.dirty);
+        assert!(app.undo.is_empty(), "NewSet must clear undo stack");
+    }
+
+    #[test]
+    fn confirm_no_cancels_without_action() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(0));
+        app.apply(Action::MoveCursor(0, 0));
+        app.apply(Action::ToggleStep);
+        let set_before = app.set.clone();
+        app.apply(Action::OpenConfirm(ConfirmAction::NewSet));
+        app.apply(Action::ConfirmNo);
+        assert_eq!(app.mode, Mode::Edit);
+        assert_eq!(app.set, set_before, "ConfirmNo must leave set unchanged");
+        assert!(app.status.contains("Cancelled"));
+    }
+
+    #[test]
+    fn set_browser_new_set_dirty_routes_to_confirm() {
+        let mut app = new_app();
+        // Make app dirty.
+        app.apply(Action::FocusLane(0));
+        app.apply(Action::MoveCursor(0, 0));
+        app.apply(Action::ToggleStep);
+        assert!(app.dirty);
+        app.apply(Action::SetBrowserNewSet);
+        assert_eq!(
+            app.mode,
+            Mode::Confirm(ConfirmAction::NewSet),
+            "SetBrowserNewSet when dirty must go to Confirm"
+        );
+    }
+
+    #[test]
+    fn set_browser_new_set_clean_does_it_directly() {
+        let mut app = new_app();
+        assert!(!app.dirty);
+        app.apply(Action::SetBrowserNewSet);
+        // Should have reset to a new set without confirm.
+        assert_eq!(app.mode, Mode::Edit);
+        assert!(!app.dirty);
+        assert!(app.undo.is_empty());
+    }
+
+    #[test]
+    fn open_clear_pattern_with_material_routes_to_confirm() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(0));
+        app.apply(Action::MoveCursor(0, 0));
+        app.apply(Action::ToggleStep); // place a hit → pattern has material
+                                       // Now clear — should route to confirm.
+        app.apply(Action::OpenClearPattern);
+        assert_eq!(
+            app.mode,
+            Mode::Confirm(ConfirmAction::ClearPattern),
+            "OpenClearPattern with material must route to Confirm"
+        );
+    }
+
+    #[test]
+    fn open_clear_pattern_without_material_clears_directly() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(0)); // default set has empty drums
+                                         // Pattern should be empty already → direct clear.
+        app.apply(Action::OpenClearPattern);
+        assert_eq!(
+            app.mode,
+            Mode::Edit,
+            "empty pattern must clear without confirm"
+        );
+        assert!(app.status.contains("Cleared"));
+    }
+
+    #[test]
+    fn open_save_user_pattern_enters_name_entry_mode() {
+        let mut app = new_app();
+        app.apply(Action::OpenSaveUserPattern);
+        assert_eq!(app.mode, Mode::NameEntry(NamePurpose::SaveUserPattern));
+        assert!(app.name_input.is_empty());
+    }
+
+    #[test]
+    fn set_browser_rename_enters_name_entry_mode() {
+        let mut app = new_app();
+        app.apply(Action::SetBrowserRename);
+        assert_eq!(app.mode, Mode::NameEntry(NamePurpose::RenameSet));
+    }
+
+    #[test]
+    fn set_browser_save_as_enters_name_entry_mode() {
+        let mut app = new_app();
+        app.apply(Action::SetBrowserSaveAs);
+        assert_eq!(app.mode, Mode::NameEntry(NamePurpose::SaveSetAs));
+    }
+
+    #[test]
+    fn name_char_rejects_non_ascii_alphanumeric_except_allowed() {
+        let mut app = new_app();
+        app.apply(Action::OpenNameEntry(NamePurpose::SaveSetAs));
+        // Allowed: alphanumeric, space, -, #
+        app.apply(Action::NameChar('a'));
+        app.apply(Action::NameChar('1'));
+        app.apply(Action::NameChar(' '));
+        app.apply(Action::NameChar('-'));
+        app.apply(Action::NameChar('#'));
+        assert_eq!(app.name_input, "a1 -#");
+        // Rejected: control chars mapped to NameChar shouldn't pass the filter
+        // (in practice input.rs only sends allowed chars, but test the apply guard too)
+        app.apply(Action::NameChar('\t'));
+        app.apply(Action::NameChar('\n'));
+        assert_eq!(app.name_input, "a1 -#", "tabs/newlines must be rejected");
+    }
+
+    #[test]
+    fn name_char_caps_at_32_characters() {
+        let mut app = new_app();
+        app.apply(Action::OpenNameEntry(NamePurpose::SaveSetAs));
+        for _ in 0..40 {
+            app.apply(Action::NameChar('x'));
+        }
+        assert_eq!(
+            app.name_input.len(),
+            32,
+            "name_input must be capped at 32 chars"
         );
     }
 }

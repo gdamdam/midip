@@ -29,6 +29,11 @@ pub fn key_to_action(key: KeyEvent, mode: Mode, kind: LaneKind) -> Action {
         }
     }
 
+    // In NameEntry, space is a name character — override the global TogglePlay for this mode.
+    if matches!(mode, Mode::NameEntry(_)) && key.code == KeyCode::Char(' ') {
+        return Action::NameChar(' ');
+    }
+
     // Global play/panic — checked before per-mode branches so they fire in ALL modes.
     // Esc retains its per-mode meaning (Edit→Panic, Library/Help→close, TempoEntry→cancel).
     // Note: this also intercepts space/'!' inside TempoEntry before the digit handler below;
@@ -65,8 +70,32 @@ pub fn key_to_action(key: KeyEvent, mode: Mode, kind: LaneKind) -> Action {
             KeyCode::Down => return Action::SetBrowserNav(1),
             KeyCode::Enter => return Action::SetBrowserLoad,
             KeyCode::Esc | KeyCode::Char('o') => return Action::CloseSetBrowser,
+            KeyCode::Char('r') => return Action::SetBrowserRename,
+            KeyCode::Char('a') | KeyCode::Char('S') => return Action::SetBrowserSaveAs,
+            KeyCode::Char('D') => return Action::SetBrowserDuplicate,
+            KeyCode::Char('d') => return Action::SetBrowserDelete,
+            KeyCode::Char('n') => return Action::SetBrowserNewSet,
             _ => {}
         },
+        Mode::NameEntry(_) => {
+            return match key.code {
+                KeyCode::Char(c) if c.is_ascii_alphanumeric() || matches!(c, '-' | '#') => {
+                    Action::NameChar(c)
+                }
+                // Space already intercepted above and returned as NameChar(' ')
+                KeyCode::Backspace => Action::NameBackspace,
+                KeyCode::Enter => Action::NameCommit,
+                KeyCode::Esc => Action::NameCancel,
+                _ => Action::None,
+            };
+        }
+        Mode::Confirm(_) => {
+            return match key.code {
+                KeyCode::Char('y') | KeyCode::Enter => Action::ConfirmYes,
+                KeyCode::Char('n') | KeyCode::Esc => Action::ConfirmNo,
+                _ => Action::None,
+            };
+        }
         Mode::Help => return Action::Help,
         Mode::RouteEditor => {
             return match key.code {
@@ -168,6 +197,8 @@ pub fn key_to_action(key: KeyEvent, mode: Mode, kind: LaneKind) -> Action {
                     'q' => return Action::Quit,
                     'b' => return Action::ToggleLaunchQuant, // toggle next-bar / next-beat launch quant
                     'C' => return Action::CancelQueue,       // cancel pending queued launch
+                    'A' => return Action::OpenSaveUserPattern, // save focused lane as user pattern
+                    'Z' => return Action::OpenClearPattern, // clear focused lane (confirm if material)
                     _ => {}
                 }
 
@@ -237,10 +268,10 @@ mod tests {
             Mode::RecoveryPrompt,
         ] {
             assert_eq!(
-                key_to_action(k(KeyCode::Char(' ')), mode, LaneKind::Drums),
+                key_to_action(k(KeyCode::Char(' ')), mode.clone(), LaneKind::Drums),
                 Action::TogglePlay,
                 "Space should be TogglePlay in {:?}",
-                mode
+                &mode
             );
         }
     }
@@ -256,10 +287,10 @@ mod tests {
             Mode::RecoveryPrompt,
         ] {
             assert_eq!(
-                key_to_action(k(KeyCode::Char('!')), mode, LaneKind::Drums),
+                key_to_action(k(KeyCode::Char('!')), mode.clone(), LaneKind::Drums),
                 Action::Panic,
                 "! should be Panic in {:?}",
-                mode
+                &mode
             );
         }
     }
@@ -705,10 +736,10 @@ mod tests {
             Mode::RecoveryPrompt,
         ] {
             assert_eq!(
-                key_to_action(k(KeyCode::Char(' ')), mode, LaneKind::Drums),
+                key_to_action(k(KeyCode::Char(' ')), mode.clone(), LaneKind::Drums),
                 Action::TogglePlay,
                 "Space should be TogglePlay in {:?}",
-                mode
+                &mode
             );
         }
     }
@@ -725,10 +756,10 @@ mod tests {
             Mode::RecoveryPrompt,
         ] {
             assert_eq!(
-                key_to_action(k(KeyCode::Char('!')), mode, LaneKind::Drums),
+                key_to_action(k(KeyCode::Char('!')), mode.clone(), LaneKind::Drums),
                 Action::Panic,
                 "! should be Panic in {:?}",
-                mode
+                &mode
             );
         }
     }
@@ -870,5 +901,169 @@ mod tests {
             Action::None,
             "'b' must be bound to ToggleLaunchQuant (was None before M3-T2)"
         );
+    }
+
+    // ── M3 Task 7: management UI key bindings ────────────────────────────────
+
+    #[test]
+    fn name_entry_char_keys_map_to_name_char() {
+        assert_eq!(
+            key_to_action(
+                k(KeyCode::Char('a')),
+                Mode::NameEntry(crate::app::NamePurpose::SaveSetAs),
+                LaneKind::Drums
+            ),
+            Action::NameChar('a'),
+            "'a' in NameEntry must be NameChar"
+        );
+        assert_eq!(
+            key_to_action(
+                k(KeyCode::Char('5')),
+                Mode::NameEntry(crate::app::NamePurpose::RenameSet),
+                LaneKind::Drums
+            ),
+            Action::NameChar('5'),
+            "'5' in NameEntry must be NameChar"
+        );
+        assert_eq!(
+            key_to_action(
+                k(KeyCode::Char('-')),
+                Mode::NameEntry(crate::app::NamePurpose::SaveUserPattern),
+                LaneKind::Drums
+            ),
+            Action::NameChar('-'),
+            "'-' in NameEntry must be NameChar"
+        );
+        assert_eq!(
+            key_to_action(
+                k(KeyCode::Char('#')),
+                Mode::NameEntry(crate::app::NamePurpose::SaveSetAs),
+                LaneKind::Drums
+            ),
+            Action::NameChar('#'),
+            "'#' in NameEntry must be NameChar"
+        );
+    }
+
+    #[test]
+    fn name_entry_space_is_name_char_not_toggle_play() {
+        assert_eq!(
+            key_to_action(
+                k(KeyCode::Char(' ')),
+                Mode::NameEntry(crate::app::NamePurpose::SaveSetAs),
+                LaneKind::Drums
+            ),
+            Action::NameChar(' '),
+            "space in NameEntry must be NameChar, not TogglePlay"
+        );
+    }
+
+    #[test]
+    fn name_entry_backspace_enter_esc() {
+        let mode = || Mode::NameEntry(crate::app::NamePurpose::SaveSetAs);
+        assert_eq!(
+            key_to_action(k(KeyCode::Backspace), mode(), LaneKind::Drums),
+            Action::NameBackspace
+        );
+        assert_eq!(
+            key_to_action(k(KeyCode::Enter), mode(), LaneKind::Drums),
+            Action::NameCommit
+        );
+        assert_eq!(
+            key_to_action(k(KeyCode::Esc), mode(), LaneKind::Drums),
+            Action::NameCancel
+        );
+    }
+
+    #[test]
+    fn confirm_mode_y_and_enter_confirm_yes() {
+        let mode = || Mode::Confirm(crate::app::ConfirmAction::NewSet);
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('y')), mode(), LaneKind::Drums),
+            Action::ConfirmYes
+        );
+        assert_eq!(
+            key_to_action(k(KeyCode::Enter), mode(), LaneKind::Drums),
+            Action::ConfirmYes
+        );
+    }
+
+    #[test]
+    fn confirm_mode_n_and_esc_confirm_no() {
+        let mode = || Mode::Confirm(crate::app::ConfirmAction::NewSet);
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('n')), mode(), LaneKind::Drums),
+            Action::ConfirmNo
+        );
+        assert_eq!(
+            key_to_action(k(KeyCode::Esc), mode(), LaneKind::Drums),
+            Action::ConfirmNo
+        );
+    }
+
+    #[test]
+    fn exclamation_is_panic_in_name_entry_and_confirm() {
+        assert_eq!(
+            key_to_action(
+                k(KeyCode::Char('!')),
+                Mode::NameEntry(crate::app::NamePurpose::SaveSetAs),
+                LaneKind::Drums
+            ),
+            Action::Panic,
+            "! must be Panic in NameEntry"
+        );
+        assert_eq!(
+            key_to_action(
+                k(KeyCode::Char('!')),
+                Mode::Confirm(crate::app::ConfirmAction::NewSet),
+                LaneKind::Drums
+            ),
+            Action::Panic,
+            "! must be Panic in Confirm"
+        );
+    }
+
+    #[test]
+    fn set_browser_management_keys() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('r')), Mode::SetBrowser, LaneKind::Drums),
+            Action::SetBrowserRename
+        );
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('a')), Mode::SetBrowser, LaneKind::Drums),
+            Action::SetBrowserSaveAs
+        );
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('S')), Mode::SetBrowser, LaneKind::Drums),
+            Action::SetBrowserSaveAs
+        );
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('D')), Mode::SetBrowser, LaneKind::Drums),
+            Action::SetBrowserDuplicate
+        );
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('d')), Mode::SetBrowser, LaneKind::Drums),
+            Action::SetBrowserDelete
+        );
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('n')), Mode::SetBrowser, LaneKind::Drums),
+            Action::SetBrowserNewSet
+        );
+    }
+
+    #[test]
+    fn edit_mode_a_and_z_map_to_pattern_management() {
+        for kind in [LaneKind::Drums, LaneKind::Melodic] {
+            assert_eq!(
+                key_to_action(k(KeyCode::Char('A')), Mode::Edit, kind),
+                Action::OpenSaveUserPattern,
+                "'A' in Edit must be OpenSaveUserPattern"
+            );
+            assert_eq!(
+                key_to_action(k(KeyCode::Char('Z')), Mode::Edit, kind),
+                Action::OpenClearPattern,
+                "'Z' in Edit must be OpenClearPattern"
+            );
+        }
     }
 }
