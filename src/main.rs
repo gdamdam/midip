@@ -83,12 +83,14 @@ fn run(mut terminal: Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
     let available = list_output_ports();
     let picks = select_sinks(&available, &profiles);
     let mut sinks: Vec<Box<dyn MidiSink>> = Vec::new();
+    let mut connected_ports: Vec<usize> = Vec::new();
     for port_idx in unique_ports(&picks) {
         // Any profile that resolved to this port shares the same `port_match`/physical
         // device; use the first one to open the single connection.
         if let Some(i) = picks.iter().position(|p| *p == Some(port_idx)) {
             if let Ok(s) = connect(profiles[i].port_match) {
                 sinks.push(Box::new(s));
+                connected_ports.push(port_idx);
             }
         }
     }
@@ -98,12 +100,24 @@ fn run(mut terminal: Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
         sinks.push(Box::new(NullSink));
     }
 
+    // Per-lane connection status for the lane-overview `●/○`: a lane is connected iff its
+    // matched physical port actually opened. (Hot-plug after startup is future work, via
+    // the EngineEvent::DeviceStatus path.)
+    let device_status: Vec<(bool, String)> = picks
+        .iter()
+        .map(|pick| match pick {
+            Some(idx) if connected_ports.contains(idx) => (true, available[*idx].clone()),
+            _ => (false, String::new()),
+        })
+        .collect();
+
     let set = Set::default_set(profiles);
     let link = Box::new(AbletonLink::new(set.bpm));
     let engine = spawn_engine(set.clone(), link, sinks);
 
     let mut app = App::new(set, library);
     app.status = lib_status;
+    app.device_status = device_status;
 
     loop {
         terminal.draw(|f| midip::ui::render(f, &app))?;

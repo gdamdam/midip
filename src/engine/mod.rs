@@ -93,14 +93,14 @@ fn apply_command(
     match cmd {
         UiCommand::Play => {
             st.seq.play(now);
-            st.clock.start(now, sink);
+            st.clock.start(now); // begin Clock ticks only — no MIDI Start (would run the device's own sequencer)
             if link.enabled() {
                 link.request_start(now, 4.0); // quantized start: align to next bar
             }
         }
         UiCommand::Stop => {
-            st.seq.stop(now, sink);
-            st.clock.stop(now, sink);
+            st.seq.stop(now, sink); // releases sounding notes (all-notes-off)
+            st.clock.stop(); // cease Clock ticks; no MIDI Stop sent
         }
         UiCommand::SetBpm(bpm) => {
             st.transport.manual_bpm = bpm;

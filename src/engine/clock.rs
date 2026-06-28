@@ -1,5 +1,8 @@
-//! 24 PPQN MIDI clock generation. Emits `Start`/`Stop` on transport changes and a
-//! steady stream of `Clock` ticks derived from the active tempo.
+//! 24 PPQN MIDI clock generation. While running, emits a steady stream of `Clock` ticks
+//! derived from the active tempo. It deliberately does NOT send realtime transport
+//! messages (Start/Stop/Continue): those start/stop an external device's OWN internal
+//! sequencer, making it play its stored pattern. midip is the sequencer — it drives the
+//! device's sounds via note messages and only syncs the device's tempo via Clock.
 
 use crate::engine::scheduler::PPQN;
 use crate::midi::ports::MidiSink;
@@ -27,17 +30,17 @@ impl ClockGen {
         }
     }
 
-    /// Begin clocking: emit `Start` and schedule the first tick at `at_micros`.
-    pub fn start(&mut self, at_micros: u64, sink: &mut dyn MidiSink) {
+    /// Begin clocking: schedule the first tick at `at_micros`. Does NOT emit a realtime
+    /// `Start` — that would run the receiving device's internal sequencer.
+    pub fn start(&mut self, at_micros: u64) {
         self.running = true;
         self.next_tick_at = at_micros;
-        sink.send(MidiMessage::Start, at_micros);
     }
 
-    /// Stop clocking: emit `Stop`.
-    pub fn stop(&mut self, at_micros: u64, sink: &mut dyn MidiSink) {
+    /// Stop clocking. Does NOT emit a realtime `Stop` (which would stop the device's
+    /// internal sequencer); hanging notes are released by the sequencer's own stop path.
+    pub fn stop(&mut self) {
         self.running = false;
-        sink.send(MidiMessage::Stop, at_micros);
     }
 
     /// Emit every `Clock` whose scheduled time is <= `now_micros`.
@@ -75,20 +78,31 @@ mod tests {
     }
 
     #[test]
-    fn start_emits_start_message() {
+    fn start_and_stop_never_emit_transport_messages() {
+        // midip is the sequencer: it drives the device's SOUNDS via notes and syncs
+        // TEMPO via Clock, but must NEVER send realtime Start/Stop/Continue — those run
+        // the device's own internal pattern. Regression for the "device plays its stored
+        // pattern when I press space" bug.
         let mut gen = ClockGen::new();
         let mut sink = RecordingSink::new();
-        gen.start(0, &mut sink);
-        assert_eq!(sink.events.first().map(|(_, m)| m.clone()), Some(MidiMessage::Start));
+        gen.start(0);
+        gen.tick(20_833, 120.0, &mut sink); // some Clock ticks while running
+        gen.stop();
+        assert!(!sink.events.is_empty(), "expected Clock ticks while running");
+        assert!(
+            sink.events.iter().all(|(_, m)| *m == MidiMessage::Clock),
+            "only Clock may be sent; found a transport/realtime message"
+        );
     }
 
     #[test]
-    fn stop_emits_stop_message() {
+    fn stop_halts_further_clock_ticks() {
         let mut gen = ClockGen::new();
         let mut sink = RecordingSink::new();
-        gen.start(0, &mut sink);
-        gen.stop(1_000, &mut sink);
-        assert_eq!(sink.events.last().map(|(_, m)| m.clone()), Some(MidiMessage::Stop));
+        gen.start(0);
+        gen.stop();
+        gen.tick(1_000_000, 120.0, &mut sink);
+        assert!(sink.events.is_empty());
     }
 
     #[test]
@@ -97,7 +111,7 @@ mod tests {
         let quarter = 60_000_000u64 / 120; // 500_000 µs
         let mut gen = ClockGen::new();
         let mut sink = RecordingSink::new();
-        gen.start(0, &mut sink);
+        gen.start(0);
 
         let mut now = 0u64;
         while now < quarter {
