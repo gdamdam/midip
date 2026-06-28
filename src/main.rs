@@ -126,6 +126,12 @@ fn run(mut terminal: Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
         // Expire status toasts after ~3 s (STATUS_TTL_FRAMES × 16 ms poll timeout).
         app.tick_status();
 
+        // Debounced autosave to a separate recovery file (never overwrites deliberate saves).
+        // Best-effort: a failed autosave is silently dropped so it never disrupts the UI thread.
+        if app.tick_autosave() {
+            let _ = midip::pattern::store::save_recovery(&app.set);
+        }
+
         if app.should_quit {
             send_or_toast(&engine.tx, midip::engine::UiCommand::Quit, &mut app);
             break;

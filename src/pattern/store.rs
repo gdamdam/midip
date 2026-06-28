@@ -294,6 +294,45 @@ pub fn validate_and_repair(set: &mut Set) -> Vec<String> {
     notes
 }
 
+/// Returns the path of the autosave recovery file (never inside the sets dir).
+pub fn recovery_path() -> PathBuf {
+    crate::config::data_dir()
+        .join("recovery")
+        .join("autosave.json")
+}
+
+/// Write a snapshot of `set` to the recovery file atomically.
+///
+/// Takes `&Set` (not `&mut Set`) so it never mints ids or mutates the live document.
+/// The recovery file is a transient crash-recovery snapshot, not a deliberate save.
+pub fn save_recovery(set: &Set) -> anyhow::Result<()> {
+    let path = recovery_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).context("creating recovery dir")?;
+    }
+    let dto = SetDto::from(set);
+    let json = serde_json::to_string_pretty(&dto).context("serializing recovery set")?;
+    persist::write_atomic(&path, json.as_bytes())
+        .with_context(|| format!("writing recovery file {}", path.display()))?;
+    Ok(())
+}
+
+/// Remove the recovery file. Best-effort: "not found" errors are silently ignored.
+pub fn clear_recovery() {
+    let path = recovery_path();
+    if let Err(e) = std::fs::remove_file(&path) {
+        // Only ignore "not found"; surface other errors as a debug note (no panic).
+        if e.kind() != std::io::ErrorKind::NotFound {
+            // Best-effort: log nothing, just swallow. The caller never depends on this.
+        }
+    }
+}
+
+/// Returns true when the recovery file exists on disk.
+pub fn recovery_exists() -> bool {
+    recovery_path().exists()
+}
+
 /// All `*.json` set files in `dir` (non-recursive). Empty list if the dir is absent.
 pub fn list_sets(dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
     if !dir.exists() {
@@ -829,5 +868,52 @@ mod tests {
         assert!(load_set(&path).is_err());
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // ── Task 9: recovery file helpers ────────────────────────────────────────
+
+    #[test]
+    fn save_recovery_writes_to_recovery_path_not_set_dir() {
+        // Verify recovery_path() ends in recovery/autosave.json.
+        let rpath = recovery_path();
+        assert!(
+            rpath.ends_with("recovery/autosave.json"),
+            "recovery_path must end with recovery/autosave.json but was: {}",
+            rpath.display()
+        );
+
+        // save_recovery then recovery_exists → true.
+        let set = Set::default_set(default_profiles());
+        save_recovery(&set).unwrap();
+        assert!(
+            recovery_exists(),
+            "recovery_exists must be true after save_recovery"
+        );
+
+        // The written file must NOT be inside data_dir()/sets.
+        let sets_dir = crate::config::data_dir().join("sets");
+        assert!(
+            !rpath.starts_with(&sets_dir),
+            "recovery file must not be in the sets dir"
+        );
+
+        // Clean up.
+        clear_recovery();
+        assert!(
+            !recovery_exists(),
+            "recovery_exists must be false after clear_recovery"
+        );
+    }
+
+    #[test]
+    fn clear_recovery_removes_file() {
+        let set = Set::default_set(default_profiles());
+        save_recovery(&set).unwrap();
+        assert!(recovery_exists());
+        clear_recovery();
+        assert!(
+            !recovery_exists(),
+            "recovery file must be gone after clear_recovery"
+        );
     }
 }

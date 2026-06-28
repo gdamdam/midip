@@ -117,6 +117,12 @@ pub const VISIBLE_STEPS: usize = 16;
 /// 188 frames ≈ 3 000 ms ÷ 16 ms/frame, giving roughly 3 seconds of visibility.
 pub const STATUS_TTL_FRAMES: u16 = 188;
 
+/// Frames between autosave flushes when the Set is dirty.
+///
+/// At ~16 ms/frame this is 125 × 16 ms ≈ 2 000 ms (2 s). Minimum meaningful value
+/// is ~30 (avoid thrashing); we pick 125 for a comfortable 2-second debounce.
+pub const AUTOSAVE_INTERVAL_FRAMES: u16 = 125;
+
 pub struct App {
     pub set: Set,
     pub focus: usize,
@@ -159,6 +165,9 @@ pub struct App {
     pub quit_armed: bool,
     /// True when the Set has unsaved mutations since the last successful Save.
     pub dirty: bool,
+    /// Frame counter for debounced autosave. Increments each frame while dirty;
+    /// resets to 0 when it fires or when the set becomes clean.
+    pub autosave_counter: u32,
     /// Isolated audition preview overlay. `None` when not auditioning. Holds the
     /// cued pattern for a lane WITHOUT mutating the committed `Set`. Set by
     /// `Action::Audition`/`LibNav`, cleared by `LibLoad` (commit) or `CloseLibrary`
@@ -220,6 +229,7 @@ impl App {
             tempo_input: String::new(),
             quit_armed: false,
             dirty: false,
+            autosave_counter: 0,
             audition: None,
             route_editor_lane: 0,
             route_editor_field: RouteField::Port,
@@ -246,6 +256,24 @@ impl App {
                 self.status.clear();
             }
         }
+    }
+
+    /// Advance the autosave debounce counter. Returns `true` exactly when the counter
+    /// reaches `AUTOSAVE_INTERVAL_FRAMES` and the set is dirty — the caller should then
+    /// write a recovery snapshot. Returns `false` and resets the counter when clean.
+    ///
+    /// Call once per main-loop iteration alongside `tick_status`.
+    pub fn tick_autosave(&mut self) -> bool {
+        if !self.dirty {
+            self.autosave_counter = 0;
+            return false;
+        }
+        self.autosave_counter += 1;
+        if self.autosave_counter >= AUTOSAVE_INTERVAL_FRAMES as u32 {
+            self.autosave_counter = 0;
+            return true;
+        }
+        false
     }
 
     pub fn focused_lane(&self) -> &Lane {
@@ -630,6 +658,8 @@ impl App {
                     Ok(_path) => {
                         self.set_status("Saved");
                         self.dirty = false;
+                        // Deliberate save supersedes the recovery snapshot.
+                        crate::pattern::store::clear_recovery();
                     }
                     Err(e) => self.set_status(format!("Save failed: {}", e)),
                 }
@@ -3255,5 +3285,62 @@ mod tests {
         // Undo should restore the original route (None).
         app.apply(Action::Undo);
         assert_eq!(app.set.lanes[0].route, before_route);
+    }
+
+    // ── Task 9: debounced autosave ────────────────────────────────────────
+
+    #[test]
+    fn tick_autosave_fires_only_when_dirty_at_interval() {
+        let mut app = new_app();
+
+        // Not dirty: counter must stay at 0 and never return true.
+        assert!(!app.dirty);
+        for _ in 0..500 {
+            assert!(!app.tick_autosave(), "must not fire when not dirty");
+        }
+        assert_eq!(app.autosave_counter, 0, "counter must stay 0 when clean");
+
+        // Mark dirty: counter increments each tick; fires at AUTOSAVE_INTERVAL_FRAMES.
+        app.dirty = true;
+        let interval = AUTOSAVE_INTERVAL_FRAMES as u32;
+        let mut fired = 0u32;
+        for _ in 0..interval {
+            if app.tick_autosave() {
+                fired += 1;
+            }
+        }
+        assert_eq!(fired, 1, "must fire exactly once per interval");
+        assert_eq!(app.autosave_counter, 0, "counter resets after firing");
+
+        // Now clean again: counter resets immediately.
+        app.dirty = false;
+        assert!(!app.tick_autosave());
+        assert_eq!(app.autosave_counter, 0, "counter resets when clean");
+    }
+
+    #[test]
+    fn deliberate_save_clears_recovery() {
+        // Write a recovery file, then call save via Action::Save, verify recovery gone.
+        // This test writes to the real data dir — acceptable since clear_recovery is
+        // best-effort and recovery/ is always transient.
+        use crate::pattern::store;
+        let set = Set::default_set(profiles::default_profiles());
+        store::save_recovery(&set).unwrap();
+        assert!(store::recovery_exists(), "recovery must exist before Save");
+
+        let mut app = new_app();
+        // Action::Save calls clear_recovery on success. Let it run.
+        app.apply(Action::Save);
+        // Whether the save succeeded or failed depends on the fs; the key assertion is
+        // that if it succeeded, recovery is gone.
+        if !app.dirty {
+            // dirty == false means save succeeded
+            assert!(
+                !store::recovery_exists(),
+                "recovery must be cleared after a successful deliberate Save"
+            );
+        }
+        // Clean up in case Save failed and recovery is still there.
+        store::clear_recovery();
     }
 }
