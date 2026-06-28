@@ -127,19 +127,30 @@ pub fn migrate_set_value(v: &mut serde_json::Value) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Serialize `set` to `<dir>/<slug>.json`. Returns the written path.
-pub fn save_set(dir: &Path, set: &Set) -> anyhow::Result<PathBuf> {
+/// Serialize `set` to `<dir>/<slug>-<8hex>.json`. Returns the written path.
+///
+/// Mints a stable id for the set and each lane pattern if they are nil (so ids persist back
+/// into the in-memory `Set` and remain stable across re-saves). The filename embeds the first
+/// 8 hex digits of the set id so two sets with the same name never clobber each other, while
+/// re-saving the same set (same id) always overwrites its own file atomically.
+pub fn save_set(dir: &Path, set: &mut Set) -> anyhow::Result<PathBuf> {
+    set.ensure_id();
+    for lane in &mut set.lanes {
+        lane.pattern.ensure_id();
+    }
     std::fs::create_dir_all(dir).context("creating set store dir")?;
-    let path = dir.join(format!("{}.json", slug(&set.name)));
-    let dto = SetDto::from(set);
+    let id_suffix = &set.id.as_str()[..8];
+    let path = dir.join(format!("{}-{}.json", slug(&set.name), id_suffix));
+    let dto = SetDto::from(&*set);
     let json = serde_json::to_string_pretty(&dto).context("serializing set")?;
-    std::fs::write(&path, json).with_context(|| format!("writing {}", path.display()))?;
+    persist::write_atomic(&path, json.as_bytes())
+        .with_context(|| format!("writing {}", path.display()))?;
     Ok(path)
 }
 
-/// Load a set from a JSON file, rehydrating each lane's static profile via its id.
-/// Runs the migration ladder before typed parse so old files (no version, no id) load correctly.
-pub fn load_set(path: &Path) -> anyhow::Result<Set> {
+/// Load a set from a JSON file, running migration, typed parse, profile rehydration,
+/// and `validate_and_repair`. Returns the set plus any repair notes.
+pub fn load_set_with_report(path: &Path) -> anyhow::Result<(Set, Vec<String>)> {
     let json =
         std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     let mut value: serde_json::Value = serde_json::from_str(&json).context("parsing set JSON")?;
@@ -158,13 +169,23 @@ pub fn load_set(path: &Path) -> anyhow::Result<Set> {
             octave: l.octave,
         });
     }
-    Ok(Set {
+    let mut set = Set {
         name: dto.name,
         bpm: dto.bpm,
         swing: dto.swing,
         lanes,
         id: dto.id,
-    })
+    };
+    let notes = validate_and_repair(&mut set);
+    Ok((set, notes))
+}
+
+/// Load a set from a JSON file, rehydrating each lane's static profile via its id.
+/// Runs the migration ladder before typed parse so old files (no version, no id) load correctly.
+/// Applies `validate_and_repair` silently; use `load_set_with_report` to surface repair notes.
+pub fn load_set(path: &Path) -> anyhow::Result<Set> {
+    let (set, _notes) = load_set_with_report(path)?;
+    Ok(set)
 }
 
 /// Clamp and repair all fields in `set` to safe ranges.
@@ -468,12 +489,14 @@ mod tests {
         set.lanes[0].mute = true;
         set.lanes[2].transpose = 3;
 
-        let path = save_set(&dir, &set).unwrap();
+        // save_set takes &mut Set and mints ids on first save.
+        let path = save_set(&dir, &mut set).unwrap();
         assert!(path.exists());
 
         let loaded = load_set(&path).unwrap();
-        // Ids are nil (not yet minted by ensure_id), so they survive the round-trip as nil.
+        // save_set calls ensure_id, so both set and loaded now have the same non-nil id.
         assert_eq!(loaded.id, set.id);
+        assert!(!loaded.id.is_nil(), "id must be non-nil after save");
         assert_eq!(loaded.name, set.name);
         assert_eq!(loaded.bpm, set.bpm);
         assert_eq!(loaded.swing, set.swing);
@@ -535,7 +558,7 @@ mod tests {
         let dir = unique_dir("list");
         let mut set = Set::default_set(default_profiles());
         set.name = "Listed Set".to_string();
-        let path = save_set(&dir, &set).unwrap();
+        let path = save_set(&dir, &mut set).unwrap();
 
         let listed = list_sets(&dir).unwrap();
         assert!(listed.iter().any(|p| p == &path));
@@ -551,10 +574,159 @@ mod tests {
         let dir = unique_dir("slug");
         let mut set = Set::default_set(default_profiles());
         set.name = "Acid Jam #3!".to_string();
-        let path = save_set(&dir, &set).unwrap();
+        let path = save_set(&dir, &mut set).unwrap();
         let fname = path.file_name().unwrap().to_str().unwrap();
-        // lowercased, non-alphanumeric collapsed to '-'
-        assert_eq!(fname, "acid-jam-3.json");
+        // lowercased, non-alphanumeric collapsed to '-', followed by '-<8hex>.json'
+        assert!(
+            fname.starts_with("acid-jam-3-"),
+            "filename must start with slug 'acid-jam-3-' but was: {fname}"
+        );
+        assert!(
+            fname.ends_with(".json"),
+            "filename must end with .json but was: {fname}"
+        );
+        // slug prefix + '-' + 8 hex chars + '.json'
+        let hex_part = fname
+            .strip_prefix("acid-jam-3-")
+            .unwrap()
+            .strip_suffix(".json")
+            .unwrap();
+        assert_eq!(
+            hex_part.len(),
+            8,
+            "id suffix must be 8 hex chars but was: {hex_part}"
+        );
+        assert!(
+            hex_part.chars().all(|c| c.is_ascii_hexdigit()),
+            "id suffix must be hex but was: {hex_part}"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // ── Task 4: atomic + versioned + id-named save; load migrates + validates ────
+
+    #[test]
+    fn save_load_roundtrip_preserves_ids_and_version() {
+        let dir = unique_dir("t4-roundtrip");
+        let mut set = Set::default_set(default_profiles());
+        set.name = "Preserve IDs".to_string();
+
+        let path = save_set(&dir, &mut set).unwrap();
+        assert!(!set.id.is_nil(), "ensure_id must mint a non-nil id");
+        for lane in &set.lanes {
+            assert!(!lane.pattern.id.is_nil(), "lane pattern id must be minted");
+        }
+
+        let loaded = load_set(&path).unwrap();
+        assert_eq!(loaded.id, set.id, "set id must survive round-trip");
+        assert_eq!(loaded.lanes.len(), set.lanes.len());
+        for (a, b) in loaded.lanes.iter().zip(set.lanes.iter()) {
+            assert_eq!(
+                a.pattern.id, b.pattern.id,
+                "lane pattern id must survive round-trip"
+            );
+        }
+
+        // Verify version is stamped in the file
+        let json = std::fs::read_to_string(&path).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v["version"].as_u64().unwrap(), CURRENT_SET_VERSION as u64);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn save_filename_includes_id_suffix() {
+        let dir = unique_dir("t4-suffix");
+        let mut set = Set::default_set(default_profiles());
+        set.name = "My Beat".to_string();
+
+        let path = save_set(&dir, &mut set).unwrap();
+        let fname = path.file_name().unwrap().to_str().unwrap();
+        let id_hex = &set.id.as_str()[..8];
+
+        assert!(
+            fname.starts_with("my-beat-"),
+            "filename must start with slug: {fname}"
+        );
+        assert!(
+            fname.contains(id_hex),
+            "filename must contain first 8 hex of id ({id_hex}): {fname}"
+        );
+        assert!(
+            fname.ends_with(".json"),
+            "filename must end with .json: {fname}"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn two_sets_same_name_dont_collide() {
+        let dir = unique_dir("t4-no-collide");
+        let mut set_a = Set::default_set(default_profiles());
+        set_a.name = "jam".to_string();
+        let mut set_b = Set::default_set(default_profiles());
+        set_b.name = "jam".to_string();
+
+        let path_a = save_set(&dir, &mut set_a).unwrap();
+        let path_b = save_set(&dir, &mut set_b).unwrap();
+
+        assert_ne!(
+            path_a, path_b,
+            "two sets with same name must get different files"
+        );
+        assert!(path_a.exists(), "file A must exist");
+        assert!(path_b.exists(), "file B must exist");
+
+        // Both should show up in list_sets
+        let listed = list_sets(&dir).unwrap();
+        assert_eq!(listed.len(), 2, "must have exactly two distinct files");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn resave_same_set_overwrites_one_file() {
+        let dir = unique_dir("t4-resave");
+        let mut set = Set::default_set(default_profiles());
+        set.name = "single".to_string();
+
+        let path1 = save_set(&dir, &mut set).unwrap();
+        set.bpm = 140.0; // mutate content
+        let path2 = save_set(&dir, &mut set).unwrap();
+
+        assert_eq!(path1, path2, "re-saving same set must produce same path");
+
+        let listed = list_sets(&dir).unwrap();
+        assert_eq!(listed.len(), 1, "must be exactly one file after two saves");
+
+        // Updated content is present
+        let loaded = load_set(&path2).unwrap();
+        assert_eq!(loaded.bpm, 140.0, "re-save must update content");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn load_applies_repairs_via_report() {
+        let dir = unique_dir("t4-repair");
+        let mut set = Set::default_set(default_profiles());
+        let path = save_set(&dir, &mut set).unwrap();
+
+        // Tamper: set bpm to 0 (out of range)
+        let json = std::fs::read_to_string(&path).unwrap();
+        let mut v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        v["bpm"] = serde_json::json!(0.0);
+        std::fs::write(&path, serde_json::to_string_pretty(&v).unwrap()).unwrap();
+
+        let (repaired, notes) = load_set_with_report(&path).unwrap();
+        assert_eq!(repaired.bpm, 20.0, "bpm must be clamped to 20 after load");
+        assert!(
+            !notes.is_empty(),
+            "repair notes must be non-empty for out-of-range bpm"
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -562,8 +734,8 @@ mod tests {
     #[test]
     fn load_set_errors_on_unknown_profile_id() {
         let dir = unique_dir("unknown-profile");
-        let set = Set::default_set(default_profiles());
-        let path = save_set(&dir, &set).unwrap();
+        let mut set = Set::default_set(default_profiles());
+        let path = save_set(&dir, &mut set).unwrap();
 
         // Mutate the saved JSON to introduce a bogus profile_id
         let json_str = std::fs::read_to_string(&path).unwrap();

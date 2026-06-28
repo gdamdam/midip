@@ -598,7 +598,7 @@ impl App {
             Action::Save => {
                 // Cross-task dependency: `config::data_dir()` is defined in Task 21.
                 let dir = crate::config::data_dir().join("sets");
-                match crate::pattern::store::save_set(&dir, &self.set) {
+                match crate::pattern::store::save_set(&dir, &mut self.set) {
                     Ok(_path) => {
                         self.set_status("Saved");
                         self.dirty = false;
@@ -2438,7 +2438,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
 
         let mut app = new_app();
-        let saved_path = store::save_set(&dir, &app.set).unwrap();
+        let saved_path = store::save_set(&dir, &mut app.set).unwrap();
 
         app.set_files = vec![saved_path];
         app.set_sel = 0;
