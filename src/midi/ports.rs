@@ -39,6 +39,14 @@ impl MidiSink for RecordingSink {
     }
 }
 
+/// No-op sink: discards every message. Used when no hardware device matched a profile
+/// so the app runs without connected hardware (avoids unbounded memory growth of RecordingSink).
+pub struct NullSink;
+
+impl MidiSink for NullSink {
+    fn send(&mut self, _msg: MidiMessage, _at_micros: u64) {}
+}
+
 /// Hardware sink wrapping a `midir` output connection. Writes bytes immediately and
 /// ignores `at_micros`.
 pub struct MidirSink {
