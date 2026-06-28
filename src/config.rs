@@ -5,6 +5,20 @@ use std::path::PathBuf;
 /// Default tempo for a fresh set.
 pub const DEFAULT_BPM: f64 = 120.0;
 
+/// Pure helper: returns true when the given env-var value represents a truthy
+/// ASCII-mode opt-in ("1" or "true", case-insensitive).
+/// Test this directly rather than the env-reading `ascii_mode()` to avoid
+/// parallel-test env-race hazards.
+pub fn ascii_from_env(val: Option<String>) -> bool {
+    matches!(val.as_deref(), Some("1") | Some("true") | Some("True") | Some("TRUE"))
+}
+
+/// Returns true when `MIDIP_ASCII` is set to a truthy value ("1"/"true").
+/// Use `ascii_from_env` in unit tests to stay race-free.
+pub fn ascii_mode() -> bool {
+    ascii_from_env(std::env::var("MIDIP_ASCII").ok())
+}
+
 /// Resolve the directory containing the running executable.
 /// Returns `None` if `current_exe()` fails or the path has no parent.
 fn exe_dir() -> Option<PathBuf> {
@@ -73,16 +87,16 @@ pub fn data_dir() -> PathBuf {
 /// 2. `<exe-dir>/assets/patterns` if that path exists.
 /// 3. Dev fallback: `CARGO_MANIFEST_DIR/assets/patterns`.
 pub fn patterns_dir() -> PathBuf {
-    if let Ok(dir) = std::env::var("MIDIP_ASSETS") {
-        return PathBuf::from(dir);
-    }
-    if let Some(dir) = exe_dir() {
-        let candidate = dir.join("assets").join("patterns");
-        if candidate.exists() {
-            return candidate;
-        }
-    }
-    project_root().join("assets").join("patterns")
+    // Compute the exe-relative candidate only if the path actually exists on
+    // disk (same guard the previous inline version applied).
+    let exe_candidate = exe_dir()
+        .map(|d| d.join("assets").join("patterns"))
+        .filter(|p| p.exists());
+    resolve_patterns_dir(
+        std::env::var("MIDIP_ASSETS").ok(),
+        exe_candidate,
+        project_root().join("assets").join("patterns"),
+    )
 }
 
 #[cfg(test)]
@@ -148,6 +162,25 @@ mod tests {
     fn resolve_patterns_dir_uses_dev_fallback_last() {
         let result = resolve_patterns_dir(None, None, PathBuf::from("/fallback"));
         assert_eq!(result, PathBuf::from("/fallback"));
+    }
+
+    // --- ascii_from_env tests (pure, no env mutation) ---
+
+    #[test]
+    fn ascii_from_env_true_for_1_and_true_variants() {
+        assert!(ascii_from_env(Some("1".into())));
+        assert!(ascii_from_env(Some("true".into())));
+        assert!(ascii_from_env(Some("True".into())));
+        assert!(ascii_from_env(Some("TRUE".into())));
+    }
+
+    #[test]
+    fn ascii_from_env_false_for_none_and_other_values() {
+        assert!(!ascii_from_env(None));
+        assert!(!ascii_from_env(Some("0".into())));
+        assert!(!ascii_from_env(Some("false".into())));
+        assert!(!ascii_from_env(Some("yes".into())));
+        assert!(!ascii_from_env(Some("".into())));
     }
 
     /// Without env overrides the returned paths must end with the expected
