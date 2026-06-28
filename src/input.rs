@@ -31,6 +31,8 @@ pub fn key_to_action(key: KeyEvent, mode: Mode, kind: LaneKind) -> Action {
 
     // Global play/panic — checked before per-mode branches so they fire in ALL modes.
     // Esc retains its per-mode meaning (Edit→Panic, Library/Help→close, TempoEntry→cancel).
+    // Note: this also intercepts space/'!' inside TempoEntry before the digit handler below;
+    // neither is a tempo digit and play/stop mid-entry is acceptable, so that is intentional.
     match key.code {
         KeyCode::Char(' ') => return Action::TogglePlay,
         KeyCode::Char('!') => return Action::Panic,
