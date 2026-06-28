@@ -10,7 +10,7 @@ use crate::pattern::model::{DrumHit, MelodicNote, Pattern, PatternData};
 /// genre name -> patterns, preserving the file's genre order.
 pub type GenreMap = IndexMap<String, Vec<Pattern>>;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum LibRole {
     Drums,
     Bass,
