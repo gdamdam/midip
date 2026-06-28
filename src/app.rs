@@ -2026,6 +2026,10 @@ mod tests {
     use crate::pattern::library::{GenreMap, LibRole, Library};
     use crate::pattern::model::{DrumHit, MelodicNote, Pattern, PatternData, Set};
 
+    /// Serializes tests that read/write the shared `data_dir()/recovery/autosave.json` path.
+    /// Poison-tolerant: a panicking test won't cascade to block the others.
+    static RECOVERY_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     /// Minimal in-memory library (one genre, one pattern per role) for deterministic tests.
     fn test_library() -> Library {
         let mut drums: GenreMap = GenreMap::new();
@@ -3858,7 +3862,7 @@ mod tests {
         // Verify that Action::Save keeps mode as Edit and clears dirty on success.
         // The store-level clear_recovery-on-save wiring is verified via code inspection
         // (Action::Save calls clear_recovery) and store::tests::clear_recovery_removes_file.
-        // We avoid env-var mutation here to stay race-free under parallel test execution.
+        let _guard = RECOVERY_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut app = new_app();
         app.set.name = "test-save".to_string();
         app.apply(Action::Save);
@@ -3871,6 +3875,7 @@ mod tests {
     #[test]
     fn recovery_discard_clears_and_goes_to_edit() {
         // Test mode transition + status. The fs.clear is exercised in store tests.
+        let _guard = RECOVERY_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut app = new_app();
         app.mode = Mode::RecoveryPrompt;
         let cmds = app.apply(Action::RecoveryDiscard);
@@ -3888,6 +3893,7 @@ mod tests {
         // Write a real recovery file to the data_dir() so RecoveryRecover can load it.
         // We create the recovery dir if absent so this works in fresh checkouts/CI.
         // fs-clear is verified in store tests; here we test app behavior only.
+        let _guard = RECOVERY_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         use crate::pattern::store;
         let data_dir = crate::config::data_dir();
         std::fs::create_dir_all(data_dir.join("recovery")).ok();
