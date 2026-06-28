@@ -336,13 +336,39 @@ impl App {
                     UiCommand::Stop
                 });
             }
-            Action::FocusNext => self.set_focus((self.focus + 1) % self.set.lanes.len()),
+            Action::FocusNext => {
+                // Audition is tied to a specific lane; changing focus abandons it.
+                if let Some(prev) = self.audition.take() {
+                    cmds.push(UiCommand::LoadPattern {
+                        lane: prev.lane,
+                        pattern: self.set.lanes[prev.lane].pattern.clone(),
+                    });
+                    self.set_status("Audition cancelled");
+                }
+                self.set_focus((self.focus + 1) % self.set.lanes.len());
+            }
             Action::FocusPrev => {
+                // Audition is tied to a specific lane; changing focus abandons it.
+                if let Some(prev) = self.audition.take() {
+                    cmds.push(UiCommand::LoadPattern {
+                        lane: prev.lane,
+                        pattern: self.set.lanes[prev.lane].pattern.clone(),
+                    });
+                    self.set_status("Audition cancelled");
+                }
                 let n = self.set.lanes.len();
                 self.set_focus((self.focus + n - 1) % n);
             }
             Action::FocusLane(i) => {
                 if i < self.set.lanes.len() {
+                    // Audition is tied to a specific lane; changing focus abandons it.
+                    if let Some(prev) = self.audition.take() {
+                        cmds.push(UiCommand::LoadPattern {
+                            lane: prev.lane,
+                            pattern: self.set.lanes[prev.lane].pattern.clone(),
+                        });
+                        self.set_status("Audition cancelled");
+                    }
                     self.set_focus(i);
                 }
             }
@@ -642,6 +668,15 @@ impl App {
                 }
             }
             Action::Audition => {
+                // Gate: audition is allowed only when the focused lane is stopped (transport
+                // stopped) OR muted. This prevents the cued preview from colliding with a live
+                // lane. The audition target is the focused lane's route/channel; a dedicated
+                // cue port is a future option — no separate port in this milestone.
+                let lane_muted = self.set.lanes[self.focus].mute;
+                if self.engine_playing && !lane_muted {
+                    self.set_status("Mute lane to audition (it's live)");
+                    return cmds;
+                }
                 // Isolated preview: cue the selected pattern WITHOUT mutating the committed Set.
                 if let Some(pat) = self.selected_lib_pattern().cloned() {
                     self.set_status(format!("Auditioning {}", pat.name));
@@ -3696,6 +3731,133 @@ mod tests {
         assert_eq!(
             app.set.lanes[0].pattern.name, "lib-drum",
             "doc pattern must be updated even when queued (not stopped)"
+        );
+    }
+
+    // --- M3 T3: Audition gating + focus-change revert ---
+
+    #[test]
+    fn audition_refused_when_lane_live_and_unmuted() {
+        // engine_playing=true, focused lane NOT muted → gate blocks the preview.
+        let mut app = new_app();
+        app.apply(Action::FocusLane(0));
+        app.apply(Action::OpenLibrary);
+        app.engine_playing = true;
+        assert!(!app.set.lanes[0].mute, "lane must be unmuted for this test");
+
+        let cmds = app.apply(Action::Audition);
+
+        assert!(
+            app.audition.is_none(),
+            "audition must not be set when lane is live and unmuted"
+        );
+        assert!(
+            !cmds
+                .iter()
+                .any(|c| matches!(c, UiCommand::LoadPattern { .. })),
+            "no LoadPattern must be emitted when gate refuses"
+        );
+        assert!(
+            app.status.contains("Mute lane"),
+            "status should hint to mute the lane; got: {:?}",
+            app.status
+        );
+    }
+
+    #[test]
+    fn audition_allowed_when_stopped() {
+        // engine_playing=false → gate passes regardless of mute state.
+        let mut app = new_app();
+        app.apply(Action::FocusLane(0));
+        app.apply(Action::OpenLibrary);
+        app.engine_playing = false;
+
+        let cmds = app.apply(Action::Audition);
+
+        assert!(
+            app.audition.is_some(),
+            "audition should be set when transport is stopped"
+        );
+        assert!(
+            cmds.iter()
+                .any(|c| matches!(c, UiCommand::LoadPattern { lane: 0, .. })),
+            "must emit LoadPattern when stopped"
+        );
+    }
+
+    #[test]
+    fn audition_allowed_when_lane_muted() {
+        // engine_playing=true but lane muted → gate passes (silent lane, safe to preview).
+        let mut app = new_app();
+        app.apply(Action::FocusLane(0));
+        app.apply(Action::OpenLibrary);
+        app.engine_playing = true;
+        app.set.lanes[0].mute = true;
+
+        let cmds = app.apply(Action::Audition);
+
+        assert!(
+            app.audition.is_some(),
+            "audition should be allowed when lane is muted"
+        );
+        assert!(
+            cmds.iter()
+                .any(|c| matches!(c, UiCommand::LoadPattern { lane: 0, .. })),
+            "must emit LoadPattern when lane is muted"
+        );
+    }
+
+    #[test]
+    fn focus_change_reverts_audition() {
+        // Start audition while stopped, then FocusNext → revert + clear.
+        let mut app = new_app();
+        app.apply(Action::FocusLane(0));
+        app.apply(Action::OpenLibrary);
+        app.engine_playing = false;
+        app.apply(Action::Audition);
+        assert!(
+            app.audition.is_some(),
+            "audition should be active before focus change"
+        );
+        let committed_name = app.set.lanes[0].pattern.name.clone();
+
+        let cmds = app.apply(Action::FocusNext);
+
+        assert!(
+            app.audition.is_none(),
+            "audition should be cleared after focus change"
+        );
+        // Engine must be restored to the committed pattern.
+        assert!(
+            cmds.iter().any(|c| matches!(
+                c,
+                UiCommand::LoadPattern { lane: 0, pattern } if pattern.name == committed_name
+            )),
+            "must emit LoadPattern restoring committed pattern after focus change; got: {:?}",
+            cmds
+        );
+        assert_eq!(
+            app.status, "Audition cancelled",
+            "status should say cancelled; got: {:?}",
+            app.status
+        );
+    }
+
+    #[test]
+    fn audition_commit_clears_audition() {
+        // LibLoad after audition must clear self.audition.
+        let mut app = new_app();
+        app.apply(Action::FocusLane(0));
+        app.apply(Action::OpenLibrary);
+        app.engine_playing = false;
+        app.apply(Action::Audition);
+        assert!(app.audition.is_some());
+
+        app.apply(Action::LibLoad);
+
+        assert!(
+            app.audition.is_none(),
+            "self.audition must be None after committing via LibLoad"
         );
     }
 }
