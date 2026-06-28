@@ -851,26 +851,19 @@ pub fn spawn_engine(set: Set, mut link: Box<dyn LinkClock>) -> EngineHandle {
             // ALSO forwarded to the virtual port. The hardware path is byte-identical
             // whether the mirror is on or off — `TeeSink` never replaces the fanout.
             //
-            // Both `fanout` and `tee` are scoped to this block so their borrows of
-            // `port_sinks` and `virtual_sink` end before the health-check / route-replan
-            // below — required by the borrow checker.
+            // `fanout` and `tee` are scoped to the inner block so their borrows of
+            // `port_sinks` and `virtual_sink` are fully dropped before the health-check /
+            // route-replan below re-borrows them. `&mut virtual_sink` borrows the Option
+            // container per iteration; `TeeSink::send` derefs it — NLL accepts this safely.
             let quit = {
                 let mut fanout = PortFanoutSink {
                     ports: &mut port_sinks,
                     channel_to_port: &channel_to_port,
                     clock_ports: &clock_ports,
                 };
-                // SAFETY: `virtual_sink` is only accessed on this thread; this reborrow is
-                // scoped to the block and ends before `virtual_sink` is next used. Using a
-                // raw-pointer reborrow works around an NLL limitation where the compiler
-                // conservatively extends mutable borrows of `Option<Box<dyn Trait>>` across
-                // loop iterations even when the borrow is fully dropped within the block.
-                let mirror_ref: Option<&mut dyn MidiSink> = virtual_sink
-                    .as_mut()
-                    .map(|b| unsafe { &mut *(&mut **b as *mut dyn MidiSink) });
                 let mut tee = TeeSink {
                     primary: &mut fanout,
-                    mirror: mirror_ref,
+                    mirror: &mut virtual_sink,
                     mirror_on: st.mirror_on,
                 };
                 step_engine(
@@ -1045,9 +1038,16 @@ impl<'a> MidiSink for PortFanoutSink<'a> {
 /// Two distinct lifetimes prevent the borrow checker from tying `primary` and `mirror`
 /// to the same scope, which would propagate the mirror's borrow into the surrounding loop
 /// and block subsequent uses of the port-sink / virtual-sink locals.
+///
+/// `mirror` borrows the `Option` CONTAINER (`&mut Option<Box<dyn MidiSink>>`) rather than
+/// an `Option<&mut dyn MidiSink>`. Borrowing the container — and dereferencing inside
+/// `send()` — keeps the borrow trivially scoped per loop iteration, which NLL accepts
+/// cleanly. (An `Option<&mut dyn ..>` reborrow tripped an NLL false-positive because the
+/// `Option<Box<..>>` destructor at the enclosing scope's exit appeared to extend the
+/// borrow across iterations.) All safe — no `unsafe`/raw pointers.
 struct TeeSink<'p, 'm> {
     primary: &'p mut dyn MidiSink,
-    mirror: Option<&'m mut dyn MidiSink>,
+    mirror: &'m mut Option<Box<dyn MidiSink>>,
     mirror_on: bool,
 }
 
@@ -1856,15 +1856,37 @@ mod tests {
 
     // --- TeeSink / virtual mirror tests ---
 
+    /// Mirror sink that records into a shared buffer the test can inspect after the boxed
+    /// sink is type-erased into `Box<dyn MidiSink>` (as the engine stores `virtual_sink`).
+    /// `Arc<Mutex<..>>` (not `Rc`) because `MidiSink: Send`.
+    #[derive(Clone)]
+    struct SharedRecordingSink {
+        events: std::sync::Arc<std::sync::Mutex<Vec<(u64, crate::midi::MidiMessage)>>>,
+    }
+    impl SharedRecordingSink {
+        fn new() -> Self {
+            SharedRecordingSink {
+                events: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            }
+        }
+    }
+    impl MidiSink for SharedRecordingSink {
+        fn send(&mut self, msg: crate::midi::MidiMessage, at_micros: u64) {
+            self.events.lock().unwrap().push((at_micros, msg));
+        }
+    }
+
     /// With mirror_on=false the primary always records the message; the mirror does not.
     #[test]
     fn tee_forwards_to_primary_always() {
         let mut primary = RecordingSink::new();
-        let mut mirror = RecordingSink::new();
+        let mirror = SharedRecordingSink::new();
+        let mirror_events = mirror.events.clone();
+        let mut mirror_opt: Option<Box<dyn MidiSink>> = Some(Box::new(mirror));
         {
             let mut tee = TeeSink {
                 primary: &mut primary,
-                mirror: Some(&mut mirror),
+                mirror: &mut mirror_opt,
                 mirror_on: false,
             };
             tee.send(crate::midi::MidiMessage::Clock, 42);
@@ -1875,7 +1897,7 @@ mod tests {
             "primary must always receive the message"
         );
         assert_eq!(
-            mirror.events.len(),
+            mirror_events.lock().unwrap().len(),
             0,
             "mirror must NOT receive the message when mirror_on=false"
         );
@@ -1885,7 +1907,9 @@ mod tests {
     #[test]
     fn tee_mirrors_when_on() {
         let mut primary = RecordingSink::new();
-        let mut mirror = RecordingSink::new();
+        let mirror = SharedRecordingSink::new();
+        let mirror_events = mirror.events.clone();
+        let mut mirror_opt: Option<Box<dyn MidiSink>> = Some(Box::new(mirror));
         let msg = crate::midi::MidiMessage::NoteOn {
             channel: 1,
             note: 60,
@@ -1894,7 +1918,7 @@ mod tests {
         {
             let mut tee = TeeSink {
                 primary: &mut primary,
-                mirror: Some(&mut mirror),
+                mirror: &mut mirror_opt,
                 mirror_on: true,
             };
             tee.send(msg.clone(), 999);
@@ -1905,7 +1929,7 @@ mod tests {
             "primary must record the message"
         );
         assert_eq!(
-            mirror.events,
+            *mirror_events.lock().unwrap(),
             vec![(999, msg)],
             "mirror must record the same message when mirror_on=true"
         );
@@ -1915,10 +1939,11 @@ mod tests {
     #[test]
     fn tee_no_mirror_when_none() {
         let mut primary = RecordingSink::new();
+        let mut mirror_opt: Option<Box<dyn MidiSink>> = None;
         {
             let mut tee = TeeSink {
                 primary: &mut primary,
-                mirror: None,
+                mirror: &mut mirror_opt,
                 mirror_on: true,
             };
             tee.send(crate::midi::MidiMessage::Clock, 1);
