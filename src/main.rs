@@ -77,7 +77,7 @@ fn send_or_toast(
     app: &mut App,
 ) {
     if tx.send(cmd).is_err() {
-        app.status = "engine unavailable".to_string();
+        app.set_status("engine unavailable");
     }
 }
 
@@ -102,7 +102,7 @@ fn run(mut terminal: Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
     let engine = spawn_engine(set.clone(), link, profiles);
 
     let mut app = App::new(set, library);
-    app.status = lib_status;
+    app.set_status(lib_status);
 
     loop {
         terminal.draw(|f| midip::ui::render(f, &app))?;
@@ -122,6 +122,9 @@ fn run(mut terminal: Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
         while let Ok(ev) = engine.rx.try_recv() {
             app.on_engine_event(ev);
         }
+
+        // Expire status toasts after ~3 s (STATUS_TTL_FRAMES × 16 ms poll timeout).
+        app.tick_status();
 
         if app.should_quit {
             send_or_toast(&engine.tx, midip::engine::UiCommand::Quit, &mut app);

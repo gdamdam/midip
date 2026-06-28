@@ -94,6 +94,12 @@ pub enum Action {
 /// Number of steps visible in the editor at once. Steps beyond this are reached via scrolling.
 pub const VISIBLE_STEPS: usize = 16;
 
+/// How many main-loop frames a status toast persists before auto-clearing.
+///
+/// The main loop polls with a ~16 ms timeout → ~62.5 fps.
+/// 188 frames ≈ 3 000 ms ÷ 16 ms/frame, giving roughly 3 seconds of visibility.
+pub const STATUS_TTL_FRAMES: u16 = 188;
+
 pub struct App {
     pub set: Set,
     pub focus: usize,
@@ -128,6 +134,8 @@ pub struct App {
     pub undo: Vec<Set>,
     pub redo: Vec<Set>,
     pub status: String,
+    /// Frames remaining before `status` is auto-cleared. 0 = already blank/expired.
+    pub status_ttl: u16,
     pub should_quit: bool,
     pub tempo_input: String,
     /// Armed for double-q quit: true after first Quit while playing.
@@ -182,11 +190,33 @@ impl App {
             undo: Vec::new(),
             redo: Vec::new(),
             status: String::new(),
+            status_ttl: 0,
             should_quit: false,
             tempo_input: String::new(),
             quit_armed: false,
             dirty: false,
             audition: None,
+        }
+    }
+
+    /// Set the status toast and arm the TTL countdown.
+    ///
+    /// All status writes MUST go through this method so that every toast
+    /// expires automatically after `STATUS_TTL_FRAMES` loop iterations.
+    pub fn set_status(&mut self, s: impl Into<String>) {
+        self.status = s.into();
+        self.status_ttl = STATUS_TTL_FRAMES;
+    }
+
+    /// Decrement the status TTL by one frame; clear `status` when it reaches 0.
+    ///
+    /// Call once per main-loop iteration (after event handling, before or after render).
+    pub fn tick_status(&mut self) {
+        if self.status_ttl > 0 {
+            self.status_ttl -= 1;
+            if self.status_ttl == 0 {
+                self.status.clear();
+            }
         }
     }
 
@@ -245,7 +275,7 @@ impl App {
                 self.snapshot();
                 self.set_vel_bucket(b);
                 if let Some(v) = self.cursor_vel_midi() {
-                    self.status = format!("Velocity {}", v);
+                    self.set_status(format!("Velocity {}", v));
                 }
                 cmds.push(self.load_focused());
             }
@@ -253,7 +283,7 @@ impl App {
                 self.snapshot();
                 self.adjust_vel(d);
                 if let Some(v) = self.cursor_vel_midi() {
-                    self.status = format!("Velocity {}", v);
+                    self.set_status(format!("Velocity {}", v));
                 }
                 cmds.push(self.load_focused());
             }
@@ -335,7 +365,11 @@ impl App {
                 let lane = &mut self.set.lanes[self.focus];
                 lane.mute = !lane.mute;
                 let (n, muted) = (self.focus, self.set.lanes[self.focus].mute);
-                self.status = format!("Lane {} {}", n, if muted { "muted" } else { "unmuted" });
+                self.set_status(format!(
+                    "Lane {} {}",
+                    n,
+                    if muted { "muted" } else { "unmuted" }
+                ));
                 cmds.push(UiCommand::Mute {
                     lane: self.focus,
                     on: self.set.lanes[self.focus].mute,
@@ -346,7 +380,11 @@ impl App {
                 let lane = &mut self.set.lanes[self.focus];
                 lane.solo = !lane.solo;
                 let (n, soloed) = (self.focus, self.set.lanes[self.focus].solo);
-                self.status = format!("Lane {} {}", n, if soloed { "solo" } else { "unsolo" });
+                self.set_status(format!(
+                    "Lane {} {}",
+                    n,
+                    if soloed { "solo" } else { "unsolo" }
+                ));
                 cmds.push(UiCommand::Solo {
                     lane: self.focus,
                     on: self.set.lanes[self.focus].solo,
@@ -360,11 +398,11 @@ impl App {
             Action::Tap => cmds.push(UiCommand::Tap),
             Action::ToggleLink => {
                 self.link_enabled = !self.link_enabled;
-                self.status = if self.link_enabled {
-                    "Link on".into()
+                self.set_status(if self.link_enabled {
+                    "Link on"
                 } else {
-                    "Link off".into()
-                };
+                    "Link off"
+                });
                 cmds.push(UiCommand::ToggleLink(self.link_enabled));
             }
             Action::OpenTempo => {
@@ -388,7 +426,7 @@ impl App {
                         self.snapshot();
                         self.set.bpm = bpm;
                     }
-                    self.status = format!("BPM {}", bpm as i64);
+                    self.set_status(format!("BPM {}", bpm as i64));
                     cmds.push(UiCommand::SetBpm(bpm));
                 }
                 self.tempo_input.clear();
@@ -400,14 +438,17 @@ impl App {
             Action::AdjustBpm(d) => {
                 self.snapshot();
                 self.set.bpm = (self.set.bpm + d as f64).clamp(20.0, 300.0);
-                self.status = format!("BPM {}", self.set.bpm as i64);
+                self.set_status(format!("BPM {}", self.set.bpm as i64));
                 cmds.push(UiCommand::SetBpm(self.set.bpm));
             }
             Action::AdjustSwing(d) => {
                 // Swing mutates the Set, so it is snapshotted per the undo invariant.
                 self.snapshot();
                 self.set.swing = (self.set.swing + d as f32 * 0.02).clamp(0.5, 0.66);
-                self.status = format!("Swing {}%", (self.set.swing * 100.0).round() as i64);
+                self.set_status(format!(
+                    "Swing {}%",
+                    (self.set.swing * 100.0).round() as i64
+                ));
                 cmds.push(UiCommand::SetSwing(self.set.swing));
             }
             Action::AdjustPatternLen(d) => {
@@ -425,7 +466,7 @@ impl App {
             Action::AdjustProb(d) => {
                 if self.adjust_prob(d) {
                     if let Some(pct) = self.cursor_prob_pct() {
-                        self.status = format!("Prob {}%", pct);
+                        self.set_status(format!("Prob {}%", pct));
                     }
                     cmds.push(self.load_focused());
                 }
@@ -433,7 +474,7 @@ impl App {
             Action::AdjustRatchet(d) => {
                 if self.adjust_ratchet(d) {
                     if let Some(r) = self.cursor_ratchet() {
-                        self.status = format!("Ratchet x{}", r);
+                        self.set_status(format!("Ratchet x{}", r));
                     }
                     cmds.push(self.load_focused());
                 }
@@ -442,7 +483,7 @@ impl App {
                 if self.apply_euclid(dp, dr) {
                     let pulses = self.euclid_current_pulses();
                     let steps = self.set.lanes[self.focus].pattern.length;
-                    self.status = format!("Euclid E({},{})", pulses, steps);
+                    self.set_status(format!("Euclid E({},{})", pulses, steps));
                     cmds.push(self.load_focused());
                 }
             }
@@ -459,7 +500,7 @@ impl App {
                         lane: self.focus,
                         pattern: self.set.lanes[self.focus].pattern.clone(),
                     });
-                    self.status = "Audition cancelled".into();
+                    self.set_status("Audition cancelled");
                 }
                 self.mode = Mode::Edit;
             }
@@ -495,7 +536,7 @@ impl App {
                     self.snapshot();
                     self.audition = None;
                     self.set.lanes[self.focus].pattern = pat.clone();
-                    self.status = format!("Loaded {}", name);
+                    self.set_status(format!("Loaded {}", name));
                     cmds.push(UiCommand::LoadPattern {
                         lane: self.focus,
                         pattern: pat,
@@ -506,7 +547,7 @@ impl App {
             Action::Audition => {
                 // Isolated preview: cue the selected pattern WITHOUT mutating the committed Set.
                 if let Some(pat) = self.selected_lib_pattern().cloned() {
-                    self.status = format!("Auditioning {}", pat.name);
+                    self.set_status(format!("Auditioning {}", pat.name));
                     self.audition = Some(AuditionPreview {
                         lane: self.focus,
                         pattern: pat.clone(),
@@ -545,7 +586,7 @@ impl App {
                             cmds.push(UiCommand::SetSet(self.set.clone()));
                         }
                         Err(e) => {
-                            self.status = format!("Load failed: {e}");
+                            self.set_status(format!("Load failed: {e}"));
                             // stay in SetBrowser
                         }
                     }
@@ -559,10 +600,10 @@ impl App {
                 let dir = crate::config::data_dir().join("sets");
                 match crate::pattern::store::save_set(&dir, &self.set) {
                     Ok(_path) => {
-                        self.status = "Saved".into();
+                        self.set_status("Saved");
                         self.dirty = false;
                     }
-                    Err(e) => self.status = format!("Save failed: {}", e),
+                    Err(e) => self.set_status(format!("Save failed: {}", e)),
                 }
             }
             Action::Help => {
@@ -575,7 +616,7 @@ impl App {
             Action::Quit => {
                 if self.playing && !self.quit_armed {
                     self.quit_armed = true;
-                    self.status = "Press q again to quit".into();
+                    self.set_status("Press q again to quit");
                 } else {
                     self.should_quit = true;
                 }
@@ -606,9 +647,9 @@ impl App {
                 // Toast on peer transitions (only when link is enabled).
                 if enabled {
                     if prev > 0 && peers == 0 {
-                        self.status = "Link lost".into();
+                        self.set_status("Link lost");
                     } else if prev == 0 && peers > 0 {
-                        self.status = format!("Link: {} peers", peers);
+                        self.set_status(format!("Link: {} peers", peers));
                     }
                 }
             }
@@ -626,7 +667,7 @@ impl App {
                 } else {
                     port
                 };
-                self.status = format!(
+                self.set_status(format!(
                     "MIDI: {} {}",
                     label,
                     if connected {
@@ -634,7 +675,7 @@ impl App {
                     } else {
                         "disconnected"
                     }
-                );
+                ));
             }
             EngineEvent::Armed => {
                 self.armed = true;
@@ -652,7 +693,7 @@ impl App {
                 // Update the displayed BPM (display only — no dirty flag, no undo snapshot;
                 // tap is a performance action, not an edit).
                 self.set.bpm = bpm;
-                self.status = format!("Tap: {} BPM", bpm.round() as u32);
+                self.set_status(format!("Tap: {} BPM", bpm.round() as u32));
             }
         }
     }
@@ -765,11 +806,11 @@ impl App {
         self.audition = None;
         self.dirty = false;
         self.clamp_cursor();
-        self.status = if had_unsaved {
+        self.set_status(if had_unsaved {
             format!("Loaded {} (unsaved changes discarded)", name)
         } else {
             format!("Loaded {}", name)
-        };
+        });
     }
 
     fn undo(&mut self) {
@@ -2828,6 +2869,62 @@ mod tests {
             app.status.contains("124"),
             "status toast should contain the new BPM, got: {:?}",
             app.status
+        );
+    }
+
+    // --- Task 9: status TTL -------------------------------------------------
+
+    #[test]
+    fn set_status_sets_ttl() {
+        let mut app = new_app();
+        app.set_status("x");
+        assert_eq!(app.status, "x");
+        assert!(
+            app.status_ttl > 0,
+            "status_ttl must be > 0 after set_status"
+        );
+        assert_eq!(app.status_ttl, STATUS_TTL_FRAMES);
+    }
+
+    #[test]
+    fn tick_status_clears_after_ttl() {
+        let mut app = new_app();
+        app.set_status("x");
+        assert_eq!(app.status, "x");
+        for _ in 0..STATUS_TTL_FRAMES {
+            app.tick_status();
+        }
+        assert_eq!(app.status, "", "status must be cleared after TTL frames");
+        assert_eq!(app.status_ttl, 0);
+    }
+
+    #[test]
+    fn tick_status_does_not_underflow_when_already_zero() {
+        let mut app = new_app();
+        // No status set — TTL is 0. Ticking must not panic or underflow.
+        app.tick_status();
+        assert_eq!(app.status_ttl, 0);
+        assert_eq!(app.status, "");
+    }
+
+    #[test]
+    fn playhead_event_does_not_clear_fresh_status() {
+        let mut app = new_app();
+        app.set_status("Saved");
+        let ttl_before = app.status_ttl;
+        app.on_engine_event(crate::engine::EngineEvent::Playhead {
+            step: 3,
+            bar: 1,
+            beat: 0,
+            phase: 0.0,
+        });
+        assert_eq!(
+            app.status, "Saved",
+            "Playhead event must not overwrite a fresh status toast"
+        );
+        assert_eq!(
+            app.status_ttl, ttl_before,
+            "Playhead event must not alter status_ttl"
         );
     }
 }
