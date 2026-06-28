@@ -56,13 +56,15 @@ pub fn render_melodic_editor(f: &mut Frame, area: Rect, app: &App) {
     // Feature #2: EDIT header line.
     let playhead_display = if len == 0 { 1 } else { app.playhead % len + 1 };
     let header_line = format!(
-        "{} | Steps {}-{} of {} | Cursor {} | Playhead {}",
+        "{} | Steps {}-{} of {} | Cursor {} | Playhead {} | Oct {:+} | Transpose {:+} st",
         app.context_label(),
         start + 1,
         end,
         len,
         app.cur_col + 1,
         playhead_display,
+        lane.octave,
+        lane.transpose,
     );
 
     let mut step_spans: Vec<Span> = vec![Span::raw("step ")];
@@ -427,6 +429,31 @@ mod tests {
         let whole: String =
             term.backend().buffer().content().iter().map(|c| c.symbol()).collect();
         assert!(whole.contains('~'), "lone slide note must show ~ marker, got: {whole:?}");
+    }
+
+    #[test]
+    fn melodic_header_shows_octave_and_transpose() {
+        let mut set = Set::default_set(default_profiles());
+        set.lanes[1].pattern = Pattern {
+            name: "pitch".to_string(),
+            desc: String::new(),
+            length: 16,
+            data: PatternData::Melodic(vec![None; 16]),
+        };
+        // Set non-zero octave and transpose so the signed display is unambiguous.
+        set.lanes[1].octave = 2;
+        set.lanes[1].transpose = -3;
+        let mut app = App::new(set, empty_library());
+        app.focus = 1;
+        let backend = TestBackend::new(120, 10);
+        let mut term = Terminal::new(backend).unwrap();
+        term.draw(|f| render_melodic_editor(f, f.area(), &app)).unwrap();
+        let whole: String =
+            term.backend().buffer().content().iter().map(|c| c.symbol()).collect();
+        assert!(whole.contains("Oct"), "header must contain 'Oct', got: {whole:?}");
+        assert!(whole.contains("+2"), "header must show octave +2, got: {whole:?}");
+        assert!(whole.contains("Transpose"), "header must contain 'Transpose', got: {whole:?}");
+        assert!(whole.contains("-3"), "header must show transpose -3 st, got: {whole:?}");
     }
 
     #[test]
