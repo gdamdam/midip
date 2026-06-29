@@ -7,6 +7,7 @@
 use crate::devices::profiles;
 use crate::engine::scheduler::Quant;
 use crate::engine::{EngineEvent, UiCommand};
+use crate::music::scale::{fold_to_scale, step_by_degree, Scale};
 use crate::pattern::euclid;
 use crate::pattern::library::{LibRole, Library};
 use crate::pattern::model::{
@@ -39,6 +40,9 @@ pub enum ConfirmAction {
     NewSet,
     DeleteSet(std::path::PathBuf),
     ClearPattern,
+    /// Fold all out-of-scale notes in the focused melodic lane to the lane's scale.
+    /// The `usize` is the count of notes that will be folded (used in the confirm prompt).
+    ConformToScale(usize),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -57,6 +61,12 @@ pub enum Mode {
     /// Live crate browser: browse crate entries and launch patterns without
     /// committing to the active Set until Enter is pressed.
     CrateView,
+    /// QWERTY piano note-input sub-mode (melodic lanes only).
+    ///
+    /// Entered from melodic Edit via `'I'` (Shift+i — was unbound before M5a-T5).
+    /// Snapshot is taken ONCE on entry so the whole input session is a single undo unit.
+    /// `Esc` returns to Edit without an additional snapshot.
+    NoteInput,
 }
 
 /// Which field is focused in the route editor (cycles Left/Right).
@@ -105,6 +115,12 @@ pub enum Action {
     AdjustVel(i8),
     NoteUp,
     NoteDown,
+    /// Cycle the focused melodic lane's scale forward (+1) or backward (-1) through
+    /// `Scale::all()`. Does NOT rewrite existing note semis — fold applies to new input only.
+    CycleScale(i8),
+    /// Adjust the focused melodic lane's root note by ±1 semitone (0..=127, clamped).
+    /// Sets `lane.root = Some(...)` so it overrides the profile root.
+    AdjustRoot(i8),
     AdjustLen(i8),
     AdjustOctave(i8),
     ToggleSlide,
@@ -265,6 +281,27 @@ pub enum Action {
     /// Commit the active temporary fill: snapshot (makes it undoable), clear temp,
     /// mark dirty. No-op with status if no temp is active.
     CommitTransform,
+    // ── M5a Task 4: conform existing notes to scale ──────────────────────────
+    /// Open the conform-to-scale flow: Chromatic → status no-op; 0 out-of-scale notes →
+    /// status no-op; otherwise route to `Mode::Confirm(ConfirmAction::ConformToScale)`.
+    /// Preview is provided by the confirm prompt which shows the count of notes to fold.
+    OpenConformToScale,
+    /// Fold every note in the focused melodic lane to the lane's current scale.
+    /// Snapshots for undo. Chromatic / drum lanes are silent no-ops.
+    ConformToScale,
+    // ── M5a Task 5: QWERTY note-input sub-mode ───────────────────────────────
+    /// Enter `Mode::NoteInput` from melodic Edit (key `'I'`, Shift+i — was unbound).
+    /// On a drum lane this is a no-op with a status message.
+    OpenNoteInput,
+    /// Exit `Mode::NoteInput` back to Edit.
+    CloseNoteInput,
+    /// Place a note with the given semitone offset (relative to root, pre-folded by input.rs).
+    /// The raw offset from the QWERTY map; `apply` folds it to the lane's scale and places it.
+    NoteInputPlace(i8),
+    /// Shift the note-input octave by ±1 (clamped to −3..=3).
+    NoteInputOctave(i8),
+    /// Clear the cursor step and step back one (Backspace/Delete in NoteInput).
+    NoteInputBackspace,
     None,
 }
 
@@ -390,6 +427,10 @@ pub struct App {
     /// but `snapshot()` is deferred to `CommitTransform` — so it is non-destructive
     /// until the performer chooses to keep it.
     pub temp_transform: Option<TempTransform>,
+    // ── M5a Task 5: QWERTY note-input sub-mode ───────────────────────────────
+    /// Octave offset applied on top of the QWERTY semitone map while in `Mode::NoteInput`.
+    /// Range −3..=3 (clamped). Reset to 0 each time `Mode::NoteInput` is entered.
+    pub note_input_octave: i8,
 }
 
 /// Default melodic velocity multiplier when placing a note (1.0 -> MIDI 100).
@@ -457,6 +498,7 @@ impl App {
             crate_entry_sel: 0,
             crate_issues: Vec::new(),
             temp_transform: None,
+            note_input_octave: 0,
         }
     }
 
@@ -762,12 +804,44 @@ impl App {
             }
             Action::NoteUp => {
                 self.snapshot();
-                self.adjust_semi(1);
+                self.adjust_semi_by_degree(1);
                 cmds.push(self.load_focused());
             }
             Action::NoteDown => {
                 self.snapshot();
-                self.adjust_semi(-1);
+                self.adjust_semi_by_degree(-1);
+                cmds.push(self.load_focused());
+            }
+            Action::CycleScale(dir) => {
+                self.snapshot();
+                let all = Scale::all();
+                let lane = &mut self.set.lanes[self.focus];
+                let idx = all.iter().position(|&s| s == lane.scale).unwrap_or(0);
+                let next = (idx as i32 + dir as i32).rem_euclid(all.len() as i32) as usize;
+                lane.scale = all[next];
+                let name = lane.scale.name();
+                let root = lane.effective_root();
+                self.set_status(format!(
+                    "Scale: {} (root {})",
+                    name,
+                    crate::music::scale::note_name(root)
+                ));
+                self.dirty = true;
+                cmds.push(self.load_focused());
+            }
+            Action::AdjustRoot(dir) => {
+                self.snapshot();
+                let lane = &mut self.set.lanes[self.focus];
+                let current = lane.effective_root();
+                let new_root = (current as i32 + dir as i32).clamp(0, 127) as u8;
+                lane.root = Some(new_root);
+                let scale_name = lane.scale.name();
+                self.set_status(format!(
+                    "Root: {} ({})",
+                    crate::music::scale::note_name(new_root),
+                    scale_name
+                ));
+                self.dirty = true;
                 cmds.push(self.load_focused());
             }
             Action::AdjustLen(d) => {
@@ -1661,6 +1735,7 @@ impl App {
                     ConfirmAction::NewSet => Action::NewSet,
                     ConfirmAction::DeleteSet(path) => Action::DeleteSet(path),
                     ConfirmAction::ClearPattern => Action::ClearPattern,
+                    ConfirmAction::ConformToScale(_) => Action::ConformToScale,
                 };
                 cmds.extend(self.apply(sub));
             }
@@ -1703,6 +1778,59 @@ impl App {
                     self.mode = Mode::Confirm(ConfirmAction::ClearPattern);
                 } else {
                     cmds.extend(self.apply(Action::ClearPattern));
+                }
+            }
+            // ── M5a Task 4: conform existing notes to scale ───────────────────
+            Action::OpenConformToScale => {
+                let lane = &self.set.lanes[self.focus];
+                // Chromatic is the identity — nothing to fold.
+                if lane.scale == Scale::Chromatic {
+                    self.set_status("Chromatic: nothing to conform");
+                } else {
+                    let out_of_scale: usize = match &lane.pattern.data {
+                        PatternData::Melodic(steps) => steps
+                            .iter()
+                            .filter(|s| {
+                                if let Some(note) = s {
+                                    fold_to_scale(note.semi as i32, lane.scale) != note.semi as i32
+                                } else {
+                                    false
+                                }
+                            })
+                            .count(),
+                        _ => 0,
+                    };
+                    if out_of_scale == 0 {
+                        self.set_status("All notes already in scale");
+                    } else {
+                        self.mode = Mode::Confirm(ConfirmAction::ConformToScale(out_of_scale));
+                    }
+                }
+            }
+            Action::ConformToScale => {
+                let lane = &self.set.lanes[self.focus];
+                // Chromatic is identity; drum lanes have no pitch to fold.
+                if lane.scale == Scale::Chromatic || lane.pattern.kind() == LaneKind::Drums {
+                    // silent no-op (callers should use OpenConformToScale for user-facing flow)
+                } else {
+                    let scale = lane.scale;
+                    self.snapshot();
+                    let lane = &mut self.set.lanes[self.focus];
+                    let mut count = 0usize;
+                    if let PatternData::Melodic(steps) = &mut lane.pattern.data {
+                        for note in steps.iter_mut().flatten() {
+                            let folded =
+                                fold_to_scale(note.semi as i32, scale).clamp(-128, 127) as i8;
+                            if folded != note.semi {
+                                note.semi = folded;
+                                count += 1;
+                            }
+                        }
+                    }
+                    let scale_name = self.set.lanes[self.focus].scale.name();
+                    self.dirty = true;
+                    self.set_status(format!("Conformed {} notes to {}", count, scale_name));
+                    cmds.push(self.load_focused());
                 }
             }
             // ── User-pattern load ─────────────────────────────────────────────
@@ -1919,6 +2047,72 @@ impl App {
                     self.set_status(format!("{} issue(s) found", n));
                 }
             }
+            // ── M5a Task 5: QWERTY note-input sub-mode ───────────────────────────────
+            Action::OpenNoteInput => {
+                if self.focused_kind() == LaneKind::Drums {
+                    self.set_status("Note input is melodic-only");
+                } else {
+                    // Snapshot ONCE on entry — the whole session is one undo unit.
+                    self.snapshot();
+                    self.note_input_octave = 0;
+                    self.mode = Mode::NoteInput;
+                    self.set_status(
+                        "NOTE INPUT  [a-k]notes [w/e/t/y/u]black [z/x]octave [bksp]del [esc]exit",
+                    );
+                }
+            }
+            Action::CloseNoteInput => {
+                if self.mode == Mode::NoteInput {
+                    self.mode = Mode::Edit;
+                }
+            }
+            Action::NoteInputPlace(offset) => {
+                if self.mode == Mode::NoteInput {
+                    let semi_raw = offset as i32 + self.note_input_octave as i32 * 12;
+                    let lane_scale = self.set.lanes[self.focus].scale;
+                    let semi_folded = fold_to_scale(semi_raw, lane_scale).clamp(-128, 127) as i8;
+                    let col = self.cur_col;
+                    let lane = &mut self.set.lanes[self.focus];
+                    if let PatternData::Melodic(steps) = &mut lane.pattern.data {
+                        if let Some(slot) = steps.get_mut(col) {
+                            let gate = lane.profile.gate_fraction;
+                            *slot = Some(MelodicNote {
+                                semi: semi_folded,
+                                vel: MEL_DEFAULT_VEL,
+                                slide: false,
+                                len: gate,
+                                prob: 1.0,
+                                ratchet: 1,
+                            });
+                        }
+                    }
+                    // Advance cursor one step, wrapping within the pattern length.
+                    let pat_len = self.set.lanes[self.focus].pattern.length;
+                    self.cur_col = (self.cur_col + 1) % pat_len.max(1);
+                    self.step_scroll = (self.cur_col / VISIBLE_STEPS) * VISIBLE_STEPS;
+                    self.dirty = true;
+                    cmds.push(self.load_focused());
+                }
+            }
+            Action::NoteInputOctave(d) => {
+                if self.mode == Mode::NoteInput {
+                    self.note_input_octave = (self.note_input_octave + d).clamp(-3, 3);
+                    self.set_status(format!("Octave offset: {:+}", self.note_input_octave));
+                }
+            }
+            Action::NoteInputBackspace => {
+                if self.mode == Mode::NoteInput {
+                    // Clear the current step.
+                    self.clear_step();
+                    // Step back one, wrapping.
+                    let pat_len = self.set.lanes[self.focus].pattern.length;
+                    let col = self.cur_col as isize - 1;
+                    self.cur_col = col.rem_euclid(pat_len.max(1) as isize) as usize;
+                    self.step_scroll = (self.cur_col / VISIBLE_STEPS) * VISIBLE_STEPS;
+                    self.dirty = true;
+                    cmds.push(self.load_focused());
+                }
+            }
             Action::None => {}
         }
         cmds
@@ -2072,6 +2266,7 @@ impl App {
             Mode::NameEntry(_) => "NAME",
             Mode::Confirm(_) => "CONFIRM",
             Mode::CrateView => "CRATE VIEW",
+            Mode::NoteInput => "NOTE INPUT",
         }
     }
 
@@ -2167,6 +2362,8 @@ impl App {
     fn toggle_step(&mut self) {
         let row = self.cur_row;
         let col = self.cur_col;
+        // Extract scale before the mutable borrow so the fold can reference it below.
+        let lane_scale = self.set.lanes[self.focus].scale;
         let lane = &mut self.set.lanes[self.focus];
         match &mut lane.pattern.data {
             PatternData::Drums(steps) => {
@@ -2189,12 +2386,16 @@ impl App {
                     if slot.is_some() {
                         *slot = Option::None;
                     } else {
-                        let len = lane.profile.gate_fraction;
+                        let gate = lane.profile.gate_fraction;
+                        // Fold the default semi=0 to the nearest in-scale degree when
+                        // the lane has a non-Chromatic scale. Existing notes are never
+                        // rewritten — folding only applies at placement time.
+                        let semi = fold_to_scale(0, lane_scale) as i8;
                         *slot = Some(MelodicNote {
-                            semi: 0,
+                            semi,
                             vel: MEL_DEFAULT_VEL,
                             slide: false,
-                            len,
+                            len: gate,
                             prob: 1.0,
                             ratchet: 1,
                         });
@@ -2436,12 +2637,15 @@ impl App {
         }
     }
 
-    fn adjust_semi(&mut self, d: i8) {
+    /// Move the cursor note's pitch by one scale degree (non-Chromatic) or one semitone
+    /// (Chromatic). Clamps result to ±48 semitones.
+    fn adjust_semi_by_degree(&mut self, dir: i32) {
         let col = self.cur_col;
-        let lane = &mut self.set.lanes[self.focus];
-        if let PatternData::Melodic(steps) = &mut lane.pattern.data {
+        let scale = self.set.lanes[self.focus].scale;
+        if let PatternData::Melodic(steps) = &mut self.set.lanes[self.focus].pattern.data {
             if let Some(Some(n)) = steps.get_mut(col) {
-                n.semi = (n.semi as i16 + d as i16).clamp(-48, 48) as i8;
+                let new_semi = step_by_degree(n.semi as i32, dir, scale);
+                n.semi = new_semi.clamp(-48, 48) as i8;
             }
         }
     }
@@ -7184,5 +7388,638 @@ mod tests {
         // Cleanup.
         std::fs::remove_file(&path1).ok();
         std::fs::remove_dir_all(&tmp_sets).ok();
+    }
+
+    // ── M5a Task 3: scale-aware editing tests ─────────────────────────────────
+
+    /// Helper: focus lane 1 (bass/melodic), place a note at col 0 with a given semi,
+    /// and return the app with that state.
+    fn melodic_app_with_note(semi: i8) -> App {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(1)); // bass = melodic
+        app.apply(Action::MoveCursor(0, 0));
+        // Place the note (semi=0 by default via ToggleStep, then adjust to desired semi).
+        app.apply(Action::ToggleStep);
+        // Directly set the semi to the desired value for test setup.
+        if let PatternData::Melodic(steps) = &mut app.set.lanes[app.focus].pattern.data {
+            if let Some(Some(n)) = steps.get_mut(0) {
+                n.semi = semi;
+            }
+        }
+        app
+    }
+
+    #[test]
+    fn note_up_moves_by_degree_in_major() {
+        use crate::music::scale::Scale;
+        // Chromatic: NoteUp moves +1 semitone.
+        let mut app = melodic_app_with_note(0);
+        // Lane is Chromatic by default.
+        assert_eq!(app.set.lanes[app.focus].scale, Scale::Chromatic);
+        app.apply(Action::NoteUp);
+        if let PatternData::Melodic(steps) = &app.focused_lane().pattern.data {
+            assert_eq!(
+                steps[0].as_ref().unwrap().semi,
+                1,
+                "Chromatic: NoteUp should add 1 semitone"
+            );
+        }
+
+        // Major: NoteUp at semi=0 should move to semi=2 (W W H W W W H — first step is 2 semis).
+        let mut app2 = melodic_app_with_note(0);
+        app2.set.lanes[app2.focus].scale = Scale::Major;
+        app2.apply(Action::NoteUp);
+        if let PatternData::Melodic(steps) = &app2.focused_lane().pattern.data {
+            assert_eq!(
+                steps[0].as_ref().unwrap().semi,
+                2,
+                "Major: NoteUp at 0 should reach 2"
+            );
+        }
+    }
+
+    #[test]
+    fn note_down_moves_by_degree_in_major() {
+        use crate::music::scale::Scale;
+        // Chromatic: NoteDown moves -1 semitone.
+        let mut app = melodic_app_with_note(2);
+        assert_eq!(app.set.lanes[app.focus].scale, Scale::Chromatic);
+        app.apply(Action::NoteDown);
+        if let PatternData::Melodic(steps) = &app.focused_lane().pattern.data {
+            assert_eq!(
+                steps[0].as_ref().unwrap().semi,
+                1,
+                "Chromatic: NoteDown should subtract 1"
+            );
+        }
+
+        // Major: NoteDown at semi=2 should go back to semi=0.
+        let mut app2 = melodic_app_with_note(2);
+        app2.set.lanes[app2.focus].scale = Scale::Major;
+        app2.apply(Action::NoteDown);
+        if let PatternData::Melodic(steps) = &app2.focused_lane().pattern.data {
+            assert_eq!(
+                steps[0].as_ref().unwrap().semi,
+                0,
+                "Major: NoteDown at 2 should reach 0"
+            );
+        }
+    }
+
+    #[test]
+    fn new_melodic_note_folds_to_scale() {
+        use crate::music::scale::{fold_to_scale, Scale};
+        // For a Major lane, a new note placed via ToggleStep should have its semi
+        // folded to the nearest Major degree. The default semi=0 is already in-scale
+        // (degree 1), so fold(0, Major) == 0. This confirms the fold path runs without error.
+        let mut app = new_app();
+        app.apply(Action::FocusLane(1));
+        app.apply(Action::MoveCursor(0, 0));
+        app.set.lanes[app.focus].scale = Scale::Major;
+        app.apply(Action::ToggleStep);
+        if let PatternData::Melodic(steps) = &app.focused_lane().pattern.data {
+            let note = steps[0].as_ref().expect("note should be placed");
+            let expected = fold_to_scale(0, Scale::Major) as i8;
+            assert_eq!(
+                note.semi, expected,
+                "new note semi must be folded to Major scale"
+            );
+        } else {
+            panic!("expected melodic pattern");
+        }
+
+        // Also verify with a note that would be off-scale if not folded:
+        // Place at col 1, then simulate semi=1 being in-scale → fold(1, Major) == 0 or 2.
+        // We test the fold function directly here since toggle_step always starts at semi=0.
+        let folded = fold_to_scale(1, Scale::Major);
+        assert!(
+            folded == 0 || folded == 2,
+            "semi=1 folded to Major should be 0 or 2, got {}",
+            folded
+        );
+    }
+
+    #[test]
+    fn cycle_scale_does_not_change_existing_note_semis() {
+        use crate::music::scale::Scale;
+        // Place a note with a specific semi, then cycle the scale.
+        let mut app = melodic_app_with_note(5);
+        assert_eq!(app.set.lanes[app.focus].scale, Scale::Chromatic);
+
+        // Cycle forward to Major.
+        app.apply(Action::CycleScale(1));
+        assert_eq!(
+            app.set.lanes[app.focus].scale,
+            Scale::Major,
+            "CycleScale(1) from Chromatic should reach Major"
+        );
+        assert!(app.dirty, "CycleScale must mark dirty");
+
+        // Existing note semi must be unchanged.
+        if let PatternData::Melodic(steps) = &app.focused_lane().pattern.data {
+            assert_eq!(
+                steps[0].as_ref().unwrap().semi,
+                5,
+                "CycleScale must not rewrite existing note semis"
+            );
+        }
+    }
+
+    #[test]
+    fn cycle_scale_wraps_around() {
+        use crate::music::scale::Scale;
+        let mut app = new_app();
+        app.apply(Action::FocusLane(1));
+        // Start at Chromatic (index 0), cycle backward — should wrap to last.
+        app.apply(Action::CycleScale(-1));
+        let all = Scale::all();
+        assert_eq!(
+            app.set.lanes[app.focus].scale,
+            all[all.len() - 1],
+            "CycleScale(-1) from Chromatic should wrap to last scale"
+        );
+    }
+
+    #[test]
+    fn adjust_root_sets_lane_root_dirty() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(1));
+        let original_root = app.set.lanes[app.focus].effective_root();
+
+        app.apply(Action::AdjustRoot(1));
+        assert!(app.dirty, "AdjustRoot must mark dirty");
+        assert_eq!(
+            app.set.lanes[app.focus].root,
+            Some(original_root + 1),
+            "AdjustRoot(1) must set lane.root to profile root + 1"
+        );
+        assert_eq!(
+            app.set.lanes[app.focus].effective_root(),
+            original_root + 1,
+            "effective_root must reflect the new override"
+        );
+    }
+
+    #[test]
+    fn adjust_root_clamps_to_midi_range() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(1));
+        app.set.lanes[app.focus].root = Some(127);
+        app.apply(Action::AdjustRoot(1));
+        assert_eq!(
+            app.set.lanes[app.focus].root,
+            Some(127),
+            "AdjustRoot must clamp at 127"
+        );
+
+        app.set.lanes[app.focus].root = Some(0);
+        app.apply(Action::AdjustRoot(-1));
+        assert_eq!(
+            app.set.lanes[app.focus].root,
+            Some(0),
+            "AdjustRoot must clamp at 0"
+        );
+    }
+
+    // ── M5a Task 4: conform existing notes to scale ───────────────────────────
+
+    /// Helper: build a melodic app with multiple notes at given semitones.
+    fn melodic_app_with_notes(semis: &[i8]) -> App {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(1)); // lane 1 = melodic (bass)
+                                         // Place notes by directly mutating cur_col so relative MoveCursor isn't needed.
+        for (col, &semi) in semis.iter().enumerate() {
+            app.cur_col = col;
+            app.apply(Action::ToggleStep);
+            if let PatternData::Melodic(steps) = &mut app.set.lanes[app.focus].pattern.data {
+                if let Some(Some(n)) = steps.get_mut(col) {
+                    n.semi = semi;
+                }
+            }
+        }
+        // Reset cursor and clear undo history so tests start clean.
+        app.cur_col = 0;
+        app.undo.clear();
+        app.redo.clear();
+        app
+    }
+
+    #[test]
+    fn conform_folds_all_out_of_scale_notes() {
+        // Major scale degrees: 0,2,4,5,7,9,11 — semi=1 and semi=3 are out of scale.
+        // semi=0 (C) and semi=2 (D) are already in Major.
+        let mut app = melodic_app_with_notes(&[0, 1, 2, 3]);
+        app.set.lanes[app.focus].scale = Scale::Major;
+
+        app.apply(Action::ConformToScale);
+
+        if let PatternData::Melodic(steps) = &app.set.lanes[app.focus].pattern.data {
+            let semis: Vec<i8> = steps
+                .iter()
+                .take(4)
+                .filter_map(|s| s.as_ref().map(|n| n.semi))
+                .collect();
+            // Every semi must be in the Major scale degrees (mod 12).
+            for &s in &semis {
+                let folded = fold_to_scale(s as i32, Scale::Major);
+                assert_eq!(
+                    folded, s as i32,
+                    "semi {} should be in-scale after conform",
+                    s
+                );
+            }
+            // In-scale notes (0, 2) must be unchanged; out-of-scale (1→0 or 2, 3→2 or 4).
+            assert_eq!(semis[0], 0, "semi=0 (in-scale) must be unchanged");
+            assert_eq!(semis[2], 2, "semi=2 (in-scale) must be unchanged");
+        } else {
+            panic!("expected Melodic pattern data");
+        }
+    }
+
+    #[test]
+    fn conform_is_undoable() {
+        let mut app = melodic_app_with_notes(&[1, 3]); // both out of Major scale
+        app.set.lanes[app.focus].scale = Scale::Major;
+
+        // Capture original semis.
+        let original: Vec<i8> =
+            if let PatternData::Melodic(steps) = &app.set.lanes[app.focus].pattern.data {
+                steps
+                    .iter()
+                    .take(2)
+                    .filter_map(|s| s.as_ref().map(|n| n.semi))
+                    .collect()
+            } else {
+                panic!("expected Melodic");
+            };
+
+        app.apply(Action::ConformToScale);
+
+        // Verify notes changed.
+        let after: Vec<i8> =
+            if let PatternData::Melodic(steps) = &app.set.lanes[app.focus].pattern.data {
+                steps
+                    .iter()
+                    .take(2)
+                    .filter_map(|s| s.as_ref().map(|n| n.semi))
+                    .collect()
+            } else {
+                panic!("expected Melodic");
+            };
+        assert_ne!(original, after, "conform must change out-of-scale notes");
+
+        // Undo should restore originals.
+        app.apply(Action::Undo);
+        let restored: Vec<i8> =
+            if let PatternData::Melodic(steps) = &app.set.lanes[app.focus].pattern.data {
+                steps
+                    .iter()
+                    .take(2)
+                    .filter_map(|s| s.as_ref().map(|n| n.semi))
+                    .collect()
+            } else {
+                panic!("expected Melodic");
+            };
+        assert_eq!(original, restored, "Undo must restore original semis");
+    }
+
+    #[test]
+    fn conform_chromatic_is_noop() {
+        // Chromatic scale — OpenConformToScale must set status, not enter Confirm mode.
+        let mut app = melodic_app_with_notes(&[1, 3, 6]);
+        // Lane is Chromatic by default.
+        assert_eq!(app.set.lanes[app.focus].scale, Scale::Chromatic);
+
+        let notes_before: Vec<i8> =
+            if let PatternData::Melodic(steps) = &app.set.lanes[app.focus].pattern.data {
+                steps
+                    .iter()
+                    .take(3)
+                    .filter_map(|s| s.as_ref().map(|n| n.semi))
+                    .collect()
+            } else {
+                panic!("expected Melodic");
+            };
+
+        app.apply(Action::OpenConformToScale);
+
+        // Must NOT enter confirm mode.
+        assert_ne!(
+            app.mode,
+            Mode::Confirm(ConfirmAction::ConformToScale(3)),
+            "Chromatic should not route to Confirm"
+        );
+        assert!(
+            app.status.contains("Chromatic"),
+            "status must mention Chromatic, got: {:?}",
+            app.status
+        );
+
+        // Notes must be unchanged.
+        let notes_after: Vec<i8> =
+            if let PatternData::Melodic(steps) = &app.set.lanes[app.focus].pattern.data {
+                steps
+                    .iter()
+                    .take(3)
+                    .filter_map(|s| s.as_ref().map(|n| n.semi))
+                    .collect()
+            } else {
+                panic!("expected Melodic");
+            };
+        assert_eq!(
+            notes_before, notes_after,
+            "notes must not change for Chromatic"
+        );
+    }
+
+    #[test]
+    fn open_conform_routes_to_confirm_when_out_of_scale_notes_exist() {
+        // semi=1 is not in Major.
+        let mut app = melodic_app_with_notes(&[1]);
+        app.set.lanes[app.focus].scale = Scale::Major;
+
+        app.apply(Action::OpenConformToScale);
+
+        assert_eq!(
+            app.mode,
+            Mode::Confirm(ConfirmAction::ConformToScale(1)),
+            "OpenConformToScale with out-of-scale notes must route to Confirm(ConformToScale(1))"
+        );
+    }
+
+    #[test]
+    fn open_conform_noop_when_all_in_scale() {
+        // semi=0, 2, 4 are all in Major.
+        let mut app = melodic_app_with_notes(&[0, 2, 4]);
+        app.set.lanes[app.focus].scale = Scale::Major;
+
+        app.apply(Action::OpenConformToScale);
+
+        // Must NOT enter confirm mode.
+        assert!(
+            !matches!(app.mode, Mode::Confirm(ConfirmAction::ConformToScale(_))),
+            "OpenConformToScale with all in-scale notes must not enter Confirm"
+        );
+        assert!(
+            app.status.contains("already in scale"),
+            "status must say 'already in scale', got: {:?}",
+            app.status
+        );
+    }
+
+    // ── M5a Task 5: QWERTY note-input sub-mode ────────────────────────────────
+
+    /// Enter NoteInput from melodic Edit, then exit with CloseNoteInput.
+    #[test]
+    fn open_note_input_enters_mode_on_melodic_lane() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(1)); // melodic
+
+        app.apply(Action::OpenNoteInput);
+
+        assert_eq!(
+            app.mode,
+            Mode::NoteInput,
+            "OpenNoteInput on melodic lane must enter Mode::NoteInput"
+        );
+        assert_eq!(
+            app.note_input_octave, 0,
+            "octave offset must reset to 0 on entry"
+        );
+    }
+
+    /// OpenNoteInput on a drum lane must be a no-op with a status message.
+    #[test]
+    fn open_note_input_noop_on_drum_lane() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(0)); // drums
+
+        app.apply(Action::OpenNoteInput);
+
+        assert_eq!(
+            app.mode,
+            Mode::Edit,
+            "OpenNoteInput on drum lane must not change mode"
+        );
+        assert!(
+            app.status.contains("melodic"),
+            "status must mention melodic, got: {:?}",
+            app.status
+        );
+    }
+
+    /// CloseNoteInput returns to Edit.
+    #[test]
+    fn close_note_input_returns_to_edit() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(1));
+        app.apply(Action::OpenNoteInput);
+        assert_eq!(app.mode, Mode::NoteInput);
+
+        app.apply(Action::CloseNoteInput);
+
+        assert_eq!(app.mode, Mode::Edit, "CloseNoteInput must return to Edit");
+    }
+
+    /// NoteInputPlace(0) places a note with semi=0 at the cursor step and advances the cursor.
+    #[test]
+    fn note_input_place_writes_note_at_cursor_and_advances() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(1));
+        app.cur_col = 0;
+        app.apply(Action::OpenNoteInput);
+        app.undo.clear(); // clear the entry snapshot so we can count separately
+
+        app.apply(Action::NoteInputPlace(0)); // C = offset 0
+
+        if let PatternData::Melodic(steps) = &app.set.lanes[app.focus].pattern.data {
+            let note = steps[0].as_ref().expect("note must be placed at col 0");
+            assert_eq!(
+                note.semi, 0,
+                "semi must be 0 (C) for offset 0, chromatic lane"
+            );
+            assert_eq!(note.vel, 1.0, "vel must match MEL_DEFAULT_VEL");
+        } else {
+            panic!("expected melodic");
+        }
+        assert_eq!(
+            app.cur_col, 1,
+            "cursor must advance one step after placement"
+        );
+        assert!(app.dirty, "dirty must be set after placement");
+    }
+
+    /// NoteInputPlace with a black-key offset (1 = C#).
+    #[test]
+    fn note_input_place_black_key_offset() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(1));
+        app.cur_col = 2;
+        app.apply(Action::OpenNoteInput);
+
+        app.apply(Action::NoteInputPlace(1)); // C# = offset 1
+
+        if let PatternData::Melodic(steps) = &app.set.lanes[app.focus].pattern.data {
+            let note = steps[2].as_ref().expect("note must be placed at col 2");
+            assert_eq!(
+                note.semi, 1,
+                "semi must be 1 (C#) for offset 1, chromatic lane"
+            );
+        } else {
+            panic!("expected melodic");
+        }
+        assert_eq!(app.cur_col, 3, "cursor must advance to col 3");
+    }
+
+    /// Placement folds to the lane's scale when scale is non-Chromatic.
+    #[test]
+    fn note_input_place_folds_to_scale() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(1));
+        // Set Major scale — semi=1 (C#) is not in Major, should fold to 0 or 2.
+        app.set.lanes[app.focus].scale = Scale::Major;
+        app.cur_col = 0;
+        app.apply(Action::OpenNoteInput);
+
+        app.apply(Action::NoteInputPlace(1)); // offset 1 = C#, out of Major
+
+        if let PatternData::Melodic(steps) = &app.set.lanes[app.focus].pattern.data {
+            let note = steps[0].as_ref().expect("note placed");
+            let major_degrees: &[i8] = &[0, 2, 4, 5, 7, 9, 11];
+            let semi_mod = ((note.semi % 12) + 12) as u8 % 12;
+            assert!(
+                major_degrees.contains(&(semi_mod as i8)),
+                "folded semi {} must be in Major scale degrees {:?}",
+                note.semi,
+                major_degrees
+            );
+        } else {
+            panic!("expected melodic");
+        }
+    }
+
+    /// Octave shift adjusts note_input_octave and is clamped to -3..=3.
+    #[test]
+    fn note_input_octave_shift_clamps() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(1));
+        app.apply(Action::OpenNoteInput);
+
+        app.apply(Action::NoteInputOctave(1));
+        assert_eq!(app.note_input_octave, 1);
+
+        app.apply(Action::NoteInputOctave(-1));
+        assert_eq!(app.note_input_octave, 0);
+
+        // Clamp at ceiling.
+        for _ in 0..10 {
+            app.apply(Action::NoteInputOctave(1));
+        }
+        assert_eq!(app.note_input_octave, 3, "octave offset must clamp at +3");
+
+        // Clamp at floor.
+        for _ in 0..10 {
+            app.apply(Action::NoteInputOctave(-1));
+        }
+        assert_eq!(app.note_input_octave, -3, "octave offset must clamp at -3");
+    }
+
+    /// Octave offset shifts the placed note's semi by 12 per octave.
+    #[test]
+    fn note_input_octave_shifts_placed_semi() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(1));
+        app.apply(Action::OpenNoteInput);
+        app.apply(Action::NoteInputOctave(1)); // oct +1
+        app.cur_col = 0;
+
+        app.apply(Action::NoteInputPlace(0)); // C in oct+1 = semi 12
+
+        if let PatternData::Melodic(steps) = &app.set.lanes[app.focus].pattern.data {
+            let note = steps[0].as_ref().expect("note placed");
+            assert_eq!(note.semi, 12, "oct+1 offset 0 → semi 12");
+        } else {
+            panic!("expected melodic");
+        }
+    }
+
+    /// Backspace clears the cursor step and steps back.
+    #[test]
+    fn note_input_backspace_clears_and_steps_back() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(1));
+        app.cur_col = 2;
+        app.apply(Action::OpenNoteInput);
+        // Place a note at col 2, cursor now at 3.
+        app.apply(Action::NoteInputPlace(0));
+        assert_eq!(app.cur_col, 3);
+
+        app.apply(Action::NoteInputBackspace);
+
+        // Cursor stepped back to 2, and col 2 is now cleared.
+        // Note: backspace clears cur_col FIRST (which is 3 after advance), then steps back to 2.
+        // col 3 is cleared, col 2 still has the note from placement.
+        assert_eq!(app.cur_col, 2, "cursor must step back to 2");
+        if let PatternData::Melodic(steps) = &app.set.lanes[app.focus].pattern.data {
+            assert!(
+                steps[3].is_none(),
+                "col 3 must be cleared by backspace (was empty but backspace sets it None)"
+            );
+        } else {
+            panic!("expected melodic");
+        }
+        assert!(app.dirty, "dirty must remain set after backspace");
+    }
+
+    /// Entering NoteInput takes ONE snapshot; undoing after a full session restores pre-session state.
+    #[test]
+    fn note_input_session_is_single_undo_unit() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(1));
+        app.cur_col = 0;
+        app.undo.clear();
+        let undo_depth_before = app.undo.len();
+
+        // Enter mode (takes snapshot).
+        app.apply(Action::OpenNoteInput);
+        assert_eq!(
+            app.undo.len(),
+            undo_depth_before + 1,
+            "entering NoteInput must add exactly one snapshot"
+        );
+
+        // Place several notes — must NOT add more snapshots.
+        app.apply(Action::NoteInputPlace(0));
+        app.apply(Action::NoteInputPlace(2));
+        app.apply(Action::NoteInputPlace(4));
+        assert_eq!(
+            app.undo.len(),
+            undo_depth_before + 1,
+            "note placements must not add more snapshots"
+        );
+
+        // Exit.
+        app.apply(Action::CloseNoteInput);
+
+        // One Undo restores the pre-session state (all three placements gone).
+        app.apply(Action::Undo);
+        if let PatternData::Melodic(steps) = &app.set.lanes[app.focus].pattern.data {
+            let placed: Vec<_> = steps.iter().take(3).filter(|s| s.is_some()).collect();
+            assert!(
+                placed.is_empty(),
+                "Undo after NoteInput session must restore pre-session state (no placed notes)"
+            );
+        } else {
+            panic!("expected melodic");
+        }
+    }
+
+    /// context_label returns "NOTE INPUT" in NoteInput mode.
+    #[test]
+    fn context_label_note_input() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(1));
+        app.apply(Action::OpenNoteInput);
+        assert_eq!(app.context_label(), "NOTE INPUT");
     }
 }

@@ -1,4 +1,5 @@
-//! Overlays for name-entry and confirm dialogs (Mode::NameEntry / Mode::Confirm).
+//! Overlays for name-entry, confirm dialogs, and note-input banner
+//! (Mode::NameEntry / Mode::Confirm / Mode::NoteInput).
 
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
@@ -39,17 +40,25 @@ pub fn render_name_entry(f: &mut Frame, area: Rect, app: &App) {
 
 /// Render the confirmation dialog into `area`.
 pub fn render_confirm(f: &mut Frame, area: Rect, app: &App) {
-    let (title, message) = match &app.mode {
-        Mode::Confirm(ConfirmAction::NewSet) => {
-            (" NEW SET ", "Unsaved changes will be lost. Create new set?")
-        }
+    let (title, message): (&str, String) = match &app.mode {
+        Mode::Confirm(ConfirmAction::NewSet) => (
+            " NEW SET ",
+            "Unsaved changes will be lost. Create new set?".into(),
+        ),
         Mode::Confirm(ConfirmAction::DeleteSet(_)) => {
-            (" DELETE SET ", "Delete this set file permanently?")
+            (" DELETE SET ", "Delete this set file permanently?".into())
         }
         Mode::Confirm(ConfirmAction::ClearPattern) => {
-            (" CLEAR PATTERN ", "Clear the focused lane pattern?")
+            (" CLEAR PATTERN ", "Clear the focused lane pattern?".into())
         }
-        _ => (" CONFIRM ", "Are you sure?"),
+        Mode::Confirm(ConfirmAction::ConformToScale(n)) => {
+            let lane = &app.set.lanes[app.focus];
+            (
+                " CONFORM TO SCALE ",
+                format!("Conform {} note(s) to {}? [y/n]", n, lane.scale.name()),
+            )
+        }
+        _ => (" CONFIRM ", "Are you sure?".into()),
     };
 
     f.render_widget(Clear, area);
@@ -64,6 +73,34 @@ pub fn render_confirm(f: &mut Frame, area: Rect, app: &App) {
             "[y / enter]  yes    [n / esc]  no",
             Style::default().add_modifier(Modifier::BOLD),
         )),
+    ];
+    f.render_widget(Paragraph::new(lines), inner);
+}
+
+/// Render the NOTE INPUT sub-mode banner into `area`.
+///
+/// Shows the active octave offset and the keymap layout so the performer has an
+/// at-a-glance reference without leaving the sub-mode.
+pub fn render_note_input(f: &mut Frame, area: Rect, app: &App) {
+    let octave = match &app.mode {
+        Mode::NoteInput => app.note_input_octave,
+        _ => 0,
+    };
+    let octave_str = format!("oct {:+}", octave);
+
+    f.render_widget(Clear, area);
+    let block = Block::default().borders(Borders::ALL).title(" NOTE INPUT ");
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let lines: Vec<Line> = vec![
+        Line::from(Span::styled(
+            format!("white: a s d f g h j k   black: w e t y u   {}", octave_str),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::raw("[z]oct-  [x]oct+  [bksp]del step  [esc]exit")),
     ];
     f.render_widget(Paragraph::new(lines), inner);
 }
@@ -188,5 +225,44 @@ mod tests {
             "expected CLEAR PATTERN title; got: {s:?}"
         );
         assert!(s.contains("Clear"), "expected Clear message; got: {s:?}");
+    }
+
+    fn render_note_input_to_string(app: &App) -> String {
+        let backend = TestBackend::new(80, 8);
+        let mut term = Terminal::new(backend).unwrap();
+        term.draw(|f| render_note_input(f, f.area(), app)).unwrap();
+        term.backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect()
+    }
+
+    /// The NOTE INPUT banner renders the title and keymap hint.
+    #[test]
+    fn note_input_banner_shows_title_and_keymap() {
+        let mut app = new_app();
+        app.mode = Mode::NoteInput;
+        let s = render_note_input_to_string(&app);
+        assert!(
+            s.contains("NOTE INPUT"),
+            "expected NOTE INPUT title; got: {s:?}"
+        );
+        assert!(s.contains("white:"), "expected white key hint; got: {s:?}");
+        assert!(s.contains("esc"), "expected [esc]exit hint; got: {s:?}");
+    }
+
+    /// The banner shows the current octave offset.
+    #[test]
+    fn note_input_banner_shows_octave_offset() {
+        let mut app = new_app();
+        app.mode = Mode::NoteInput;
+        app.note_input_octave = 2;
+        let s = render_note_input_to_string(&app);
+        assert!(
+            s.contains("+2"),
+            "expected octave offset +2 in banner; got: {s:?}"
+        );
     }
 }

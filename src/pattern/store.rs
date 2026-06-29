@@ -59,6 +59,12 @@ struct LaneDto {
     /// Per-voice mute set. Absent in old files → serde default empty vec.
     #[serde(default)]
     muted_voices: Vec<u8>,
+    /// Scale for melodic lanes. Absent in old files → serde default `Scale::Chromatic`.
+    #[serde(default)]
+    scale: crate::music::scale::Scale,
+    /// Per-lane root note override. Absent in old files → serde default `None`.
+    #[serde(default)]
+    root: Option<u8>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -84,6 +90,8 @@ impl From<&Lane> for LaneDto {
             octave: lane.octave,
             route: lane.route.clone(),
             muted_voices: lane.muted_voices.clone(),
+            scale: lane.scale,
+            root: lane.root,
         }
     }
 }
@@ -211,6 +219,8 @@ pub fn load_set_with_report(path: &Path) -> anyhow::Result<(Set, Vec<String>)> {
             octave: l.octave,
             route: l.route,
             muted_voices: l.muted_voices,
+            scale: l.scale,
+            root: l.root,
         });
     }
     let mut set = Set {
@@ -1719,5 +1729,80 @@ mod tests {
         let loaded = load_crates(&absent);
         assert_eq!(loaded.version, 0);
         assert!(loaded.crates.is_empty());
+    }
+
+    // ── M5a Task 2: per-lane scale + root persistence ────────────────────────
+
+    #[test]
+    fn lane_scale_root_serde_roundtrips() {
+        use crate::music::scale::Scale;
+        let dir = unique_dir("m5a-scale-roundtrip");
+        let mut set = Set::default_set(default_profiles());
+        set.name = "scale test".to_string();
+        // Set a non-chromatic scale and explicit root on lane 1 (melodic).
+        set.lanes[1].scale = Scale::Major;
+        set.lanes[1].root = Some(50);
+
+        let path = save_set(&dir, &mut set).unwrap();
+        let loaded = load_set(&path).unwrap();
+
+        assert_eq!(
+            loaded.lanes[1].scale,
+            Scale::Major,
+            "scale must survive save/load"
+        );
+        assert_eq!(
+            loaded.lanes[1].root,
+            Some(50),
+            "root override must survive save/load"
+        );
+        // Lanes without overrides stay at defaults.
+        assert_eq!(loaded.lanes[0].scale, Scale::Chromatic);
+        assert_eq!(loaded.lanes[0].root, None);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn old_lane_json_without_scale_loads_chromatic() {
+        use crate::music::scale::Scale;
+        let dir = unique_dir("m5a-old-no-scale");
+        let profile_id = default_profiles()[1].id; // melodic lane profile
+                                                   // Old-format JSON: no `scale` or `root` keys in the lane object.
+        let old_json = format!(
+            r#"{{
+                "name": "legacy scale test",
+                "bpm": 120.0,
+                "swing": 0.5,
+                "lanes": [{{
+                    "profile_id": "{profile_id}",
+                    "pattern": {{
+                        "name": "mel",
+                        "desc": "",
+                        "length": 1,
+                        "data": {{"Melodic": [null]}}
+                    }},
+                    "mute": false,
+                    "solo": false,
+                    "transpose": 0,
+                    "octave": 0
+                }}]
+            }}"#
+        );
+        let path = dir.join("legacy-scale.json");
+        std::fs::write(&path, &old_json).unwrap();
+
+        let loaded = load_set(&path).unwrap();
+        assert_eq!(
+            loaded.lanes[0].scale,
+            Scale::Chromatic,
+            "old JSON without scale must load as Chromatic"
+        );
+        assert_eq!(
+            loaded.lanes[0].root, None,
+            "old JSON without root must load as None"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

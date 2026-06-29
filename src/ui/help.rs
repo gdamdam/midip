@@ -56,6 +56,20 @@ fn left_column_lines() -> Vec<Line<'static>> {
         row("[g]  slide   [, / .]  note len"),
         row("[[ / ]]  octave"),
         blank(),
+        // ── Scales ────────────────────────────────────────────────────
+        header("Scales  (Melodic mode)"),
+        row("[n / N]  cycle scale fwd / bwd"),
+        row("[h / H]  root down / up"),
+        row("[X]  conform notes to scale"),
+        row("[I]  note-input (piano) sub-mode"),
+        blank(),
+        // ── Note input (I) ────────────────────────────────────────────
+        header("Note input  [I] to open"),
+        row("[a s d f g h j k]  white keys"),
+        row("[w e t y u]  black keys"),
+        row("[z / x]  octave down / up"),
+        row("[Bksp]  clear   [Esc]  exit"),
+        blank(),
         // ── Per-step ──────────────────────────────────────────────────
         header("Per-step"),
         row("[p / P]  probability up / down"),
@@ -355,6 +369,53 @@ mod tests {
         assert!(
             whole.contains("[F]"),
             "expected [F] favorites-filter key in help; got: {whole:?}"
+        );
+    }
+
+    /// M5a: scale keys and note-input sub-mode must appear in the help overlay.
+    #[test]
+    fn help_shows_scale_and_note_input_keys() {
+        // Tall enough to render all groups without scrolling.
+        let whole = render_help_to_string(110, 120, 0);
+        assert!(
+            whole.contains("cycle scale"),
+            "expected 'cycle scale' hint; got: {whole:?}"
+        );
+        assert!(
+            whole.contains("[n / N]"),
+            "expected [n / N] scale keys; got: {whole:?}"
+        );
+        assert!(
+            whole.contains("[h / H]"),
+            "expected [h / H] root keys; got: {whole:?}"
+        );
+        assert!(
+            whole.contains("conform notes"),
+            "expected 'conform notes' hint; got: {whole:?}"
+        );
+        assert!(
+            whole.contains("[X]"),
+            "expected [X] conform key; got: {whole:?}"
+        );
+        assert!(
+            whole.contains("note-input"),
+            "expected 'note-input' sub-mode hint; got: {whole:?}"
+        );
+        assert!(
+            whole.contains("[I]"),
+            "expected [I] note-input key; got: {whole:?}"
+        );
+        assert!(
+            whole.contains("white keys"),
+            "expected 'white keys' piano hint; got: {whole:?}"
+        );
+        assert!(
+            whole.contains("black keys"),
+            "expected 'black keys' piano hint; got: {whole:?}"
+        );
+        assert!(
+            whole.contains("Bksp"),
+            "expected Bksp clear hint; got: {whole:?}"
         );
     }
 }

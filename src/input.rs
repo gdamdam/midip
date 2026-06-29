@@ -156,6 +156,34 @@ pub fn key_to_action(key: KeyEvent, mode: Mode, kind: LaneKind) -> Action {
                 _ => Action::None,
             };
         }
+        Mode::NoteInput => {
+            // Global space/'!' are already intercepted above and still fire here.
+            return match key.code {
+                KeyCode::Esc => Action::CloseNoteInput,
+                // White keys: a s d f g h j k → semitone offsets 0 2 4 5 7 9 11 12
+                // (Ableton home-row piano layout, relative to root/octave)
+                KeyCode::Char('a') => Action::NoteInputPlace(0),
+                KeyCode::Char('s') => Action::NoteInputPlace(2),
+                KeyCode::Char('d') => Action::NoteInputPlace(4),
+                KeyCode::Char('f') => Action::NoteInputPlace(5),
+                KeyCode::Char('g') => Action::NoteInputPlace(7),
+                KeyCode::Char('h') => Action::NoteInputPlace(9),
+                KeyCode::Char('j') => Action::NoteInputPlace(11),
+                KeyCode::Char('k') => Action::NoteInputPlace(12),
+                // Black keys: w e t y u → semitone offsets 1 3 6 8 10
+                KeyCode::Char('w') => Action::NoteInputPlace(1),
+                KeyCode::Char('e') => Action::NoteInputPlace(3),
+                KeyCode::Char('t') => Action::NoteInputPlace(6),
+                KeyCode::Char('y') => Action::NoteInputPlace(8),
+                KeyCode::Char('u') => Action::NoteInputPlace(10),
+                // Octave shift: z = down, x = up
+                KeyCode::Char('z') => Action::NoteInputOctave(-1),
+                KeyCode::Char('x') => Action::NoteInputOctave(1),
+                // Backspace / Delete: clear cursor step and step back
+                KeyCode::Backspace | KeyCode::Delete => Action::NoteInputBackspace,
+                _ => Action::None,
+            };
+        }
         Mode::Edit => {}
     }
 
@@ -250,6 +278,21 @@ pub fn key_to_action(key: KeyEvent, mode: Mode, kind: LaneKind) -> Action {
                         '.' => return Action::AdjustLen(1),
                         '[' => return Action::AdjustOctave(-1),
                         ']' => return Action::AdjustOctave(1),
+                        // 'n'/'N' were unbound in Edit/melodic; chosen for "next/prev scale".
+                        // Cycles the lane's scale through Scale::all() without rewriting notes.
+                        'n' => return Action::CycleScale(1),
+                        'N' => return Action::CycleScale(-1),
+                        // 'h'/'H' were unbound in Edit/melodic; chosen for "half-step root".
+                        // Adjusts the lane root note down/up by one semitone.
+                        'h' => return Action::AdjustRoot(-1),
+                        'H' => return Action::AdjustRoot(1),
+                        // 'X' (Shift+x) was unbound in Edit/melodic; chosen for "conform to
+                        // scale" (eXplicit fold). Lowercase 'x' is the global CutStep.
+                        'X' => return Action::OpenConformToScale,
+                        // 'I' (Shift+i) was unbound in Edit/melodic; chosen for "Input notes"
+                        // — opens the QWERTY piano note-input sub-mode. Lowercase 'i' is the
+                        // global RestartLane (both kinds).
+                        'I' => return Action::OpenNoteInput,
                         _ => {}
                     },
                     LaneKind::Drums => match c {
@@ -1419,5 +1462,186 @@ mod tests {
                 "'F' must not be unbound in Edit mode"
             );
         }
+    }
+
+    // ── M5a Task 3: scale picker key bindings ─────────────────────────────────
+
+    /// 'n' was unbound (Action::None) in Edit/melodic; now CycleScale(1).
+    /// 'N' was unbound in Edit/melodic; now CycleScale(-1).
+    /// Both are melodic-only — drums return Action::None.
+    #[test]
+    fn n_key_maps_to_cycle_scale_in_edit_melodic() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('n')), Mode::Edit, LaneKind::Melodic),
+            Action::CycleScale(1),
+            "'n' in Edit/melodic must be CycleScale(1) (was unbound before M5a-T3)"
+        );
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('N')), Mode::Edit, LaneKind::Melodic),
+            Action::CycleScale(-1),
+            "'N' in Edit/melodic must be CycleScale(-1) (was unbound before M5a-T3)"
+        );
+        // Drums — these chars are not bound for drums, must remain None.
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('n')), Mode::Edit, LaneKind::Drums),
+            Action::None,
+            "'n' in Edit/drums must remain Action::None"
+        );
+    }
+
+    /// 'h' was unbound (Action::None) in Edit/melodic; now AdjustRoot(-1).
+    /// 'H' was unbound in Edit/melodic; now AdjustRoot(1).
+    /// Both are melodic-only — drums return Action::None.
+    #[test]
+    fn h_key_maps_to_adjust_root_in_edit_melodic() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('h')), Mode::Edit, LaneKind::Melodic),
+            Action::AdjustRoot(-1),
+            "'h' in Edit/melodic must be AdjustRoot(-1) (was unbound before M5a-T3)"
+        );
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('H')), Mode::Edit, LaneKind::Melodic),
+            Action::AdjustRoot(1),
+            "'H' in Edit/melodic must be AdjustRoot(1) (was unbound before M5a-T3)"
+        );
+        // Drums — these chars are not bound for drums, must remain None.
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('h')), Mode::Edit, LaneKind::Drums),
+            Action::None,
+            "'h' in Edit/drums must remain Action::None"
+        );
+    }
+
+    /// 'X' (Shift+x) was unbound (Action::None) in Edit/melodic; now OpenConformToScale.
+    /// Melodic-only — drums return Action::None.
+    /// Lowercase 'x' remains CutStep (global, both lane kinds).
+    #[test]
+    fn shift_x_maps_to_open_conform_to_scale_in_edit_melodic() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('X')), Mode::Edit, LaneKind::Melodic),
+            Action::OpenConformToScale,
+            "'X' in Edit/melodic must be OpenConformToScale (was unbound before M5a-T4)"
+        );
+        // Drums — 'X' is not bound for drums.
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('X')), Mode::Edit, LaneKind::Drums),
+            Action::None,
+            "'X' in Edit/drums must remain Action::None"
+        );
+        // Lowercase 'x' is still CutStep globally.
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('x')), Mode::Edit, LaneKind::Melodic),
+            Action::CutStep,
+            "'x' must remain CutStep"
+        );
+    }
+
+    // ── M5a Task 5: QWERTY note-input sub-mode key bindings ───────────────────
+
+    /// 'I' (Shift+i) was unbound (Action::None) in Edit/melodic; now OpenNoteInput.
+    /// Melodic-only — drums return Action::None (drum lanes show a status toast via app).
+    /// Lowercase 'i' remains RestartLane (global, both kinds).
+    #[test]
+    fn shift_i_maps_to_open_note_input_in_edit_melodic() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('I')), Mode::Edit, LaneKind::Melodic),
+            Action::OpenNoteInput,
+            "'I' in Edit/melodic must be OpenNoteInput (was unbound before M5a-T5)"
+        );
+        // Drums — 'I' is not bound for drums, returns None (app handles the status toast).
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('I')), Mode::Edit, LaneKind::Drums),
+            Action::None,
+            "'I' in Edit/drums must remain Action::None"
+        );
+        // Lowercase 'i' is still RestartLane globally.
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('i')), Mode::Edit, LaneKind::Melodic),
+            Action::RestartLane,
+            "'i' must remain RestartLane"
+        );
+    }
+
+    /// In NoteInput mode, white-key 'a' → NoteInputPlace(0), black-key 'w' → NoteInputPlace(1).
+    #[test]
+    fn note_input_mode_white_and_black_keys() {
+        // White keys.
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('a')), Mode::NoteInput, LaneKind::Melodic),
+            Action::NoteInputPlace(0),
+            "'a' in NoteInput must be NoteInputPlace(0)"
+        );
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('s')), Mode::NoteInput, LaneKind::Melodic),
+            Action::NoteInputPlace(2)
+        );
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('k')), Mode::NoteInput, LaneKind::Melodic),
+            Action::NoteInputPlace(12),
+            "'k' (high C) must be NoteInputPlace(12)"
+        );
+        // Black keys.
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('w')), Mode::NoteInput, LaneKind::Melodic),
+            Action::NoteInputPlace(1),
+            "'w' in NoteInput must be NoteInputPlace(1)"
+        );
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('u')), Mode::NoteInput, LaneKind::Melodic),
+            Action::NoteInputPlace(10)
+        );
+    }
+
+    /// In NoteInput, Esc → CloseNoteInput.
+    #[test]
+    fn note_input_esc_closes() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Esc), Mode::NoteInput, LaneKind::Melodic),
+            Action::CloseNoteInput,
+            "Esc in NoteInput must be CloseNoteInput"
+        );
+    }
+
+    /// In NoteInput, z → NoteInputOctave(-1), x → NoteInputOctave(1).
+    #[test]
+    fn note_input_octave_keys() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('z')), Mode::NoteInput, LaneKind::Melodic),
+            Action::NoteInputOctave(-1),
+            "'z' in NoteInput must shift octave down"
+        );
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('x')), Mode::NoteInput, LaneKind::Melodic),
+            Action::NoteInputOctave(1),
+            "'x' in NoteInput must shift octave up"
+        );
+    }
+
+    /// In NoteInput, Backspace and Delete → NoteInputBackspace.
+    #[test]
+    fn note_input_backspace_and_delete() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Backspace), Mode::NoteInput, LaneKind::Melodic),
+            Action::NoteInputBackspace
+        );
+        assert_eq!(
+            key_to_action(k(KeyCode::Delete), Mode::NoteInput, LaneKind::Melodic),
+            Action::NoteInputBackspace
+        );
+    }
+
+    /// Global space (TogglePlay) and '!' (Panic) still fire in NoteInput mode.
+    #[test]
+    fn space_and_panic_still_global_in_note_input() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Char(' ')), Mode::NoteInput, LaneKind::Melodic),
+            Action::TogglePlay,
+            "space must still be TogglePlay in NoteInput"
+        );
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('!')), Mode::NoteInput, LaneKind::Melodic),
+            Action::Panic,
+            "'!' must still be Panic in NoteInput"
+        );
     }
 }

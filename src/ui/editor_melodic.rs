@@ -8,6 +8,7 @@ use ratatui::Frame;
 
 use crate::app::App;
 use crate::devices::profiles::{melodic_velocity, resolve_melodic_pitch};
+use crate::music::scale::{degree_label, note_name as scale_note_name};
 use crate::pattern::model::{MelodicNote, PatternData};
 use crate::ui::theme::{cursor_style, lane_color, note_name, playhead_style, vel_bar, vel_color};
 
@@ -27,7 +28,8 @@ pub fn render_melodic_editor(f: &mut Frame, area: Rect, app: &App) {
     // the committed lane pattern. The lane's profile/octave/transpose still drive layout.
     let pattern = app.display_pattern(app.focus);
     let len = pattern.step_count();
-    let root = lane.profile.root_note;
+    // Use the lane's effective root (per-lane override or profile root).
+    let root = lane.effective_root();
 
     // Polymeter: render the playhead at the focused lane's LOCAL step.
     let local_playhead = if len == 0 { 0 } else { app.playhead % len };
@@ -49,12 +51,15 @@ pub fn render_melodic_editor(f: &mut Frame, area: Rect, app: &App) {
     };
 
     let title = format!(
-        " EDIT · {} · \"{}\" · {} steps · ch{} · root {}{} ",
+        " EDIT · {} · \"{}\" · {} steps · ch{} · root {} · {} · Oct {:+} · Transp {:+}{} ",
         lane.profile.label,
         pattern.name,
         len,
         lane.profile.channel + 1,
         note_name(root),
+        lane.scale.name(),
+        lane.octave,
+        lane.transpose,
         scroll_indicator,
     );
 
@@ -168,10 +173,14 @@ pub fn render_melodic_editor(f: &mut Frame, area: Rect, app: &App) {
         Some(note) => {
             let pitch = resolve_melodic_pitch(root, note.semi, lane.transpose, lane.octave);
             let slide_indicator = if note.slide { " · ~slide" } else { "" };
+            // Show the resolved absolute pitch name and its scale degree.
+            let pitch_name = scale_note_name(pitch);
+            let degree = degree_label(pitch, root, lane.scale);
             format!(
-                "Step {} · {} · vel {:.2} · len {:.1}{} · Probability {}% [p/P] · Ratchet x{} [y/Y]",
+                "Step {} · {} ({}) · vel {:.2} · len {:.1}{} · Probability {}% [p/P] · Ratchet x{} [y/Y]",
                 app.cur_col + 1,
-                note_name(pitch),
+                pitch_name,
+                degree,
                 note.vel,
                 note.len,
                 slide_indicator,
@@ -653,5 +662,88 @@ mod tests {
             "detail must contain 'Probability'"
         );
         assert!(whole.contains("Ratchet"), "detail must contain 'Ratchet'");
+    }
+
+    // ── M5a Task 3: scale name, root, and degree display ─────────────────────
+
+    #[test]
+    fn title_shows_scale_name_and_root() {
+        use crate::music::scale::Scale;
+        let mut set = Set::default_set(default_profiles());
+        set.lanes[1].scale = Scale::Major;
+        // Set a root override so we know what to check.
+        set.lanes[1].root = Some(60); // C4
+        let mut app = App::new(set, empty_library());
+        app.focus = 1;
+        let backend = TestBackend::new(160, 10);
+        let mut term = Terminal::new(backend).unwrap();
+        term.draw(|f| render_melodic_editor(f, f.area(), &app))
+            .unwrap();
+        let whole: String = term
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(
+            whole.contains("Major"),
+            "title must show scale name 'Major', got: {whole:?}"
+        );
+        assert!(
+            whole.contains("C4"),
+            "title must show root note name 'C4', got: {whole:?}"
+        );
+    }
+
+    #[test]
+    fn detail_shows_note_name_and_degree() {
+        use crate::music::scale::Scale;
+        // Place a note at semi=0 on a Major lane — degree should be "1".
+        let mut set = Set::default_set(default_profiles());
+        set.lanes[1].scale = Scale::Major;
+        set.lanes[1].root = Some(60); // C4 root
+        set.lanes[1].octave = 0;
+        set.lanes[1].transpose = 0;
+        let mut steps: Vec<Option<MelodicNote>> = vec![None; 16];
+        // semi=0 with root=60 → pitch=60 (C4). In C Major, degree 1.
+        steps[0] = Some(MelodicNote {
+            semi: 0,
+            vel: 1.0,
+            slide: false,
+            len: 1.0,
+            prob: 1.0,
+            ratchet: 1,
+        });
+        set.lanes[1].pattern = Pattern {
+            name: "scale-test".to_string(),
+            desc: String::new(),
+            length: 16,
+            data: PatternData::Melodic(steps),
+            id: crate::persist::Id::nil(),
+        };
+        let mut app = App::new(set, empty_library());
+        app.focus = 1;
+        app.cur_col = 0;
+        let backend = TestBackend::new(160, 10);
+        let mut term = Terminal::new(backend).unwrap();
+        term.draw(|f| render_melodic_editor(f, f.area(), &app))
+            .unwrap();
+        let whole: String = term
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        // Detail should contain the note name "C4" and degree "1".
+        assert!(
+            whole.contains("C4"),
+            "detail must show resolved note name 'C4', got: {whole:?}"
+        );
+        assert!(
+            whole.contains('1'),
+            "detail must show degree '1' for root degree in Major, got: {whole:?}"
+        );
     }
 }
