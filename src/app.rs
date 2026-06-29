@@ -1987,8 +1987,18 @@ impl App {
                 }
             }
             Action::NameCancel => {
-                self.mode = Mode::Edit;
+                let purpose = match &self.mode {
+                    Mode::NameEntry(p) => p.clone(),
+                    _ => {
+                        self.name_input.clear();
+                        return cmds;
+                    }
+                };
                 self.name_input.clear();
+                self.mode = match purpose {
+                    NamePurpose::RenameScene => Mode::Scenes,
+                    _ => Mode::Edit,
+                };
             }
             // ── Confirm dialog ────────────────────────────────────────────────
             Action::OpenConfirm(action) => {
@@ -2010,7 +2020,17 @@ impl App {
                 cmds.extend(self.apply(sub));
             }
             Action::ConfirmNo => {
-                self.mode = Mode::Edit;
+                let action = match &self.mode {
+                    Mode::Confirm(a) => a.clone(),
+                    _ => {
+                        self.set_status("Cancelled");
+                        return cmds;
+                    }
+                };
+                self.mode = match action {
+                    ConfirmAction::DeleteScene(_) => Mode::Scenes,
+                    _ => Mode::Edit,
+                };
                 self.set_status("Cancelled");
             }
             // ── Set-browser management ────────────────────────────────────────
@@ -8997,8 +9017,8 @@ mod tests {
         let cmds = app.apply(Action::RecallSelectedScene);
         // Transport is stopped so recall applies immediately (emits LoadPattern commands).
         assert!(
-            !cmds.is_empty() || app.set.scenes.is_empty(),
-            "RecallSelectedScene must produce commands or be graceful on empty"
+            !cmds.is_empty(),
+            "RecallSelectedScene on a captured scene must produce commands (LoadPattern/state); got none"
         );
     }
 
@@ -9113,5 +9133,65 @@ mod tests {
         assert_eq!(app.mode, Mode::Scenes);
         app.apply(Action::CloseScenes);
         assert_eq!(app.mode, Mode::Edit);
+    }
+
+    #[test]
+    fn cancel_rename_scene_returns_to_scenes() {
+        let mut app = new_app();
+        app.apply(Action::CaptureScene);
+        app.apply(Action::OpenScenes);
+        app.scene_sel = 0;
+        app.apply(Action::RenameScene);
+        assert_eq!(app.mode, Mode::NameEntry(NamePurpose::RenameScene));
+        // Pressing Esc (NameCancel) must return to Mode::Scenes, not Mode::Edit.
+        app.apply(Action::NameCancel);
+        assert_eq!(
+            app.mode,
+            Mode::Scenes,
+            "cancel on RenameScene must return to Mode::Scenes, not Edit"
+        );
+    }
+
+    #[test]
+    fn confirm_no_delete_scene_returns_to_scenes() {
+        let mut app = new_app();
+        app.apply(Action::CaptureScene);
+        app.apply(Action::OpenScenes);
+        app.scene_sel = 0;
+        app.apply(Action::DeleteScene);
+        assert_eq!(app.mode, Mode::Confirm(ConfirmAction::DeleteScene(0)));
+        // Pressing 'n' (ConfirmNo) must return to Mode::Scenes, not Mode::Edit.
+        app.apply(Action::ConfirmNo);
+        assert_eq!(
+            app.mode,
+            Mode::Scenes,
+            "ConfirmNo on DeleteScene must return to Mode::Scenes, not Edit"
+        );
+        // Scene must be untouched.
+        assert_eq!(
+            app.set.scenes.len(),
+            1,
+            "scene must not be deleted on cancel"
+        );
+    }
+
+    #[test]
+    fn validate_reports_missing_assignments() {
+        let mut app = new_app();
+        app.apply(Action::CaptureScene);
+        app.apply(Action::OpenScenes);
+        app.scene_sel = 0;
+        // Point lane 0's assignment at an id that does not exist in the set or library.
+        app.set.scenes[0].assignments[0].pattern = PatternRef::User(crate::persist::mint_id());
+        app.apply(Action::ValidateScene);
+        assert!(
+            !app.scene_issues.is_empty(),
+            "missing PatternRef::User must be reported in scene_issues; got empty"
+        );
+        assert!(
+            app.scene_issues.contains(&0),
+            "lane 0 must be identified as missing; got: {:?}",
+            app.scene_issues
+        );
     }
 }
