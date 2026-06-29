@@ -1072,6 +1072,266 @@ fn chord_survives_save_load_and_plays_with_clean_release() {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
+// 9. Generative tool: non-destructive preview → commit → undo roundtrip.
+//    Features combined: generative pattern generation (M9) × undo/redo stack ×
+//    scale-constrained melodic lane × TempTransform preview path.
+//
+//    Assertions:
+//      (a) After OpenGenerative + adjustments: temp_transform is set, undo stack
+//          is UNCHANGED (no snapshot during preview), and temp_transform holds
+//          the original so the engine can play the live candidate.
+//      (b) After GenCommit: lane pattern differs from original, EVERY generated
+//          melodic pitch is in the lane's Major scale, exactly ONE new undo
+//          entry was added, and mode returns to Edit.
+//      (c) Action::Undo restores the original pattern exactly.
+//      (d) Vary case: mutate=0 ⇒ committed pattern is identical to source;
+//          mutate=100 ⇒ committed pattern differs from source.
+// ═════════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn generative_preview_commit_undo_roundtrip() {
+    use midip::app::{Action, App, GenField, Mode};
+    use midip::music::scale::Scale;
+
+    // ── 1. Build a Set with one melodic lane using Major scale ────────────────
+    let profs = profiles::default_profiles();
+    // profs[2] is S-1 SYNTH (poly == true), suitable as a melodic lane.
+    let synth_prof = profs[2];
+    assert!(synth_prof.poly, "fixture assumes profs[2] is poly");
+
+    // Source pattern: a simple three-note figure that generate can mutate.
+    let original_pat = melodic_pattern("orig", &[(0, 0, 0.5), (4, 5, 0.5), (8, 7, 0.5)]);
+
+    let melodic_lane = Lane {
+        profile: synth_prof,
+        pattern: original_pat.clone(),
+        mute: false,
+        solo: false,
+        transpose: 0,
+        octave: 0,
+        route: None,
+        muted_voices: Vec::new(),
+        scale: Scale::Major,
+        root: None,
+    };
+
+    let set = Set {
+        name: "gen-test".into(),
+        bpm: 120.0,
+        swing: 0.5,
+        lanes: vec![melodic_lane],
+        id: midip::persist::Id::nil(),
+        scenes: Vec::new(),
+        chains: Vec::new(),
+    };
+
+    let mut app = App::new(set, test_library());
+    app.apply(Action::FocusLane(0));
+
+    let undo_before = app.undo.len();
+
+    // ── 2. Open generative tool — must be non-destructive ─────────────────────
+    app.apply(Action::OpenGenerative);
+
+    // (a) temp_transform must be set; mode must be Generative.
+    assert!(
+        app.temp_transform.is_some(),
+        "OpenGenerative must set temp_transform"
+    );
+    assert_eq!(
+        app.mode,
+        Mode::Generative,
+        "OpenGenerative must switch mode to Generative"
+    );
+
+    // (a) Undo stack must NOT have grown — preview is non-destructive.
+    assert_eq!(
+        app.undo.len(),
+        undo_before,
+        "OpenGenerative must not push to undo stack"
+    );
+
+    // (a) temp_transform must preserve the original pattern.
+    let original_in_tt = app.temp_transform.as_ref().unwrap().original.clone();
+    assert_eq!(
+        original_in_tt, original_pat,
+        "temp_transform must preserve original pattern"
+    );
+
+    // Adjust parameters; none of these should snapshot.
+    app.apply(Action::GenAdjust {
+        field: GenField::Density,
+        delta: 30,
+    });
+    app.apply(Action::GenAdjust {
+        field: GenField::Range,
+        delta: -4,
+    });
+    assert_eq!(
+        app.undo.len(),
+        undo_before,
+        "GenAdjust must not push to undo stack"
+    );
+
+    app.apply(Action::GenReroll);
+    assert_eq!(
+        app.undo.len(),
+        undo_before,
+        "GenReroll must not push to undo stack"
+    );
+
+    // ── 3. Commit ─────────────────────────────────────────────────────────────
+    app.apply(Action::GenCommit);
+
+    // (b) Mode returns to Edit; temp_transform cleared.
+    assert_eq!(app.mode, Mode::Edit, "GenCommit must restore Mode::Edit");
+    assert!(
+        app.temp_transform.is_none(),
+        "GenCommit must clear temp_transform"
+    );
+
+    // (b) Exactly one new undo entry.
+    assert_eq!(
+        app.undo.len(),
+        undo_before + 1,
+        "GenCommit must push exactly one entry to undo stack"
+    );
+
+    // (b) Lane pattern has changed from the original.
+    let committed_pat = app.set.lanes[0].pattern.clone();
+    assert_ne!(
+        committed_pat, original_pat,
+        "GenCommit must produce a pattern different from the original"
+    );
+
+    // (b) Every generated melodic pitch must be in the Major scale.
+    //     Major scale degrees: [0, 2, 4, 5, 7, 9, 11].
+    let major_degrees = Scale::Major.degrees();
+    if let midip::pattern::model::PatternData::Melodic(steps) = &committed_pat.data {
+        for (i, step) in steps.iter().enumerate() {
+            for note in step.0.iter() {
+                // semi is relative to root (0). Fold to [0, 12) pitch class.
+                let pc = note.semi.rem_euclid(12) as u8;
+                assert!(
+                    major_degrees.contains(&pc),
+                    "step {i} note semi={} (pc={pc}) is not in Major scale",
+                    note.semi
+                );
+            }
+        }
+    } else {
+        panic!("lane 0 must have Melodic pattern data after GenCommit");
+    }
+
+    // ── 4. Undo restores original ─────────────────────────────────────────────
+    app.apply(Action::Undo);
+    assert_eq!(
+        app.set.lanes[0].pattern, original_pat,
+        "Action::Undo must restore the original pattern exactly"
+    );
+    assert_eq!(
+        app.undo.len(),
+        undo_before,
+        "after Undo the stack depth must return to pre-commit depth"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 9b. Vary mode: mutate=0 ⇒ identity; mutate=100 ⇒ changed.
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn generative_vary_identity_and_mutation() {
+    use midip::app::{Action, App, GenField, Mode};
+    use midip::music::scale::Scale;
+    use midip::pattern::generate::GenMode;
+
+    let profs = profiles::default_profiles();
+    let synth_prof = profs[2];
+    assert!(synth_prof.poly, "fixture assumes profs[2] is poly");
+
+    // Source pattern with several active steps so Vary has material to mutate.
+    let original_pat = melodic_pattern(
+        "vary-src",
+        &[
+            (0, 0, 0.5),
+            (2, 2, 0.5),
+            (4, 4, 0.5),
+            (6, 5, 0.5),
+            (8, 7, 0.5),
+            (10, 9, 0.5),
+            (12, 11, 0.5),
+            (14, 0, 0.5),
+        ],
+    );
+
+    let make_app = || {
+        let melodic_lane = Lane {
+            profile: synth_prof,
+            pattern: original_pat.clone(),
+            mute: false,
+            solo: false,
+            transpose: 0,
+            octave: 0,
+            route: None,
+            muted_voices: Vec::new(),
+            scale: Scale::Major,
+            root: None,
+        };
+        let set = Set {
+            name: "vary-test".into(),
+            bpm: 120.0,
+            swing: 0.5,
+            lanes: vec![melodic_lane],
+            id: midip::persist::Id::nil(),
+            scenes: Vec::new(),
+            chains: Vec::new(),
+        };
+        let mut a = App::new(set, test_library());
+        a.apply(Action::FocusLane(0));
+        a
+    };
+
+    // ── (a) mutate=0 in Vary mode ⇒ committed pattern equals source ───────────
+    {
+        let mut app = make_app();
+        app.apply(Action::OpenGenerative);
+        app.apply(Action::GenSetMode(GenMode::Vary));
+        // Default mutate is 25; delta=-100 clamps to 0.
+        app.apply(Action::GenAdjust {
+            field: GenField::Mutate,
+            delta: -100,
+        });
+        assert_eq!(app.gen_params.mutate, 0, "mutate must clamp to 0");
+        app.apply(Action::GenCommit);
+        assert_eq!(app.mode, Mode::Edit, "must return to Edit after commit");
+        // With mutate=0, Vary is an identity: committed pattern == original.
+        assert_eq!(
+            app.set.lanes[0].pattern, original_pat,
+            "Vary with mutate=0 must be an identity (pattern unchanged)"
+        );
+    }
+
+    // ── (b) mutate=100 in Vary mode ⇒ committed pattern differs ──────────────
+    {
+        let mut app = make_app();
+        app.apply(Action::OpenGenerative);
+        app.apply(Action::GenSetMode(GenMode::Vary));
+        // Default mutate is 25; delta=+100 clamps to 100.
+        app.apply(Action::GenAdjust {
+            field: GenField::Mutate,
+            delta: 100,
+        });
+        assert_eq!(app.gen_params.mutate, 100, "mutate must clamp to 100");
+        app.apply(Action::GenCommit);
+        assert_ne!(
+            app.set.lanes[0].pattern, original_pat,
+            "Vary with mutate=100 must produce a different pattern"
+        );
+    }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
 // 9. Scene lifecycle: capture → save → load → recall (M6 close-out).
 //    Features combined: Scene::capture_scene × set save/load (serde + validate/
 //    repair) × stopped-transport RecallScene (immediate apply) × per-lane
