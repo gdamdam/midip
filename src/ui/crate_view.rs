@@ -7,7 +7,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 
-use crate::app::App;
+use crate::app::{App, CrateIssue};
 use crate::pattern::refs::resolve_pattern_ref;
 
 /// Number of entry rows visible before scrolling.
@@ -44,7 +44,7 @@ pub fn render_crate_view(f: &mut Frame, area: Rect, app: &App) {
 
     // Navigation hint row.
     lines.push(Line::from(Span::raw(
-        "[↑↓]select [enter]launch [a]audition [f]fav [C]cancel-q [←→]crate [V/esc]close",
+        "[↑↓]select [enter]launch [a]audition [f]fav [C]cancel-q [←→]crate [z]validate [V/esc]close",
     )));
 
     let entries = app
@@ -113,13 +113,35 @@ pub fn render_crate_view(f: &mut Frame, area: Rect, app: &App) {
         ))));
     }
 
+    // Validation results (shown after [z] validate is run; hidden when empty).
+    if !app.crate_issues.is_empty() {
+        lines.push(Line::from(Span::styled(
+            format!("── {} issue(s) ──", app.crate_issues.len()),
+            Style::default().add_modifier(Modifier::BOLD),
+        )));
+        for issue in &app.crate_issues {
+            let text = match issue {
+                CrateIssue::MissingPattern { entry_idx, name } => {
+                    format!("  [{}] missing: {}", entry_idx + 1, name)
+                }
+                CrateIssue::UnavailableTarget { entry_idx, lane } => {
+                    format!("  [{}] lane {} disconnected", entry_idx + 1, lane)
+                }
+            };
+            lines.push(Line::from(Span::styled(
+                text,
+                Style::default().add_modifier(Modifier::DIM),
+            )));
+        }
+    }
+
     f.render_widget(Paragraph::new(lines), inner);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::{App, Mode};
+    use crate::app::{App, CrateIssue, Mode};
     use crate::devices::profiles::default_profiles;
     use crate::pattern::library::{GenreMap, Library};
     use crate::pattern::model::Set;
@@ -256,5 +278,44 @@ mod tests {
         app.mode = Mode::CrateView;
         let s = render_to_string(&app);
         let _ = s;
+    }
+
+    #[test]
+    fn render_shows_validation_issues_after_validate() {
+        let set = Set::default_set(default_profiles());
+        let mut app = App::new(set, empty_library());
+        let idx = app.crates.add_crate("Validate Test".to_string());
+        app.crates.add_entry(
+            idx,
+            CrateEntry {
+                pattern: PatternRef::Vendored {
+                    role: "drums".to_string(),
+                    genre: "techno".to_string(),
+                    name: "Ghost Pattern".to_string(),
+                },
+                label: None,
+            },
+        );
+        // Inject a MissingPattern issue directly (simulate post-validate state).
+        app.crate_issues = vec![CrateIssue::MissingPattern {
+            entry_idx: 0,
+            name: "Ghost Pattern".to_string(),
+        }];
+        app.mode = Mode::CrateView;
+        let s = render_to_string(&app);
+        assert!(
+            s.contains("issue") || s.contains("missing"),
+            "must show validation issues; got: {s:?}"
+        );
+    }
+
+    #[test]
+    fn render_shows_validate_hint_in_nav() {
+        let app = app_with_crate();
+        let s = render_to_string(&app);
+        assert!(
+            s.contains('z') || s.contains("validate"),
+            "nav hint must mention validate key; got: {s:?}"
+        );
     }
 }

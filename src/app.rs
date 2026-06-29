@@ -16,6 +16,15 @@ use crate::pattern::model::{
 use crate::pattern::refs::PatternRef;
 use crate::pattern::store::{CrateEntry, CrateIndex, Favorites};
 
+/// A validation issue found in a crate.
+#[derive(Clone, Debug, PartialEq)]
+pub enum CrateIssue {
+    /// The entry's PatternRef could not be resolved to a Pattern.
+    MissingPattern { entry_idx: usize, name: String },
+    /// The entry resolves but its role-matched lane's device is known-disconnected.
+    UnavailableTarget { entry_idx: usize, lane: usize },
+}
+
 /// Purpose of a pending name-entry dialog.
 #[derive(Clone, Debug, PartialEq)]
 pub enum NamePurpose {
@@ -229,6 +238,8 @@ pub enum Action {
     AuditionCrateEntry,
     /// Toggle the selected crate entry's PatternRef in/out of favorites.
     FavoriteCrateEntry,
+    /// Run pre-performance validation on the current crate; stores results and shows summary.
+    ValidateCrate,
     None,
 }
 
@@ -343,6 +354,10 @@ pub struct App {
     pub crate_sel: usize,
     /// Index of the selected entry within the current crate.
     pub crate_entry_sel: usize,
+
+    // --- M4a Task 6: pre-performance validation ---
+    /// Issues found by the last `ValidateCrate` run. Empty until validation is run.
+    pub crate_issues: Vec<CrateIssue>,
 }
 
 /// Default melodic velocity multiplier when placing a note (1.0 -> MIDI 100).
@@ -408,6 +423,7 @@ impl App {
             crates: CrateIndex::default(),
             crate_sel: 0,
             crate_entry_sel: 0,
+            crate_issues: Vec::new(),
         }
     }
 
@@ -437,24 +453,18 @@ impl App {
         let _ = crate::pattern::store::save_crates(&crate::config::data_dir(), &self.crates);
     }
 
-    /// Resolve `r` and load/queue it to the role-matched lane.
+    /// Determine the role-matched target lane index for a resolved pattern ref + pattern.
     ///
-    /// Lane targeting:
-    /// - `Vendored`: `role_lane_hint()` (drums→0, bass→1, synth→2); unknown → focused lane.
-    /// - `User`: resolved pattern's `kind()` — Drums → first drum lane; Melodic → focused lane
-    ///   if it is melodic, else the first melodic lane.
-    ///
-    /// Returns empty vec and sets status "missing pattern" when the ref cannot be resolved.
-    pub fn launch_ref(&mut self, r: &PatternRef) -> Vec<UiCommand> {
-        let user_dir = crate::config::data_dir().join("patterns");
-        let Some(pat) = crate::pattern::refs::resolve_pattern_ref(r, &self.library, &user_dir)
-        else {
-            self.set_status("missing pattern");
-            return vec![];
-        };
-
+    /// This is the shared lane-targeting logic used by both `launch_ref` and `validate_crate`.
+    /// - `Vendored`: uses `role_lane_hint()`, clamped to available lanes.
+    /// - `User`: Drums → first drum lane; Melodic → focused lane if melodic, else first melodic.
+    pub fn target_lane_for(&self, r: &PatternRef, pat: &Pattern) -> Option<usize> {
+        let n = self.set.lanes.len();
+        if n == 0 {
+            return None;
+        }
         let lane = if let Some(hint) = r.role_lane_hint() {
-            hint.min(self.set.lanes.len().saturating_sub(1))
+            hint.min(n - 1)
         } else {
             match pat.kind() {
                 LaneKind::Drums => self
@@ -478,6 +488,69 @@ impl App {
                 }
             }
         };
+        Some(lane)
+    }
+
+    /// Validate all entries in the crate at `crate_idx`.
+    ///
+    /// For each entry:
+    /// - If the `PatternRef` cannot be resolved → `CrateIssue::MissingPattern`.
+    /// - If the resolved pattern's target lane device is known-disconnected →
+    ///   `CrateIssue::UnavailableTarget`.
+    ///
+    /// Returns an empty vec when the crate is valid or `crate_idx` is out of bounds.
+    pub fn validate_crate(&self, crate_idx: usize) -> Vec<CrateIssue> {
+        let Some(cr) = self.crates.crates.get(crate_idx) else {
+            return vec![];
+        };
+        let user_dir = crate::config::data_dir().join("patterns");
+        let mut issues = Vec::new();
+        for (entry_idx, entry) in cr.entries.iter().enumerate() {
+            let name = entry
+                .label
+                .clone()
+                .unwrap_or_else(|| entry.pattern.display_name());
+            match crate::pattern::refs::resolve_pattern_ref(
+                &entry.pattern,
+                &self.library,
+                &user_dir,
+            ) {
+                None => issues.push(CrateIssue::MissingPattern { entry_idx, name }),
+                Some(pat) => {
+                    if let Some(lane) = self.target_lane_for(&entry.pattern, &pat) {
+                        // device_status: (connected, port_name). We only flag as unavailable
+                        // when we have received at least one DeviceStatus event for that lane
+                        // (port name is non-empty) AND it reported disconnected. The initial
+                        // (false, "") means "no status received yet" — not an error.
+                        if let Some((connected, port)) = self.device_status.get(lane) {
+                            if !connected && !port.is_empty() {
+                                issues.push(CrateIssue::UnavailableTarget { entry_idx, lane });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        issues
+    }
+
+    /// Resolve `r` and load/queue it to the role-matched lane.
+    ///
+    /// Lane targeting:
+    /// - `Vendored`: `role_lane_hint()` (drums→0, bass→1, synth→2); unknown → focused lane.
+    /// - `User`: resolved pattern's `kind()` — Drums → first drum lane; Melodic → focused lane
+    ///   if it is melodic, else the first melodic lane.
+    ///
+    /// Returns empty vec and sets status "missing pattern" when the ref cannot be resolved.
+    pub fn launch_ref(&mut self, r: &PatternRef) -> Vec<UiCommand> {
+        let user_dir = crate::config::data_dir().join("patterns");
+        let Some(pat) = crate::pattern::refs::resolve_pattern_ref(r, &self.library, &user_dir)
+        else {
+            self.set_status("missing pattern");
+            return vec![];
+        };
+
+        let lane = self.target_lane_for(r, &pat).unwrap_or(self.focus);
 
         let name = pat.name.clone();
         self.snapshot();
@@ -1641,6 +1714,16 @@ impl App {
                     } else {
                         self.set_status(format!("unfavorited {}", name));
                     }
+                }
+            }
+            // ── M4a Task 6: pre-performance validation ────────────────────────
+            Action::ValidateCrate => {
+                self.crate_issues = self.validate_crate(self.crate_sel);
+                let n = self.crate_issues.len();
+                if n == 0 {
+                    self.set_status("Crate OK");
+                } else {
+                    self.set_status(format!("{} issue(s) found", n));
                 }
             }
             Action::None => {}
@@ -5947,6 +6030,176 @@ mod tests {
             app.status.contains("missing"),
             "status must mention missing: {}",
             app.status
+        );
+    }
+
+    // ── M4a Task 6: pre-performance validation tests ──────────────────────────
+
+    fn app_with_good_crate() -> App {
+        // Library has drums/techno/lib-drum; build a crate referencing it.
+        let set = Set::default_set(crate::devices::profiles::default_profiles());
+        let lib = test_library();
+        let mut app = App::new(set, lib);
+        let idx = app.crates.add_crate("Good".to_string());
+        app.crates.add_entry(
+            idx,
+            crate::pattern::store::CrateEntry {
+                pattern: crate::pattern::refs::PatternRef::Vendored {
+                    role: "drums".to_string(),
+                    genre: "techno".to_string(),
+                    name: "lib-drum".to_string(),
+                },
+                label: None,
+            },
+        );
+        app
+    }
+
+    #[test]
+    fn validate_clean_crate_has_no_issues() {
+        let app = app_with_good_crate();
+        let issues = app.validate_crate(0);
+        assert!(
+            issues.is_empty(),
+            "resolvable crate must have no issues; got: {:?}",
+            issues
+        );
+    }
+
+    #[test]
+    fn validate_reports_missing_ref() {
+        let set = Set::default_set(crate::devices::profiles::default_profiles());
+        let mut app = App::new(set, Library::empty());
+        let idx = app.crates.add_crate("Bad".to_string());
+        app.crates.add_entry(
+            idx,
+            crate::pattern::store::CrateEntry {
+                pattern: crate::pattern::refs::PatternRef::Vendored {
+                    role: "drums".to_string(),
+                    genre: "techno".to_string(),
+                    name: "nonexistent".to_string(),
+                },
+                label: None,
+            },
+        );
+        let issues = app.validate_crate(0);
+        assert_eq!(issues.len(), 1, "must report exactly one issue");
+        assert!(
+            matches!(issues[0], CrateIssue::MissingPattern { entry_idx: 0, .. }),
+            "must be MissingPattern for entry 0; got: {:?}",
+            issues[0]
+        );
+    }
+
+    #[test]
+    fn validate_reports_missing_user_ref() {
+        let set = Set::default_set(crate::devices::profiles::default_profiles());
+        let mut app = App::new(set, Library::empty());
+        let idx = app.crates.add_crate("UserBad".to_string());
+        // User ref with a random id that won't be in the user pattern dir.
+        app.crates.add_entry(
+            idx,
+            crate::pattern::store::CrateEntry {
+                pattern: crate::pattern::refs::PatternRef::User(crate::persist::Id::nil()),
+                label: None,
+            },
+        );
+        let issues = app.validate_crate(0);
+        assert_eq!(issues.len(), 1, "unknown user ref must be missing");
+        assert!(
+            matches!(issues[0], CrateIssue::MissingPattern { entry_idx: 0, .. }),
+            "must be MissingPattern; got: {:?}",
+            issues[0]
+        );
+    }
+
+    #[test]
+    fn validate_reports_unavailable_target() {
+        let mut app = app_with_good_crate();
+        // Mark lane 0 (drums) as known-disconnected (non-empty port = status received).
+        app.device_status[0] = (false, "TestPort".to_string());
+        let issues = app.validate_crate(0);
+        assert_eq!(issues.len(), 1, "disconnected lane must produce one issue");
+        assert!(
+            matches!(
+                issues[0],
+                CrateIssue::UnavailableTarget {
+                    entry_idx: 0,
+                    lane: 0
+                }
+            ),
+            "must be UnavailableTarget lane 0; got: {:?}",
+            issues[0]
+        );
+    }
+
+    #[test]
+    fn validate_out_of_bounds_crate_returns_empty() {
+        let set = Set::default_set(crate::devices::profiles::default_profiles());
+        let app = App::new(set, Library::empty());
+        let issues = app.validate_crate(99);
+        assert!(
+            issues.is_empty(),
+            "out-of-bounds crate must return empty issues"
+        );
+    }
+
+    #[test]
+    fn validate_crate_action_sets_status_ok() {
+        let mut app = app_with_good_crate();
+        // Default device_status is (false, "") = no status received yet, which is not an error.
+        app.crate_sel = 0;
+        app.apply(Action::ValidateCrate);
+        assert!(
+            app.status.contains("OK") || app.status.contains("ok") || app.status.contains("issue"),
+            "status must summarize validation; got: {}",
+            app.status
+        );
+    }
+
+    #[test]
+    fn validate_crate_action_issues_stored() {
+        let set = Set::default_set(crate::devices::profiles::default_profiles());
+        let mut app = App::new(set, Library::empty());
+        let idx = app.crates.add_crate("Bad".to_string());
+        app.crates.add_entry(
+            idx,
+            crate::pattern::store::CrateEntry {
+                pattern: crate::pattern::refs::PatternRef::Vendored {
+                    role: "drums".to_string(),
+                    genre: "techno".to_string(),
+                    name: "ghost".to_string(),
+                },
+                label: None,
+            },
+        );
+        app.crate_sel = 0;
+        app.apply(Action::ValidateCrate);
+        assert!(
+            !app.crate_issues.is_empty(),
+            "crate_issues must be populated after ValidateCrate"
+        );
+        assert!(
+            app.status.contains("issue"),
+            "status must mention issues; got: {}",
+            app.status
+        );
+    }
+
+    #[test]
+    fn validate_key_z_maps_to_validate_crate_in_crate_view() {
+        use crate::input::key_to_action;
+        use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
+        let k = |code| KeyEvent {
+            code,
+            modifiers: KeyModifiers::NONE,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        };
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('z')), Mode::CrateView, LaneKind::Drums),
+            Action::ValidateCrate,
+            "'z' must map to ValidateCrate in CrateView"
         );
     }
 }

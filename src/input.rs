@@ -151,6 +151,7 @@ pub fn key_to_action(key: KeyEvent, mode: Mode, kind: LaneKind) -> Action {
                 KeyCode::Char('a') => Action::AuditionCrateEntry,
                 KeyCode::Char('C') => Action::CancelQueue,
                 KeyCode::Char('f') => Action::FavoriteCrateEntry,
+                KeyCode::Char('z') => Action::ValidateCrate,
                 KeyCode::Esc | KeyCode::Char('V') => Action::CloseCrateView,
                 _ => Action::None,
             };
