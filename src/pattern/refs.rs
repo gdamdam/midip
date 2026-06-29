@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use crate::pattern::library::Library;
-use crate::pattern::model::Pattern;
+use crate::pattern::model::{Pattern, Scene};
 use crate::pattern::store::{list_user_patterns, load_user_pattern};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -56,6 +56,60 @@ pub fn resolve_pattern_ref(r: &PatternRef, lib: &Library, user_dir: &Path) -> Op
             None
         }
     }
+}
+
+/// Resolve each assignment in `scene` to a `Pattern`.
+///
+/// For each assignment, the resolution order is:
+/// 1. Search `inline_patterns` by id (patterns already held in memory, e.g. from `Set::lanes`).
+/// 2. For `PatternRef::Vendored`: look up in `lib`.
+/// 3. For `PatternRef::User`: the assignment is missing.
+///
+/// Returns one `Result<Pattern, ()>` per assignment in order. `Err(())` means the
+/// pattern could not be resolved; the caller (Task 2/3) should warn and skip that lane.
+/// This function is pure — it never mutates the set or launches anything.
+pub fn resolve_scene(
+    scene: &Scene,
+    lib: &Library,
+    inline_patterns: &[Pattern],
+) -> Vec<Result<Pattern, ()>> {
+    scene
+        .assignments
+        .iter()
+        .map(|a| match &a.pattern {
+            PatternRef::Vendored { role, genre, name } => {
+                // Check inline first (covers user-overridden vendored patterns in the set),
+                // then fall back to the vendored library.
+                inline_patterns
+                    .iter()
+                    .find(|p| &p.name == name)
+                    .cloned()
+                    .or_else(|| lib.find(role, genre, name).cloned())
+                    .ok_or(())
+            }
+            PatternRef::User(id) => inline_patterns
+                .iter()
+                .find(|p| &p.id == id)
+                .cloned()
+                .ok_or(()),
+        })
+        .collect()
+}
+
+/// Resolve each assignment in `scene` using a file-backed user-pattern directory.
+///
+/// Same semantics as `resolve_scene` but searches `user_dir` on disk instead of
+/// an in-memory slice. Suitable for contexts where the set is not fully loaded.
+pub fn resolve_scene_from_dir(
+    scene: &Scene,
+    lib: &Library,
+    user_dir: &Path,
+) -> Vec<Result<Pattern, ()>> {
+    scene
+        .assignments
+        .iter()
+        .map(|a| resolve_pattern_ref(&a.pattern, lib, user_dir).ok_or(()))
+        .collect()
 }
 
 #[cfg(test)]

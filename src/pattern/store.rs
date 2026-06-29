@@ -4,7 +4,7 @@ use anyhow::{anyhow, Context};
 use serde::{Deserialize, Serialize};
 
 use crate::devices::profiles::profile_by_id;
-use crate::pattern::model::{Lane, LaneRoute, Pattern, Set};
+use crate::pattern::model::{Lane, LaneRoute, Pattern, Scene, Set};
 use crate::pattern::refs::PatternRef;
 use crate::persist;
 
@@ -77,6 +77,9 @@ struct SetDto {
     bpm: f64,
     swing: f32,
     lanes: Vec<LaneDto>,
+    /// Scenes stored in the set. Absent in old files → serde default `[]`.
+    #[serde(default)]
+    scenes: Vec<Scene>,
 }
 
 impl From<&Lane> for LaneDto {
@@ -105,6 +108,7 @@ impl From<&Set> for SetDto {
             bpm: set.bpm,
             swing: set.swing,
             lanes: set.lanes.iter().map(LaneDto::from).collect(),
+            scenes: set.scenes.clone(),
         }
     }
 }
@@ -229,6 +233,7 @@ pub fn load_set_with_report(path: &Path) -> anyhow::Result<(Set, Vec<String>)> {
         swing: dto.swing,
         lanes,
         id: dto.id,
+        scenes: dto.scenes,
     };
     let notes = validate_and_repair(&mut set);
     Ok((set, notes))
@@ -348,6 +353,28 @@ pub fn validate_and_repair(set: &mut Set) -> Vec<String> {
         let pat_notes = validate_and_repair_pattern(&mut lane.pattern);
         for note in pat_notes {
             notes.push(format!("lane {} {}", lane_num, note));
+        }
+    }
+
+    // ── scenes ────────────────────────────────────────────────────────────────
+    for (scene_idx, scene) in set.scenes.iter_mut().enumerate() {
+        for (assign_idx, a) in scene.assignments.iter_mut().enumerate() {
+            let orig_transpose = a.transpose;
+            a.transpose = a.transpose.clamp(-24, 24);
+            if a.transpose != orig_transpose {
+                notes.push(format!(
+                    "scene {} assignment {} transpose clamped {}→{}",
+                    scene_idx, assign_idx, orig_transpose, a.transpose
+                ));
+            }
+            let orig_octave = a.octave;
+            a.octave = a.octave.clamp(-4, 4);
+            if a.octave != orig_octave {
+                notes.push(format!(
+                    "scene {} assignment {} octave clamped {}→{}",
+                    scene_idx, assign_idx, orig_octave, a.octave
+                ));
+            }
         }
     }
 
@@ -1761,6 +1788,137 @@ mod tests {
         assert_eq!(loaded.lanes[0].root, None);
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // ── M6 Task 1: Scene persistence ────────────────────────────────────────
+
+    #[test]
+    fn set_scenes_default_empty_on_old_json() {
+        // A set JSON without a `scenes` field must deserialize with scenes == [].
+        let profile_id = default_profiles()[0].id;
+        let old_json = format!(
+            r#"{{
+                "version": 1,
+                "id": "abcdef1234567890",
+                "name": "old-no-scenes",
+                "bpm": 120.0,
+                "swing": 0.5,
+                "lanes": [{{
+                    "profile_id": "{profile_id}",
+                    "pattern": {{
+                        "name": "beat",
+                        "desc": "",
+                        "length": 1,
+                        "data": {{"Drums": [[]]}}
+                    }},
+                    "mute": false,
+                    "solo": false,
+                    "transpose": 0,
+                    "octave": 0
+                }}]
+            }}"#
+        );
+        let dir = unique_dir("m6-old-no-scenes");
+        let path = dir.join("old.json");
+        std::fs::write(&path, &old_json).unwrap();
+        let loaded = load_set(&path).unwrap();
+        assert!(
+            loaded.scenes.is_empty(),
+            "old set JSON without scenes field must load with scenes == []"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn scene_roundtrips_through_store() {
+        use crate::pattern::model::{LaneAssignment, Scene};
+        use crate::pattern::refs::PatternRef;
+        let dir = unique_dir("m6-scene-roundtrip");
+        let mut set = Set::default_set(default_profiles());
+        set.name = "Scenes Test".to_string();
+        // Ensure lane patterns have non-nil ids.
+        for lane in &mut set.lanes {
+            lane.pattern.ensure_id();
+        }
+        // Add a scene.
+        let scene_id = persist::mint_id();
+        set.scenes = vec![Scene {
+            id: scene_id.clone(),
+            name: "Scene 1".to_string(),
+            assignments: vec![
+                LaneAssignment {
+                    pattern: PatternRef::User(set.lanes[0].pattern.id.clone()),
+                    mute: true,
+                    solo: false,
+                    transpose: 0,
+                    octave: 0,
+                },
+                LaneAssignment {
+                    pattern: PatternRef::User(set.lanes[1].pattern.id.clone()),
+                    mute: false,
+                    solo: false,
+                    transpose: 3,
+                    octave: 1,
+                },
+                LaneAssignment {
+                    pattern: PatternRef::User(set.lanes[2].pattern.id.clone()),
+                    mute: false,
+                    solo: true,
+                    transpose: 0,
+                    octave: 0,
+                },
+            ],
+        }];
+
+        let path = save_set(&dir, &mut set).unwrap();
+        let loaded = load_set(&path).unwrap();
+
+        assert_eq!(loaded.scenes.len(), 1, "scene must survive save/load");
+        let s = &loaded.scenes[0];
+        assert_eq!(s.id, scene_id, "scene id must be stable");
+        assert_eq!(s.name, "Scene 1");
+        assert_eq!(s.assignments.len(), 3);
+        assert!(s.assignments[0].mute);
+        assert_eq!(s.assignments[1].transpose, 3);
+        assert_eq!(s.assignments[1].octave, 1);
+        assert!(s.assignments[2].solo);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn validate_repairs_malformed_scene() {
+        use crate::pattern::model::{LaneAssignment, Scene};
+        use crate::pattern::refs::PatternRef;
+        let mut set = Set::default_set(default_profiles());
+        for lane in &mut set.lanes {
+            lane.pattern.ensure_id();
+        }
+        // A scene with out-of-range transpose and octave.
+        set.scenes = vec![Scene {
+            id: persist::mint_id(),
+            name: "Bad Scene".to_string(),
+            assignments: vec![LaneAssignment {
+                pattern: PatternRef::User(set.lanes[0].pattern.id.clone()),
+                mute: false,
+                solo: false,
+                transpose: 127, // out of range
+                octave: -99,    // out of range
+            }],
+        }];
+        let notes = validate_and_repair(&mut set);
+        let a = &set.scenes[0].assignments[0];
+        assert!(
+            a.transpose >= -24 && a.transpose <= 24,
+            "transpose must be clamped, got {}",
+            a.transpose
+        );
+        assert!(
+            a.octave >= -4 && a.octave <= 4,
+            "octave must be clamped, got {}",
+            a.octave
+        );
+        assert!(!notes.is_empty(), "repair must note that scene was fixed");
     }
 
     #[test]

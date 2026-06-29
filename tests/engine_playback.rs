@@ -119,6 +119,7 @@ fn three_lane_set() -> Set {
         swing: 0.5,
         lanes,
         id: midip::persist::Id::nil(),
+        scenes: Vec::new(),
     }
 }
 

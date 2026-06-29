@@ -1240,6 +1240,7 @@ mod sequencer_tests {
             swing: 0.5,
             lanes,
             id: crate::persist::Id::nil(),
+            scenes: Vec::new(),
         }
     }
 
