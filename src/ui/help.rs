@@ -78,6 +78,7 @@ fn right_column_lines() -> Vec<Line<'static>> {
         row("[w]  route editor (port / channel / clock-out)"),
         row("[b]  launch quant: next bar / next beat"),
         row("[C]  cancel queued launch on focused lane"),
+        row("[i]  restart lane phase at next bar/beat (re-sync)"),
         blank(),
         // ── Library  [l] ──────────────────────────────────────────────
         header("Library  [l] to open"),

@@ -230,6 +230,9 @@ pub fn key_to_action(key: KeyEvent, mode: Mode, kind: LaneKind) -> Action {
                     'Z' => return Action::OpenClearPattern, // clear focused lane (confirm if material)
                     'L' => return Action::DoubleLength,     // double pattern length, repeat content
                     'V' => return Action::OpenCrateView,    // open live crate browser
+                    // 'i' was unbound; chosen for "in-sync" — re-sync the focused lane's
+                    // phase at the next bar/beat without changing its pattern.
+                    'i' => return Action::RestartLane,
                     _ => {}
                 }
 
@@ -1304,6 +1307,32 @@ mod tests {
             key_to_action(shift_c, Mode::CrateView, LaneKind::Drums),
             Action::CancelQueue
         );
+    }
+
+    // ── M4b Task 2: quantized lane restart key ───────────────────────────────
+
+    #[test]
+    fn i_key_maps_to_restart_lane_in_edit_mode() {
+        // 'i' was previously unbound (Action::None) in Edit mode; it is now RestartLane.
+        for kind in [LaneKind::Drums, LaneKind::Melodic] {
+            assert_eq!(
+                key_to_action(k(KeyCode::Char('i')), Mode::Edit, kind),
+                Action::RestartLane,
+                "'i' in Edit mode must be RestartLane (was unbound/None before M4b-T2)"
+            );
+        }
+    }
+
+    #[test]
+    fn i_was_unbound_before_restart_lane() {
+        // Documents that 'i' was previously Action::None and is now bound.
+        for kind in [LaneKind::Drums, LaneKind::Melodic] {
+            assert_ne!(
+                key_to_action(k(KeyCode::Char('i')), Mode::Edit, kind),
+                Action::None,
+                "'i' must not be unbound in Edit mode"
+            );
+        }
     }
 
     /// §2.6: backtick is ToggleVoiceMute in Edit/Drums; unbound elsewhere.

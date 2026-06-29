@@ -152,6 +152,10 @@ pub enum Action {
     ToggleLaunchQuant,
     /// Cancel any pending queued launch on the focused lane.
     CancelQueue,
+    /// Re-sync the focused lane's phase at the next bar/beat by re-queuing its CURRENT
+    /// pattern. The engine re-launches the same pattern at the boundary, resetting
+    /// `launch_offset` so the lane restarts at local step 0. No Set mutation, no snapshot.
+    RestartLane,
     /// Save a copy of the focused lane's pattern under a new name/id to the user-pattern store.
     /// Does NOT mutate the lane. Task 7 supplies the name from a dialog; here it is a param.
     SaveAsUserPattern(String),
@@ -1311,6 +1315,23 @@ impl App {
                     self.queued[lane] = None;
                     self.set_status(format!("Queue cancelled (lane {})", lane + 1));
                     cmds.push(UiCommand::CancelQueue { lane });
+                }
+            }
+            Action::RestartLane => {
+                if self.engine_playing {
+                    let lane = self.focus;
+                    let pat = self.set.lanes[lane].pattern.clone();
+                    let name = pat.name.clone();
+                    let quant = self.launch_quant;
+                    self.queued[lane] = Some(name.clone());
+                    self.set_status("Lane restart queued (next bar/beat)");
+                    cmds.push(UiCommand::QueuePattern {
+                        lane,
+                        pattern: pat,
+                        quant,
+                    });
+                } else {
+                    self.set_status("Restart applies while playing");
                 }
             }
             Action::ToggleMirror => {
@@ -6498,6 +6519,93 @@ mod tests {
         assert!(
             app.crate_issues.is_empty(),
             "crate_issues must clear on RemoveFromCrate"
+        );
+    }
+
+    // ── M4b Task 2: quantized lane restart ───────────────────────────────────
+
+    #[test]
+    fn restart_lane_while_playing_queues_current_pattern() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(0));
+        // Record the focused lane's current pattern name before the action.
+        let current_pattern_name = app.set.lanes[0].pattern.name.clone();
+        let set_before = app.set.clone();
+        let undo_len_before = app.undo.len();
+
+        // Simulate engine playing.
+        app.engine_playing = true;
+        let cmds = app.apply(Action::RestartLane);
+
+        // Must emit QueuePattern for the focused lane with its CURRENT pattern.
+        let queue_cmd = cmds
+            .iter()
+            .find(|c| matches!(c, UiCommand::QueuePattern { lane: 0, .. }));
+        assert!(
+            queue_cmd.is_some(),
+            "RestartLane while playing must emit QueuePattern{{lane:0}}; got: {:?}",
+            cmds
+        );
+        if let Some(UiCommand::QueuePattern { lane, pattern, .. }) = queue_cmd {
+            assert_eq!(*lane, 0);
+            assert_eq!(
+                pattern.name, current_pattern_name,
+                "QueuePattern must carry the lane's CURRENT pattern"
+            );
+        }
+
+        // queued[focus] must be set to the current pattern name.
+        assert_eq!(
+            app.queued[0].as_deref(),
+            Some(current_pattern_name.as_str()),
+            "queued[0] must be set to the current pattern name"
+        );
+
+        // No Set mutation (no snapshot pushed, Set unchanged).
+        assert_eq!(app.set, set_before, "RestartLane must not mutate Set");
+        assert_eq!(
+            app.undo.len(),
+            undo_len_before,
+            "RestartLane must not push an undo snapshot"
+        );
+
+        // Status set.
+        assert!(
+            app.status.contains("restart queued"),
+            "status must mention restart queued; got: {:?}",
+            app.status
+        );
+    }
+
+    #[test]
+    fn restart_lane_when_stopped_is_noop_with_status() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(0));
+
+        // Engine stopped (default).
+        assert!(!app.engine_playing);
+        let cmds = app.apply(Action::RestartLane);
+
+        // No QueuePattern must be emitted.
+        assert!(
+            !cmds
+                .iter()
+                .any(|c| matches!(c, UiCommand::QueuePattern { .. })),
+            "RestartLane while stopped must not emit QueuePattern; got: {:?}",
+            cmds
+        );
+
+        // queued[0] must remain None.
+        assert!(
+            app.queued[0].is_none(),
+            "queued[0] must remain None when stopped"
+        );
+
+        // Status must indicate restart only applies while playing.
+        assert!(
+            app.status.to_lowercase().contains("playing"),
+            "status must mention playing; got: {:?}",
+            app.status
         );
     }
 }
