@@ -85,6 +85,8 @@ fn three_lane_set() -> Set {
             octave: 0,
             route: None,
             muted_voices: Vec::new(),
+            scale: midip::music::scale::Scale::Chromatic,
+            root: None,
         },
         Lane {
             profile: profs[1],
@@ -95,6 +97,8 @@ fn three_lane_set() -> Set {
             octave: 0,
             route: None,
             muted_voices: Vec::new(),
+            scale: midip::music::scale::Scale::Chromatic,
+            root: None,
         },
         Lane {
             profile: profs[2],
@@ -105,6 +109,8 @@ fn three_lane_set() -> Set {
             octave: 0,
             route: None,
             muted_voices: Vec::new(),
+            scale: midip::music::scale::Scale::Chromatic,
+            root: None,
         },
     ];
     Set {

@@ -9,8 +9,11 @@
 /// C4 = MIDI 60 (middle C). Octave number = (midi / 12) - 1.
 /// Black keys are named with sharps: C#, D#, F#, G#, A#.
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
 pub enum Scale {
+    /// Identity: all 12 semitones are in-scale. Used as the safe default so that
+    /// old sets (no `scale` field) behave identically to before M5a.
+    #[default]
     Chromatic,
     Major,
     NaturalMinor,

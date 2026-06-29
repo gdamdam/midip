@@ -156,12 +156,23 @@ pub struct Lane {
     /// Per-voice mute: MIDI notes whose playback is silenced (non-destructive, latched).
     /// Persisted via LaneDto; old files without this field get an empty vec on load.
     pub muted_voices: Vec<u8>,
+    /// The scale applied to this lane when folding/stepping melodic notes.
+    /// Defaults to `Scale::Chromatic` (identity) so old sets are unchanged.
+    pub scale: crate::music::scale::Scale,
+    /// Per-lane root note override (MIDI 0–127). `None` → use `profile.root_note`.
+    pub root: Option<u8>,
 }
 
 impl Lane {
     /// Returns `true` when `note` is in the per-voice mute list (silenced).
     pub fn is_voice_muted(&self, note: u8) -> bool {
         self.muted_voices.contains(&note)
+    }
+
+    /// The effective root note for this lane: the per-lane override when set,
+    /// else the device profile's `root_note`.
+    pub fn effective_root(&self) -> u8 {
+        self.root.unwrap_or(self.profile.root_note)
     }
 
     /// The MIDI channel this lane emits on: the explicit route's channel when set,
@@ -227,6 +238,8 @@ impl Set {
                     octave: 0,
                     route: None,
                     muted_voices: Vec::new(),
+                    scale: crate::music::scale::Scale::Chromatic,
+                    root: None,
                 }
             })
             .collect();
@@ -395,6 +408,8 @@ mod tests {
             octave: 0,
             route: None,
             muted_voices: Vec::new(),
+            scale: crate::music::scale::Scale::Chromatic,
+            root: None,
         };
         let r = lane.effective_route();
         assert_eq!(r.channel, profiles[0].channel);
@@ -423,6 +438,8 @@ mod tests {
             octave: 0,
             route: Some(explicit.clone()),
             muted_voices: Vec::new(),
+            scale: crate::music::scale::Scale::Chromatic,
+            root: None,
         };
         let r = lane.effective_route();
         assert_eq!(r, explicit);
@@ -441,6 +458,8 @@ mod tests {
             octave: 0,
             route: None,
             muted_voices: Vec::new(),
+            scale: crate::music::scale::Scale::Chromatic,
+            root: None,
         };
         assert_eq!(lane.route_channel(), profiles[0].channel);
 
@@ -487,5 +506,54 @@ mod tests {
         assert_eq!(set.lanes[1].pattern.kind(), LaneKind::Melodic);
         assert_eq!(set.lanes[2].pattern.kind(), LaneKind::Melodic);
         assert!(set.lanes.iter().all(|l| !l.mute && !l.solo));
+    }
+
+    // ── M5a Task 2: per-lane scale + root ────────────────────────────────────
+
+    #[test]
+    fn lane_defaults_chromatic_and_profile_root() {
+        let profiles = crate::devices::profiles::default_profiles();
+        // Use the bass profile (profiles[1]) which has root_note=45.
+        let lane = Lane {
+            profile: profiles[1],
+            pattern: Pattern::empty_melodic(4),
+            mute: false,
+            solo: false,
+            transpose: 0,
+            octave: 0,
+            route: None,
+            muted_voices: Vec::new(),
+            scale: crate::music::scale::Scale::Chromatic,
+            root: None,
+        };
+        assert_eq!(lane.scale, crate::music::scale::Scale::Chromatic);
+        assert_eq!(lane.root, None);
+        assert_eq!(
+            lane.effective_root(),
+            profiles[1].root_note,
+            "effective_root must fall back to profile.root_note when root is None"
+        );
+    }
+
+    #[test]
+    fn effective_root_uses_override_when_set() {
+        let profiles = crate::devices::profiles::default_profiles();
+        let lane = Lane {
+            profile: profiles[1], // root_note=45
+            pattern: Pattern::empty_melodic(4),
+            mute: false,
+            solo: false,
+            transpose: 0,
+            octave: 0,
+            route: None,
+            muted_voices: Vec::new(),
+            scale: crate::music::scale::Scale::Major,
+            root: Some(50),
+        };
+        assert_eq!(
+            lane.effective_root(),
+            50,
+            "effective_root must return the override when root is Some"
+        );
     }
 }
