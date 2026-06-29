@@ -41,9 +41,13 @@ pub struct MelodicNote {
 /// single `MelodicNote` object; the new format is a JSON array. A custom `Deserialize`
 /// accepts ALL THREE shapes — `null` → `[]`, a single object → `[note]`, an array →
 /// as-is — so every existing pattern (vendored library + user/set JSON) loads unchanged.
-/// `Serialize` always emits an array. The shim lives here, in one place, so it applies
-/// everywhere serde reads a step. A `Deref`/`DerefMut` to `Vec<MelodicNote>` keeps call
-/// sites ergonomic (they use plain `Vec` methods); the wrapper only intercepts (de)serde.
+/// `Serialize` is adaptive for backward compatibility: a rest emits `null`, a single
+/// note emits a bare object (the legacy mono shape), and a chord (2+ notes) emits an
+/// array. So mono patterns written by this version still load in pre-chord builds; only
+/// chord-containing patterns become this-version-only. The shim lives here, in one place,
+/// so it applies everywhere serde reads a step. A `Deref`/`DerefMut` to `Vec<MelodicNote>`
+/// keeps call sites ergonomic (they use plain `Vec` methods); the wrapper only intercepts
+/// (de)serde.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct MelodicStep(pub Vec<MelodicNote>);
 
@@ -67,9 +71,16 @@ impl From<Vec<MelodicNote>> for MelodicStep {
 }
 
 impl serde::Serialize for MelodicStep {
-    /// Always serialize as the inner `Vec` (a JSON array). New on-disk shape.
+    /// Adaptive on-disk shape for backward compatibility: a rest serializes as `null`,
+    /// a single note as a bare object (the legacy mono shape), and a chord (2+ notes) as
+    /// an array. The `Deserialize` shim above accepts all three, so this round-trips while
+    /// keeping mono patterns readable by pre-chord builds.
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        self.0.serialize(serializer)
+        match self.0.as_slice() {
+            [] => serializer.serialize_none(),
+            [one] => one.serialize(serializer),
+            many => many.serialize(serializer),
+        }
     }
 }
 
@@ -514,19 +525,35 @@ mod tests {
             prob: 0.8,
             ratchet: 2,
         };
+        // Adaptive on-disk shape: rest -> null, one note -> object, chord -> array.
+        let rest_json = serde_json::to_string(&MelodicStep::default()).unwrap();
+        assert_eq!(
+            rest_json, "null",
+            "a rest serializes as null, got {rest_json}"
+        );
+
+        let one_json = serde_json::to_string(&MelodicStep::from(vec![n1.clone()])).unwrap();
+        assert!(
+            one_json.starts_with('{'),
+            "a single note serializes as an object, got {one_json}"
+        );
+
+        let many_json =
+            serde_json::to_string(&MelodicStep::from(vec![n1.clone(), n2.clone()])).unwrap();
+        assert!(
+            many_json.starts_with('['),
+            "a chord serializes as an array, got {many_json}"
+        );
+
+        // All three shapes round-trip losslessly through the shim.
         for step in [
-            MelodicStep::default(),                  // [] rest
-            MelodicStep::from(vec![n1.clone()]),     // [n] mono
-            MelodicStep::from(vec![n1.clone(), n2]), // [n1,n2] chord
+            MelodicStep::default(),                  // null  rest
+            MelodicStep::from(vec![n1.clone()]),     // {..}  mono
+            MelodicStep::from(vec![n1.clone(), n2]), // [..]  chord
         ] {
             let json = serde_json::to_string(&step).unwrap();
-            // Always serializes as a JSON array.
-            assert!(
-                json.starts_with('['),
-                "step must serialize as an array, got {json}"
-            );
             let back: MelodicStep = serde_json::from_str(&json).unwrap();
-            assert_eq!(step, back, "round-trip must be lossless");
+            assert_eq!(step, back, "round-trip must be lossless for {json}");
         }
     }
 
@@ -547,6 +574,27 @@ mod tests {
         .unwrap();
         assert_eq!(many.len(), 2);
         assert_eq!(many[1].semi, 4);
+    }
+
+    #[test]
+    fn mono_pattern_reserializes_to_legacy_shape() {
+        // The backward-compat guarantee of adaptive serialize: a pattern containing only
+        // rests and single notes must re-serialize with NO array-shaped steps (rests ->
+        // null, notes -> objects), so a pre-chord build can still read what we wrote.
+        let json = r#"{"name":"m #01","length":2,"data":{"Melodic":[null,{"semi":0,"vel":1.0,"slide":false,"len":0.5}]}}"#;
+        let p: Pattern = serde_json::from_str(json).unwrap();
+        let v: serde_json::Value = serde_json::to_value(&p).unwrap();
+        let steps = v["data"]["Melodic"].as_array().unwrap();
+        assert!(
+            steps[0].is_null(),
+            "rest must re-serialize as null, got {}",
+            steps[0]
+        );
+        assert!(
+            steps[1].is_object(),
+            "a single note must re-serialize as a bare object (legacy shape), got {}",
+            steps[1]
+        );
     }
 
     #[test]
