@@ -329,6 +329,87 @@ impl Scene {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Chain / ChainEntry — song-mode sequencing (M7)
+// ---------------------------------------------------------------------------
+
+/// One step in a chain: play `scene_id` for `repeats` passes of `bars` bars.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ChainEntry {
+    pub scene_id: persist::Id,
+    pub repeats: u32,
+    pub bars: u32,
+}
+
+impl ChainEntry {
+    /// Total steps this entry occupies (4/4, 16 steps/bar).
+    pub fn dwell_steps(&self) -> u64 {
+        self.bars as u64 * self.repeats as u64 * 16
+    }
+}
+
+/// An ordered sequence of scene references that plays as a song.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Chain {
+    pub id: persist::Id,
+    pub name: String,
+    #[serde(default)]
+    pub entries: Vec<ChainEntry>,
+    /// Whether the chain loops back to the start after the last entry.
+    #[serde(rename = "loop", default)]
+    pub looped: bool,
+}
+
+impl Chain {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            id: persist::mint_id(),
+            name: name.into(),
+            entries: Vec::new(),
+            looped: false,
+        }
+    }
+
+    /// Sum of all entry dwell steps.
+    pub fn total_steps(&self) -> u64 {
+        self.entries.iter().map(|e| e.dwell_steps()).sum()
+    }
+}
+
+#[cfg(test)]
+mod chain_model_tests {
+    use super::*;
+
+    #[test]
+    fn dwell_steps_is_bars_times_repeats_times_16() {
+        let e = ChainEntry { scene_id: persist::mint_id(), repeats: 2, bars: 4 };
+        assert_eq!(e.dwell_steps(), 2 * 4 * 16); // 128 steps
+    }
+
+    #[test]
+    fn chain_serde_roundtrip_and_loop_rename() {
+        let mut c = Chain::new("verse->chorus");
+        c.looped = true;
+        c.entries.push(ChainEntry { scene_id: persist::mint_id(), repeats: 1, bars: 8 });
+        let json = serde_json::to_string(&c).unwrap();
+        assert!(json.contains("\"loop\""), "field must serialize as `loop`, got: {json}");
+        assert!(!json.contains("looped"));
+        let back: Chain = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.name, c.name);
+        assert!(back.looped);
+        assert_eq!(back.entries.len(), 1);
+        assert_eq!(back.entries[0].bars, 8);
+    }
+
+    #[test]
+    fn total_steps_sums_entry_dwells() {
+        let mut c = Chain::new("x");
+        c.entries.push(ChainEntry { scene_id: persist::mint_id(), repeats: 1, bars: 2 }); // 32
+        c.entries.push(ChainEntry { scene_id: persist::mint_id(), repeats: 3, bars: 1 }); // 48
+        assert_eq!(c.total_steps(), 80);
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Set {
     pub name: String,
