@@ -7,6 +7,26 @@ feature milestone is a minor bump).
 
 ## [Unreleased]
 
+## [0.13.0] — 2026-06-29 — Per-step CC · Microtiming · Trig Conditions · Per-lane Swing/Division
+
+### Added
+- **Per-step CC locks** — lock one or more control-change values to a step (`cc{n}={v}`); they
+  send just before that step's NoteOn, with a per-route cache that suppresses redundant resends.
+- **Signed microtiming** — nudge a note earlier/later within its step (`\`/`|`, shown `µ±N`),
+  clamped to ±half a step so a note never crosses its neighbours; the NoteOff and ratchets move with it.
+- **Trig conditions** — fire a note only on certain loops/states (`z` cycles
+  Always / 1:2 / 1:3 / 1:4 / Fill / !Fill / 1st / !1st), evaluated before the probability roll.
+  A latched **fill** toggle drives the Fill/!Fill conditions.
+- **Per-lane swing override** (`a`/`_`) — a lane can swing differently from the global feel
+  (`None` = follow global).
+- **Per-lane clock division** (`Q`, divide-only /1../4) — a lane can run at half/third/quarter time,
+  advancing one step every N global steps; composes with polymeter.
+
+### Changed
+- Set format version bumped 2 → 3 (**backward-compatible**: old sets load with all new
+  per-step/per-lane fields defaulted; additive migration, no behaviour change).
+- The `?` controls overlay is scrollable (`↑`/`↓`, `PageUp`/`PageDown`, `Home`/`End`).
+
 ## [0.12.0] — 2026-06-29 — Generative
 
 ### Added
