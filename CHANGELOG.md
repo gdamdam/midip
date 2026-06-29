@@ -7,6 +7,9 @@ feature milestone is a minor bump).
 
 ## [Unreleased]
 
+### Added
+- GitHub Actions CI (fmt + clippy + tests on Linux/macOS).
+
 ## [0.8.0] — 2026-06-29 — Scale-aware melodic editing + note input
 
 ### Added
