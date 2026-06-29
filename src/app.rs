@@ -315,6 +315,8 @@ pub enum Action {
     // ── M7 Transport stubs (real behavior in Task 5) ──────────────────────────
     /// Play the currently selected chain (dispatches PlayChain(chain_sel)).
     PlaySelectedChain,
+    /// Jump the playing chain to the currently selected entry (chain_entry_sel).
+    JumpSelectedChainEntry,
     /// Open the chains overlay (alias used by song-mode UI).
     PlayChain(usize),
     StopChain,
@@ -2160,6 +2162,10 @@ impl App {
             Action::PlaySelectedChain => {
                 let idx = self.chain_sel;
                 cmds.extend(self.apply(Action::PlayChain(idx)));
+            }
+            Action::JumpSelectedChainEntry => {
+                let entry = self.chain_entry_sel;
+                cmds.extend(self.apply(Action::JumpChainEntry(entry)));
             }
             Action::AdjustSelectedChainEntryBars(delta) => {
                 let chain = self.chain_sel;

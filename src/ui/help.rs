@@ -151,6 +151,7 @@ fn right_column_lines() -> Vec<Line<'static>> {
         header("Chains  [K] to open"),
         row("[↑ ↓]  select chain"),
         row("[enter]  play chain (starts transport)   [C]  stop"),
+        row("[j]  live jump to selected entry (quantized, next bar)"),
         row("[c]  create   [r]  rename   [d]  duplicate   [x]  delete"),
         row("[m]  toggle loop   [a]  add selected scene as entry"),
         row("[X]  remove selected entry"),

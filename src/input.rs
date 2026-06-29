@@ -213,6 +213,7 @@ pub fn key_to_action(key: KeyEvent, mode: Mode, kind: LaneKind) -> Action {
                 KeyCode::Char('X') => Action::RemoveSelectedChainEntry,
                 KeyCode::Tab => Action::ChainEntrySelectNext,
                 KeyCode::BackTab => Action::ChainEntrySelectPrev,
+                KeyCode::Char('j') => Action::JumpSelectedChainEntry,
                 KeyCode::Char('m') => Action::ToggleSelectedChainLoop,
                 KeyCode::Char('[') => Action::AdjustSelectedChainEntryBars(-1),
                 KeyCode::Char(']') => Action::AdjustSelectedChainEntryBars(1),
@@ -1920,6 +1921,15 @@ mod tests {
             key_to_action(k(KeyCode::Char('m')), Mode::Chains, LaneKind::Drums),
             Action::ToggleSelectedChainLoop,
             "'m' must ToggleSelectedChainLoop"
+        );
+    }
+
+    #[test]
+    fn j_in_chains_mode_jumps_selected_entry() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('j')), Mode::Chains, LaneKind::Drums),
+            Action::JumpSelectedChainEntry,
+            "'j' in Chains must dispatch JumpSelectedChainEntry"
         );
     }
 }
