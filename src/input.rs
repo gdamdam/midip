@@ -184,6 +184,21 @@ pub fn key_to_action(key: KeyEvent, mode: Mode, kind: LaneKind) -> Action {
                 _ => Action::None,
             };
         }
+        Mode::Scenes => {
+            return match key.code {
+                KeyCode::Up => Action::SceneSelect(-1),
+                KeyCode::Down => Action::SceneSelect(1),
+                KeyCode::Enter => Action::RecallSelectedScene,
+                KeyCode::Char('c') => Action::CaptureScene,
+                KeyCode::Char('r') => Action::RenameScene,
+                KeyCode::Char('d') => Action::DuplicateScene,
+                KeyCode::Char('x') | KeyCode::Delete => Action::DeleteScene,
+                KeyCode::Char('z') => Action::ValidateScene,
+                KeyCode::Char('C') => Action::CancelQueue,
+                KeyCode::Char('G') | KeyCode::Esc => Action::CloseScenes,
+                _ => Action::None,
+            };
+        }
         Mode::Edit => {}
     }
 
@@ -258,6 +273,8 @@ pub fn key_to_action(key: KeyEvent, mode: Mode, kind: LaneKind) -> Action {
                     'Z' => return Action::OpenClearPattern, // clear focused lane (confirm if material)
                     'L' => return Action::DoubleLength,     // double pattern length, repeat content
                     'V' => return Action::OpenCrateView,    // open live crate browser
+                    // 'G' (Shift+g) was unbound in Edit; opens the scene manager.
+                    'G' => return Action::OpenScenes,
                     // 'i' was unbound; chosen for "in-sync" — re-sync the focused lane's
                     // phase at the next bar/beat without changing its pattern.
                     'i' => return Action::RestartLane,
@@ -358,6 +375,7 @@ mod tests {
             Mode::SetBrowser,
             Mode::RecoveryPrompt,
             Mode::CrateView,
+            Mode::Scenes,
         ] {
             assert_eq!(
                 key_to_action(k(KeyCode::Char(' ')), mode.clone(), LaneKind::Drums),
@@ -1689,6 +1707,110 @@ mod tests {
             key_to_action(k(KeyCode::Char('!')), Mode::NoteInput, LaneKind::Melodic),
             Action::Panic,
             "'!' must still be Panic in NoteInput"
+        );
+    }
+
+    // ── M6 Task 3: Scene manager key bindings ────────────────────────────────
+
+    #[test]
+    fn g_opens_scenes_in_edit_mode() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('G')), Mode::Edit, LaneKind::Drums),
+            Action::OpenScenes,
+            "'G' in Edit must open scene manager"
+        );
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('G')), Mode::Edit, LaneKind::Melodic),
+            Action::OpenScenes,
+            "'G' in Edit/melodic must open scene manager"
+        );
+    }
+
+    #[test]
+    fn scene_mode_up_down_select() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Up), Mode::Scenes, LaneKind::Drums),
+            Action::SceneSelect(-1),
+            "Up in Scenes must be SceneSelect(-1)"
+        );
+        assert_eq!(
+            key_to_action(k(KeyCode::Down), Mode::Scenes, LaneKind::Drums),
+            Action::SceneSelect(1),
+            "Down in Scenes must be SceneSelect(1)"
+        );
+    }
+
+    #[test]
+    fn scene_mode_enter_dispatches_recall_selected() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Enter), Mode::Scenes, LaneKind::Drums),
+            Action::RecallSelectedScene,
+            "Enter in Scenes must dispatch RecallSelectedScene"
+        );
+    }
+
+    #[test]
+    fn scene_mode_c_captures() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('c')), Mode::Scenes, LaneKind::Drums),
+            Action::CaptureScene,
+            "'c' in Scenes must CaptureScene"
+        );
+    }
+
+    #[test]
+    fn scene_mode_esc_and_g_close() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Esc), Mode::Scenes, LaneKind::Drums),
+            Action::CloseScenes,
+            "Esc in Scenes must CloseScenes"
+        );
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('G')), Mode::Scenes, LaneKind::Drums),
+            Action::CloseScenes,
+            "'G' in Scenes must CloseScenes"
+        );
+    }
+
+    #[test]
+    fn scene_mode_in_mode_keys() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('r')), Mode::Scenes, LaneKind::Drums),
+            Action::RenameScene
+        );
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('d')), Mode::Scenes, LaneKind::Drums),
+            Action::DuplicateScene
+        );
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('x')), Mode::Scenes, LaneKind::Drums),
+            Action::DeleteScene
+        );
+        assert_eq!(
+            key_to_action(k(KeyCode::Delete), Mode::Scenes, LaneKind::Drums),
+            Action::DeleteScene
+        );
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('z')), Mode::Scenes, LaneKind::Drums),
+            Action::ValidateScene
+        );
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('C')), Mode::Scenes, LaneKind::Drums),
+            Action::CancelQueue
+        );
+    }
+
+    #[test]
+    fn space_and_bang_global_in_scenes_mode() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Char(' ')), Mode::Scenes, LaneKind::Drums),
+            Action::TogglePlay,
+            "space must be TogglePlay in Scenes"
+        );
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('!')), Mode::Scenes, LaneKind::Drums),
+            Action::Panic,
+            "'!' must be Panic in Scenes"
         );
     }
 }

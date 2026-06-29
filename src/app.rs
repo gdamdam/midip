@@ -14,7 +14,7 @@ use crate::pattern::model::{
     DrumHit, DrumStep, Lane, LaneKind, LaneRoute, MelodicNote, MelodicStep, Pattern, PatternData,
     PortRef, Set,
 };
-use crate::pattern::refs::PatternRef;
+use crate::pattern::refs::{resolve_scene, PatternRef};
 use crate::pattern::store::{CrateEntry, CrateIndex, Favorites};
 
 /// A validation issue found in a crate.
@@ -32,6 +32,7 @@ pub enum NamePurpose {
     SaveSetAs,
     RenameSet,
     SaveUserPattern,
+    RenameScene,
 }
 
 /// Action to perform when a Confirm dialog is accepted.
@@ -43,6 +44,8 @@ pub enum ConfirmAction {
     /// Fold all out-of-scale notes in the focused melodic lane to the lane's scale.
     /// The `usize` is the count of notes that will be folded (used in the confirm prompt).
     ConformToScale(usize),
+    /// Remove the scene at `index` from `set.scenes` (after user confirmation).
+    DeleteScene(usize),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -61,6 +64,9 @@ pub enum Mode {
     /// Live crate browser: browse crate entries and launch patterns without
     /// committing to the active Set until Enter is pressed.
     CrateView,
+    /// Scene manager: list, capture, recall, rename, duplicate, delete scenes.
+    /// Opened from Edit via `'G'`; `Esc`/`'G'` closes.
+    Scenes,
     /// QWERTY piano note-input sub-mode (melodic lanes only).
     ///
     /// Entered from melodic Edit via `'I'` (Shift+i — was unbound before M5a-T5).
@@ -214,6 +220,29 @@ pub enum Action {
     /// lane whose assignment cannot be resolved is left unchanged and reported in the status.
     /// Live performance action — NOT an undoable edit; does not mark the set dirty.
     RecallScene(usize),
+    // ── Scene manager ────────────────────────────────────────────────────
+    /// Open the scene manager overlay from Edit mode.
+    OpenScenes,
+    /// Close the scene manager and return to Edit.
+    CloseScenes,
+    /// Move scene selection ±1 (clamped; never changes playback).
+    SceneSelect(i32),
+    /// Snapshot the live set into a new auto-named Scene and append it.
+    CaptureScene,
+    /// Open NameEntry prefilled with the selected scene's name.
+    RenameScene,
+    /// Internal: apply the rename after NameEntry accepts.
+    DoRenameScene(String),
+    /// Clone the selected scene with a fresh id and an appended " (copy)" name.
+    DuplicateScene,
+    /// Open a Confirm dialog before deleting the selected scene.
+    DeleteScene,
+    /// Internal: remove the scene at `idx`, clamp sel, return to Scenes.
+    DoDeleteScene(usize),
+    /// Recall the scene at `scene_sel` (dispatches RecallScene(scene_sel)).
+    RecallSelectedScene,
+    /// Resolve the selected scene's assignments; store missing lane indices.
+    ValidateScene,
     // ── Name-entry dialog ─────────────────────────────────────────────
     OpenNameEntry(NamePurpose),
     NameChar(char),
@@ -447,6 +476,10 @@ pub struct App {
     /// Octave offset applied on top of the QWERTY semitone map while in `Mode::NoteInput`.
     /// Range −3..=3 (clamped). Reset to 0 each time `Mode::NoteInput` is entered.
     pub note_input_octave: i8,
+    /// Index of the currently selected scene in `set.scenes`.
+    pub scene_sel: usize,
+    /// Lane indices whose assignments could not be resolved by the last `ValidateScene`.
+    pub scene_issues: Vec<usize>,
 }
 
 /// Default melodic velocity multiplier when placing a note (1.0 -> MIDI 100).
@@ -515,6 +548,8 @@ impl App {
             crate_issues: Vec::new(),
             temp_transform: None,
             note_input_octave: 0,
+            scene_sel: 0,
+            scene_issues: Vec::new(),
         }
     }
 
@@ -1628,6 +1663,106 @@ impl App {
             Action::RecallScene(index) => {
                 cmds.extend(self.recall_scene(index));
             }
+            // ── Scene manager ──────────────────────────────────────────────────
+            Action::OpenScenes => {
+                self.scene_sel = 0;
+                self.scene_issues.clear();
+                self.mode = Mode::Scenes;
+            }
+            Action::CloseScenes => {
+                self.mode = Mode::Edit;
+            }
+            Action::SceneSelect(d) => {
+                let n = self.set.scenes.len();
+                if n > 0 {
+                    self.scene_sel = (self.scene_sel as i32 + d).clamp(0, n as i32 - 1) as usize;
+                }
+            }
+            Action::CaptureScene => {
+                let n = self.set.scenes.len() + 1;
+                let name = format!("Scene {n}");
+                self.snapshot();
+                let scene = self.set.capture_scene(name);
+                self.set.scenes.push(scene);
+                self.scene_sel = self.set.scenes.len() - 1;
+                self.dirty = true;
+                self.set_status(format!("Captured Scene {n}"));
+            }
+            Action::RenameScene => {
+                if let Some(scene) = self.set.scenes.get(self.scene_sel) {
+                    self.name_input = scene.name.clone();
+                    self.mode = Mode::NameEntry(NamePurpose::RenameScene);
+                }
+            }
+            Action::DoRenameScene(name) => {
+                if self.set.scenes.get(self.scene_sel).is_some() {
+                    self.snapshot();
+                    self.set.scenes[self.scene_sel].name = name.clone();
+                    self.dirty = true;
+                    self.set_status(format!("Renamed to \"{name}\""));
+                }
+                self.mode = Mode::Scenes;
+            }
+            Action::DuplicateScene => {
+                if let Some(scene) = self.set.scenes.get(self.scene_sel).cloned() {
+                    self.snapshot();
+                    let mut copy = scene.clone();
+                    copy.id = crate::persist::mint_id();
+                    copy.name = format!("{} (copy)", scene.name);
+                    self.set.scenes.push(copy);
+                    self.scene_sel = self.set.scenes.len() - 1;
+                    self.dirty = true;
+                    self.set_status("Scene duplicated");
+                }
+            }
+            Action::DeleteScene => {
+                if self.set.scenes.get(self.scene_sel).is_some() {
+                    let idx = self.scene_sel;
+                    self.mode = Mode::Confirm(ConfirmAction::DeleteScene(idx));
+                }
+            }
+            Action::DoDeleteScene(idx) => {
+                if idx < self.set.scenes.len() {
+                    self.snapshot();
+                    self.set.scenes.remove(idx);
+                    self.dirty = true;
+                    let n = self.set.scenes.len();
+                    if n == 0 {
+                        self.scene_sel = 0;
+                    } else {
+                        self.scene_sel = self.scene_sel.min(n - 1);
+                    }
+                    self.set_status("Scene deleted");
+                }
+                self.mode = Mode::Scenes;
+            }
+            Action::RecallSelectedScene => {
+                if self.set.scenes.is_empty() {
+                    self.set_status("No scenes");
+                } else {
+                    let idx = self.scene_sel;
+                    cmds.extend(self.apply(Action::RecallScene(idx)));
+                }
+            }
+            Action::ValidateScene => {
+                self.scene_issues.clear();
+                if let Some(scene) = self.set.scenes.get(self.scene_sel) {
+                    let inline: Vec<Pattern> =
+                        self.set.lanes.iter().map(|l| l.pattern.clone()).collect();
+                    let results = resolve_scene(scene, &self.library, &inline);
+                    for (i, r) in results.iter().enumerate() {
+                        if r.is_err() {
+                            self.scene_issues.push(i);
+                        }
+                    }
+                    let missing = self.scene_issues.len();
+                    if missing == 0 {
+                        self.set_status("All assignments resolved");
+                    } else {
+                        self.set_status(format!("{missing} missing assignment(s)"));
+                    }
+                }
+            }
             Action::RestartLane => {
                 if self.engine_playing {
                     let lane = self.focus;
@@ -1846,6 +1981,7 @@ impl App {
                         NamePurpose::SaveSetAs => Action::SaveSetAs(name),
                         NamePurpose::RenameSet => Action::RenameSet(name),
                         NamePurpose::SaveUserPattern => Action::SaveAsUserPattern(name),
+                        NamePurpose::RenameScene => Action::DoRenameScene(name),
                     };
                     cmds.extend(self.apply(sub));
                 }
@@ -1869,6 +2005,7 @@ impl App {
                     ConfirmAction::DeleteSet(path) => Action::DeleteSet(path),
                     ConfirmAction::ClearPattern => Action::ClearPattern,
                     ConfirmAction::ConformToScale(_) => Action::ConformToScale,
+                    ConfirmAction::DeleteScene(idx) => Action::DoDeleteScene(idx),
                 };
                 cmds.extend(self.apply(sub));
             }
@@ -2503,6 +2640,7 @@ impl App {
             Mode::NameEntry(_) => "NAME",
             Mode::Confirm(_) => "CONFIRM",
             Mode::CrateView => "CRATE VIEW",
+            Mode::Scenes => "SCENES",
             Mode::NoteInput => "NOTE INPUT",
         }
     }
@@ -8810,5 +8948,170 @@ mod tests {
             depth,
             "RemoveChordNote on an empty step must not snapshot"
         );
+    }
+
+    // ── M6 Task 3: Scene manager ─────────────────────────────────────────────
+
+    #[test]
+    fn capture_scene_adds_scene_dirty_undoable() {
+        let mut app = new_app();
+        assert!(app.set.scenes.is_empty());
+        app.apply(Action::OpenScenes);
+        assert_eq!(app.mode, Mode::Scenes);
+        let pre_undo_len = app.undo.len();
+        app.apply(Action::CaptureScene);
+        assert_eq!(app.set.scenes.len(), 1, "capture must add a scene");
+        assert!(app.dirty, "capture must mark dirty");
+        assert!(
+            app.undo.len() > pre_undo_len,
+            "capture must push an undo snapshot"
+        );
+        assert!(
+            app.set.scenes[0].name.starts_with("Scene"),
+            "auto-name must start with Scene"
+        );
+    }
+
+    #[test]
+    fn scene_select_clamps_no_command() {
+        let mut app = new_app();
+        // Capture two scenes.
+        app.apply(Action::CaptureScene);
+        app.apply(Action::CaptureScene);
+        assert_eq!(app.set.scenes.len(), 2);
+        app.apply(Action::OpenScenes);
+        app.scene_sel = 0;
+        app.apply(Action::SceneSelect(-1));
+        assert_eq!(app.scene_sel, 0, "select must clamp at 0");
+        app.apply(Action::SceneSelect(10));
+        assert_eq!(app.scene_sel, 1, "select must clamp at len-1");
+    }
+
+    #[test]
+    fn recall_from_scene_view_dispatches_recall() {
+        let mut app = new_app();
+        app.apply(Action::CaptureScene);
+        app.apply(Action::OpenScenes);
+        app.scene_sel = 0;
+        // RecallSelectedScene should not panic; it dispatches RecallScene(0).
+        let cmds = app.apply(Action::RecallSelectedScene);
+        // Transport is stopped so recall applies immediately (emits LoadPattern commands).
+        assert!(
+            !cmds.is_empty() || app.set.scenes.is_empty(),
+            "RecallSelectedScene must produce commands or be graceful on empty"
+        );
+    }
+
+    #[test]
+    fn recall_selected_scene_no_op_when_empty() {
+        let mut app = new_app();
+        app.apply(Action::OpenScenes);
+        app.apply(Action::RecallSelectedScene);
+        assert!(
+            app.status.contains("No scenes"),
+            "must report no scenes; got: {:?}",
+            app.status
+        );
+    }
+
+    #[test]
+    fn rename_scene_via_name_entry() {
+        let mut app = new_app();
+        app.apply(Action::CaptureScene);
+        app.apply(Action::OpenScenes);
+        app.scene_sel = 0;
+        app.apply(Action::RenameScene);
+        assert_eq!(app.mode, Mode::NameEntry(NamePurpose::RenameScene));
+        // name_input should be prefilled with original scene name.
+        assert!(
+            app.name_input.starts_with("Scene"),
+            "name_input must be prefilled; got: {:?}",
+            app.name_input
+        );
+        // Simulate user typing and committing.
+        app.name_input = "My Scene".to_string();
+        let pre = app.undo.len();
+        app.apply(Action::NameCommit);
+        assert_eq!(
+            app.set.scenes[0].name, "My Scene",
+            "rename must update name"
+        );
+        assert!(app.dirty, "rename must mark dirty");
+        assert!(app.undo.len() > pre, "rename must push undo snapshot");
+        assert_eq!(app.mode, Mode::Scenes, "must return to Scenes after rename");
+    }
+
+    #[test]
+    fn duplicate_scene_fresh_id() {
+        let mut app = new_app();
+        app.apply(Action::CaptureScene);
+        app.apply(Action::OpenScenes);
+        app.scene_sel = 0;
+        let orig_id = app.set.scenes[0].id.clone();
+        let pre = app.undo.len();
+        app.apply(Action::DuplicateScene);
+        assert_eq!(app.set.scenes.len(), 2, "duplicate must add a scene");
+        assert_ne!(
+            app.set.scenes[1].id, orig_id,
+            "duplicate must have a fresh id"
+        );
+        assert!(
+            app.set.scenes[1].name.contains("copy"),
+            "duplicate name must contain 'copy'"
+        );
+        assert!(app.dirty, "duplicate must mark dirty");
+        assert!(app.undo.len() > pre, "duplicate must push undo snapshot");
+        assert_eq!(app.scene_sel, 1, "sel must point to new scene");
+    }
+
+    #[test]
+    fn delete_scene_confirm_then_removes_clamps_sel() {
+        let mut app = new_app();
+        app.apply(Action::CaptureScene);
+        app.apply(Action::CaptureScene);
+        assert_eq!(app.set.scenes.len(), 2);
+        app.apply(Action::OpenScenes);
+        app.scene_sel = 1;
+        // DeleteScene should open Confirm.
+        app.apply(Action::DeleteScene);
+        assert_eq!(
+            app.mode,
+            Mode::Confirm(ConfirmAction::DeleteScene(1)),
+            "must open Confirm(DeleteScene(1))"
+        );
+        // Accept.
+        let pre = app.undo.len();
+        app.apply(Action::ConfirmYes);
+        assert_eq!(app.set.scenes.len(), 1, "must remove scene");
+        assert_eq!(app.scene_sel, 0, "sel must clamp to 0");
+        assert!(app.dirty, "delete must mark dirty");
+        assert!(app.undo.len() > pre, "delete must push undo snapshot");
+        assert_eq!(app.mode, Mode::Scenes, "must return to Scenes after delete");
+    }
+
+    #[test]
+    fn validate_scene_reports_missing() {
+        let mut app = new_app();
+        app.apply(Action::CaptureScene);
+        app.apply(Action::OpenScenes);
+        app.scene_sel = 0;
+        // Validate — with empty library, all User refs will resolve (they're inline).
+        app.apply(Action::ValidateScene);
+        // Inline patterns should resolve fine; issues should be empty.
+        assert!(
+            app.scene_issues.is_empty(),
+            "inline patterns must resolve; got issues: {:?}",
+            app.scene_issues
+        );
+    }
+
+    #[test]
+    fn open_close_scenes_changes_mode() {
+        let mut app = new_app();
+        assert_eq!(app.mode, Mode::Edit);
+        app.apply(Action::OpenScenes);
+        assert_eq!(app.mode, Mode::Scenes);
+        app.apply(Action::CloseScenes);
+        assert_eq!(app.mode, Mode::Edit);
     }
 }

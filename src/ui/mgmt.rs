@@ -58,6 +58,9 @@ pub fn render_confirm(f: &mut Frame, area: Rect, app: &App) {
                 format!("Conform {} note(s) to {}? [y/n]", n, lane.scale.name()),
             )
         }
+        Mode::Confirm(ConfirmAction::DeleteScene(_)) => {
+            (" DELETE SCENE ", "Delete this scene permanently?".into())
+        }
         _ => (" CONFIRM ", "Are you sure?".into()),
     };
 
