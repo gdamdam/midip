@@ -33,6 +33,19 @@ pub fn is_boundary(step: usize, q: Quant) -> bool {
     }
 }
 
+/// Per-lane performance state applied AT a launch instant (M6 scene recall).
+/// Carried alongside a queued launch so mute/solo/transpose/octave switch on the
+/// SAME boundary the pattern does — not before (the outgoing scene keeps sounding
+/// until the boundary). `None` on a per-lane queue means "leave the lane's current
+/// mute/solo/transpose/octave unchanged" (the M3 single-pattern launch path).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LaunchState {
+    pub mute: bool,
+    pub solo: bool,
+    pub transpose: i8,
+    pub octave: i8,
+}
+
 /// A note currently sounding, tracked by the authoritative registry.
 #[derive(Clone, Debug)]
 pub struct SoundingNote {
@@ -134,9 +147,14 @@ pub struct Sequencer {
     /// Updated at emit time: NoteOn inserts, NoteOff removes by (channel, note).
     pub sounding: Vec<SoundingNote>,
     /// M3 launch queue — one slot per lane (index parallels `set.lanes`). A queued
-    /// `(Pattern, Quant)` is applied at the next matching global boundary, exactly once.
-    /// Replacing a queued launch overwrites the slot (no stacking).
-    queued: Vec<Option<(Pattern, Quant)>>,
+    /// `(Pattern, Quant, Option<LaunchState>)` is applied at the next matching global
+    /// boundary, exactly once. Replacing a queued launch overwrites the slot (no stacking).
+    ///
+    /// M6: the optional `LaunchState` carries the per-lane mute/solo/transpose/octave to
+    /// apply AT the launch instant (scene recall). `None` = leave the lane's current
+    /// performance state untouched (the M3 single-pattern launch). Queuing every lane with
+    /// the SAME `Quant` makes `apply_due_launches` fire them all on ONE boundary step.
+    queued: Vec<Option<(Pattern, Quant, Option<LaunchState>)>>,
     /// Absolute step at which each lane last (re)started its local clock. 0 for a lane
     /// that has never been launched, so `(step - 0) % len` is byte-identical to today's
     /// `step % len`. A launch sets this to the boundary step, restarting the lane at local 0.
@@ -451,9 +469,26 @@ impl Sequencer {
 
     /// M3: queue `pattern` to launch on lane `lane` at the next `q` boundary. Replaces
     /// any existing queued launch for that lane (no stacking). No-op if `lane` is out of range.
+    /// Leaves the lane's mute/solo/transpose/octave unchanged at the launch (state `None`).
     pub fn queue_launch(&mut self, lane: usize, pattern: Pattern, q: Quant) {
         if let Some(slot) = self.queued.get_mut(lane) {
-            *slot = Some((pattern, q));
+            *slot = Some((pattern, q, None));
+        }
+    }
+
+    /// M6: like `queue_launch`, but ALSO applies `state` (mute/solo/transpose/octave) to the
+    /// lane AT the launch instant — used by scene recall so every lane's performance state
+    /// switches on the SAME boundary as its pattern, not before. Queue every scene lane with
+    /// the SAME `q` and they all fire together on one boundary (see `apply_due_launches`).
+    pub fn queue_launch_with_state(
+        &mut self,
+        lane: usize,
+        pattern: Pattern,
+        q: Quant,
+        state: LaunchState,
+    ) {
+        if let Some(slot) = self.queued.get_mut(lane) {
+            *slot = Some((pattern, q, Some(state)));
         }
     }
 
@@ -619,21 +654,31 @@ impl Sequencer {
     fn apply_due_launches(&mut self, step: usize, at_micros: u64, sink: &mut dyn MidiSink) {
         // Collect due lanes first so we can take ownership of each pattern without
         // holding a borrow of `self.queued` across the &mut self release/update calls.
-        let mut due: Vec<(usize, Pattern)> = Vec::new();
+        let mut due: Vec<(usize, Pattern, Option<LaunchState>)> = Vec::new();
         for (lane, slot) in self.queued.iter_mut().enumerate() {
-            let fire = matches!(slot, Some((_, q)) if is_boundary(step, *q));
+            let fire = matches!(slot, Some((_, q, _)) if is_boundary(step, *q));
             if fire {
                 // take() leaves None → exactly-once (the slot is cleared on apply).
-                if let Some((pattern, _)) = slot.take() {
-                    due.push((lane, pattern));
+                if let Some((pattern, _, state)) = slot.take() {
+                    due.push((lane, pattern, state));
                 }
             }
         }
-        for (lane, pattern) in due {
+        for (lane, pattern, state) in due {
             // Release this lane's sounding + held notes so a swap can't hang a note.
             self.release_lanes(&[lane], at_micros, sink);
             if let Some(l) = self.set.lanes.get_mut(lane) {
                 l.pattern = pattern;
+                // M6: apply the scene's per-lane performance state AT the launch instant
+                // (not before). mute/solo affect audibility from this step; transpose/octave
+                // shift the new pattern's pitches. tick()'s Fix #7 pass releases any held
+                // note on a lane that becomes inaudible, so muting here never hangs a note.
+                if let Some(s) = state {
+                    l.mute = s.mute;
+                    l.solo = s.solo;
+                    l.transpose = s.transpose;
+                    l.octave = s.octave;
+                }
             }
             if let Some(off) = self.launch_offset.get_mut(lane) {
                 *off = step;
@@ -1240,6 +1285,7 @@ mod sequencer_tests {
             swing: 0.5,
             lanes,
             id: crate::persist::Id::nil(),
+            scenes: Vec::new(),
         }
     }
 
@@ -3054,6 +3100,155 @@ mod sequencer_tests {
         assert!(
             launched.contains(&0),
             "take_launched must report lane 0 launched; got {launched:?}"
+        );
+    }
+
+    // ── M6: all-lane scene launch on one boundary (queue_launch_with_state) ──
+
+    /// Queuing every lane with the SAME quant fires them ALL on ONE boundary step:
+    /// none switch before it, and each new pattern's local-0 fires together at step 16.
+    #[test]
+    fn scene_all_lanes_launch_on_one_boundary() {
+        let dur = step_dur_micros(120.0);
+        // Two drum lanes: lane 0 plays 36, lane 1 plays 40 (each on local step 0).
+        let mut seq = Sequencer::new(set_with(vec![
+            drum_lane_step0_note(36),
+            drum_lane_step0_note(40),
+        ]));
+        let mut sink = RecordingSink::new();
+        seq.play(0);
+        let st = |mute| LaunchState {
+            mute,
+            solo: false,
+            transpose: 0,
+            octave: 0,
+        };
+        let mut now = 0u64;
+        while now <= 17 * dur {
+            if now == 3 * dur {
+                // Queue BOTH lanes for NextBar at the same moment (note 50 and 51).
+                seq.queue_launch_with_state(
+                    0,
+                    drum_pattern_step0_note(50),
+                    Quant::NextBar,
+                    st(false),
+                );
+                seq.queue_launch_with_state(
+                    1,
+                    drum_pattern_step0_note(51),
+                    Quant::NextBar,
+                    st(false),
+                );
+            }
+            seq.tick(now, &mut sink);
+            now += 1_000;
+        }
+        // Neither new pattern fired before the bar boundary (step 16).
+        let early = sink
+            .events
+            .iter()
+            .filter(|(at, m)| {
+                *at < 16 * dur && matches!(m, MidiMessage::NoteOn { note: 50 | 51, .. })
+            })
+            .count();
+        assert_eq!(early, 0, "no recalled lane may switch before the boundary");
+        // BOTH launched together at absolute step 16 (their shared boundary).
+        let l0 = kick_note_on_abs_steps(&sink, 50, dur);
+        let l1 = kick_note_on_abs_steps(&sink, 51, dur);
+        assert!(l0.contains(&16), "lane 0 launches at step 16; got {l0:?}");
+        assert!(l1.contains(&16), "lane 1 launches at step 16; got {l1:?}");
+    }
+
+    /// The per-lane LaunchState (mute/solo/transpose/octave) is applied AT the launch
+    /// instant: a lane queued with `mute=true` goes silent exactly from the boundary on.
+    #[test]
+    fn scene_applies_mute_at_launch_instant() {
+        let dur = step_dur_micros(120.0);
+        let mut seq = Sequencer::new(set_with(vec![drum_lane_step0_note(36)]));
+        let mut sink = RecordingSink::new();
+        seq.play(0);
+        // Queue at step 2 (NextBar) with mute=true, AFTER step 0's original note sounds.
+        let mut now = 0u64;
+        while now <= 33 * dur {
+            if now == 2 * dur {
+                seq.queue_launch_with_state(
+                    0,
+                    drum_pattern_step0_note(50),
+                    Quant::NextBar,
+                    LaunchState {
+                        mute: true,
+                        solo: false,
+                        transpose: 0,
+                        octave: 0,
+                    },
+                );
+            }
+            seq.tick(now, &mut sink);
+            now += 1_000;
+        }
+        // BEFORE the boundary the original pattern (note 36) sounded at step 0.
+        let orig = kick_note_on_abs_steps(&sink, 36, dur);
+        assert!(
+            orig.contains(&0),
+            "original sounded before launch; got {orig:?}"
+        );
+        // AFTER the launch (mute=true applied at the instant) the NEW pattern is silent —
+        // note 50 never fires (it would at abs 16/32 if audible).
+        let new_ons = sink
+            .events
+            .iter()
+            .filter(|(_, m)| matches!(m, MidiMessage::NoteOn { note: 50, .. }))
+            .count();
+        assert_eq!(
+            new_ons, 0,
+            "muted-at-launch lane must be silent after the boundary"
+        );
+    }
+
+    /// NOTE-OWNERSHIP: an all-lane recall releases each lane's previously-sounding note
+    /// at the boundary (no hung notes). After the launch + new pattern, the sounding
+    /// registry holds only the new pattern's notes — the old ones were released.
+    #[test]
+    fn scene_recall_does_not_hang_notes() {
+        let dur = step_dur_micros(120.0);
+        // Lane 0: a slide-HELD melodic note (off_at=None) — the worst case for hangs.
+        let mut seq = Sequencer::new(set_with(vec![melodic_lane_slide_held()]));
+        let mut sink = RecordingSink::new();
+        seq.play(0);
+        seq.tick(0, &mut sink); // held note (pitch 45, ch1) sounds, no NoteOff yet
+        assert_eq!(seq.sounding_count(), 1, "held note is sounding");
+        // Recall: queue a drum pattern (note 50) with default state on NextBar.
+        seq.queue_launch_with_state(
+            0,
+            drum_pattern_step0_note(50),
+            Quant::NextBar,
+            LaunchState {
+                mute: false,
+                solo: false,
+                transpose: 0,
+                octave: 0,
+            },
+        );
+        let mut now = 1_000u64;
+        while now <= 16 * dur + dur {
+            seq.tick(now, &mut sink);
+            now += 1_000;
+        }
+        // The held melodic note got a NoteOff at/after the boundary (released on relaunch).
+        assert!(
+            sink.events.iter().any(|(at, m)| *at >= 16 * dur
+                && *m
+                    == MidiMessage::NoteOff {
+                        channel: 1,
+                        note: 45
+                    }),
+            "recall must release the held note at the boundary (no hang)"
+        );
+        // No leftover melodic note: the registry only holds the drum hit's brief note, and
+        // after its gate the lane has at most the new pattern's notes — never pitch 45.
+        assert!(
+            !seq.sounding.iter().any(|s| s.note == 45),
+            "the old held note must not remain in the sounding registry"
         );
     }
 

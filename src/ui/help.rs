@@ -138,6 +138,15 @@ fn right_column_lines() -> Vec<Line<'static>> {
         row("[a]  audition entry   [C]  cancel queue"),
         row("[z]  validate crate   [V / esc]  close"),
         blank(),
+        // ── Scenes  [G] ──────────────────────────────────────────────
+        header("Scenes  [G] to open"),
+        row("[↑ ↓]  select scene"),
+        row("[enter]  quantized recall   [C]  cancel"),
+        row("[c]  capture current set   [r]  rename"),
+        row("[d]  duplicate   [x]  delete (confirm)"),
+        row("[z]  validate (check missing patterns)"),
+        row("[G / esc]  close"),
+        blank(),
         // ── Favorites ─────────────────────────────────────────────────
         header("Favorites  (Library mode)"),
         row("[f]  toggle favorite on selected pattern"),

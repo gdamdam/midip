@@ -12,7 +12,7 @@ use crate::link::LinkClock;
 use crate::midi::ports::{connect, list_output_ports, match_port, MidiSink, NullSink};
 use crate::pattern::model::{Lane, LaneRoute, Pattern, Set};
 use clock::ClockGen;
-use scheduler::{Quant, Sequencer};
+use scheduler::{LaunchState, Quant, Sequencer};
 use transport::{TempoSource, Transport};
 
 /// Commands sent UI -> engine.
@@ -39,6 +39,15 @@ pub enum UiCommand {
     /// M3: cancel a pending queued launch on `lane`.
     CancelQueue {
         lane: usize,
+    },
+    /// M6: queue an all-lane scene recall as ONE coordinated quantized launch. Every entry
+    /// `(lane, pattern, state)` is queued at the SAME `quant` boundary, so the sequencer
+    /// fires them all together on one bar/beat boundary (restarting each lane at step 1 and
+    /// applying its mute/solo/transpose/octave at that instant). Lanes absent from `lanes`
+    /// (e.g. a missing pattern) are left untouched. `CancelQueue` per lane cancels them.
+    QueueScene {
+        quant: Quant,
+        lanes: Vec<(usize, Pattern, LaunchState)>,
     },
     Mute {
         lane: usize,
@@ -255,6 +264,13 @@ fn apply_command(
         }
         UiCommand::CancelQueue { lane } => {
             st.seq.cancel_launch(lane);
+        }
+        UiCommand::QueueScene { quant, lanes } => {
+            // M6: queue every scene lane with the SAME quant so the sequencer's
+            // boundary check (`is_boundary(step, quant)`) fires them all on ONE step.
+            for (lane, pattern, state) in lanes {
+                st.seq.queue_launch_with_state(lane, pattern, quant, state);
+            }
         }
         UiCommand::Mute { lane, on } => {
             if let Some(existing) = st.seq.lane(lane) {

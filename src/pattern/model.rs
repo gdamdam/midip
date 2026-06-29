@@ -1,4 +1,5 @@
 use crate::devices::profiles::DeviceProfile;
+use crate::pattern::refs::PatternRef;
 use crate::persist;
 
 /// serde defaults for the per-step fields absent from the vendored library data.
@@ -274,6 +275,60 @@ impl Lane {
     }
 }
 
+/// A snapshot of a single lane's performance state for a scene.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct LaneAssignment {
+    pub pattern: PatternRef,
+    #[serde(default)]
+    pub mute: bool,
+    #[serde(default)]
+    pub solo: bool,
+    #[serde(default)]
+    pub transpose: i8,
+    #[serde(default)]
+    pub octave: i8,
+}
+
+/// A named snapshot of per-lane performance state (pattern + mute/solo/transpose/octave).
+/// Stored inside the `Set`; `#[serde(default)]` on `Set::scenes` so old sets load with `[]`.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Scene {
+    #[serde(default)]
+    pub id: persist::Id,
+    pub name: String,
+    /// One `LaneAssignment` per lane, in lane order.
+    pub assignments: Vec<LaneAssignment>,
+}
+
+impl Scene {
+    /// Capture the current performance state of every lane in `set` into a new `Scene`.
+    ///
+    /// Each lane's assignment is built from the lane's current pattern id (as a
+    /// `PatternRef::User`), mute, solo, transpose, and octave. Mints a fresh id.
+    pub fn from_set(set: &Set, name: String) -> Scene {
+        let assignments = set
+            .lanes
+            .iter()
+            .map(|lane| LaneAssignment {
+                // PatternRef::User is always correct here: Set lanes hold inline user
+                // patterns (identified by id), never vendored library patterns. There is
+                // no vendored-lane capture path, so a Vendored ref can never appear in
+                // a live lane's pattern field.
+                pattern: PatternRef::User(lane.pattern.id.clone()),
+                mute: lane.mute,
+                solo: lane.solo,
+                transpose: lane.transpose,
+                octave: lane.octave,
+            })
+            .collect();
+        Scene {
+            id: persist::mint_id(),
+            name,
+            assignments,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Set {
     pub name: String,
@@ -281,6 +336,8 @@ pub struct Set {
     pub swing: f32,
     pub lanes: Vec<Lane>,
     pub id: persist::Id,
+    /// Named scenes stored inside this set. Defaults to empty so old set files load unchanged.
+    pub scenes: Vec<Scene>,
 }
 
 impl Set {
@@ -321,7 +378,13 @@ impl Set {
             swing: 0.5,
             lanes,
             id: persist::Id::nil(),
+            scenes: Vec::new(),
         }
+    }
+
+    /// Convenience alias: capture the current lane state as a new scene.
+    pub fn capture_scene(&self, name: String) -> Scene {
+        Scene::from_set(self, name)
     }
 }
 
@@ -730,6 +793,96 @@ mod tests {
         assert_eq!(set.lanes[1].pattern.kind(), LaneKind::Melodic);
         assert_eq!(set.lanes[2].pattern.kind(), LaneKind::Melodic);
         assert!(set.lanes.iter().all(|l| !l.mute && !l.solo));
+    }
+
+    // ── M6 Task 1: Scene + LaneAssignment ───────────────────────────────────
+
+    #[test]
+    fn capture_scene_snapshots_current_lane_state() {
+        use crate::pattern::refs::PatternRef;
+        let profiles = crate::devices::profiles::default_profiles();
+        let mut set = Set::default_set(profiles);
+        // Give each lane a non-nil pattern id so capture can build a User ref.
+        for lane in &mut set.lanes {
+            lane.pattern.ensure_id();
+        }
+        set.lanes[0].mute = true;
+        set.lanes[1].solo = true;
+        set.lanes[1].transpose = 5;
+        set.lanes[2].octave = -1;
+
+        let scene = set.capture_scene("Live".to_string());
+        assert_eq!(scene.name, "Live");
+        assert!(!scene.id.is_nil(), "capture_scene must mint a non-nil id");
+        assert_eq!(scene.assignments.len(), set.lanes.len());
+
+        // Each assignment mirrors the lane's current state.
+        assert_eq!(
+            scene.assignments[0].pattern,
+            PatternRef::User(set.lanes[0].pattern.id.clone())
+        );
+        assert!(scene.assignments[0].mute);
+        assert!(!scene.assignments[0].solo);
+        assert_eq!(scene.assignments[0].transpose, 0);
+        assert_eq!(scene.assignments[0].octave, 0);
+
+        assert_eq!(
+            scene.assignments[1].pattern,
+            PatternRef::User(set.lanes[1].pattern.id.clone())
+        );
+        assert!(!scene.assignments[1].mute);
+        assert!(scene.assignments[1].solo);
+        assert_eq!(scene.assignments[1].transpose, 5);
+        assert_eq!(scene.assignments[1].octave, 0);
+
+        assert_eq!(scene.assignments[2].octave, -1);
+    }
+
+    #[test]
+    fn scene_resolve_reports_missing_pattern() {
+        use crate::pattern::library::Library;
+        use crate::pattern::refs::{resolve_scene, PatternRef};
+        let profiles = crate::devices::profiles::default_profiles();
+        let mut set = Set::default_set(profiles);
+        for lane in &mut set.lanes {
+            lane.pattern.ensure_id();
+        }
+
+        // Build a scene with one resolvable vendored ref and one nonexistent user id.
+        let missing_id = crate::persist::mint_id();
+        let scene = Scene {
+            id: crate::persist::mint_id(),
+            name: "test".to_string(),
+            assignments: vec![
+                LaneAssignment {
+                    pattern: PatternRef::User(missing_id),
+                    mute: false,
+                    solo: false,
+                    transpose: 0,
+                    octave: 0,
+                },
+                LaneAssignment {
+                    // Use the lane's actual id — resolvable from the set's inline pattern.
+                    pattern: PatternRef::User(set.lanes[1].pattern.id.clone()),
+                    mute: false,
+                    solo: false,
+                    transpose: 0,
+                    octave: 0,
+                },
+            ],
+        };
+
+        let lib = Library::load(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/patterns"),
+        )
+        .expect("library loads");
+        // Provide the set's inline patterns as the user-pattern search space.
+        let inline: Vec<Pattern> = set.lanes.iter().map(|l| l.pattern.clone()).collect();
+        let results = resolve_scene(&scene, &lib, &inline);
+
+        assert_eq!(results.len(), 2);
+        assert!(results[0].is_err(), "missing user id must resolve to Err");
+        assert!(results[1].is_ok(), "known lane pattern must resolve to Ok");
     }
 
     // ── M5a Task 2: per-lane scale + root ────────────────────────────────────

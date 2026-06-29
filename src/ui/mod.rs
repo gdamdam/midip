@@ -7,6 +7,7 @@ pub mod library;
 pub mod mgmt;
 pub mod recovery;
 pub mod route_editor;
+pub mod scene_view;
 pub mod theme;
 pub mod transport;
 
@@ -41,6 +42,9 @@ fn context_footer(app: &App) -> Line<'static> {
         Mode::NameEntry(_) => "[a-z 0-9 - #]type name [enter]confirm [esc]cancel",
         Mode::Confirm(_) => "[y/enter]yes [n/esc]no",
         Mode::CrateView => "[↑↓]entry [←→]crate [enter]launch [a]audition [f]fav [V/esc]close",
+        Mode::Scenes => {
+            "[↑↓]select [enter]recall [c]capture [r]rename [d]dup [x]del [z]validate [G/esc]close"
+        }
         Mode::NoteInput => "[a-k]white [w/e/t/y/u]black [z]oct- [x]oct+ [bksp]del [esc]exit",
     };
     let label_style = Style::default()
@@ -127,6 +131,7 @@ pub fn render(f: &mut Frame, app: &App) {
         Mode::NameEntry(_) => mgmt::render_name_entry(f, centered(area, 50, 30), app),
         Mode::Confirm(_) => mgmt::render_confirm(f, centered(area, 50, 25), app),
         Mode::CrateView => crate_view::render_crate_view(f, centered(area, 70, 70), app),
+        Mode::Scenes => scene_view::render_scene_view(f, centered(area, 70, 70), app),
         Mode::NoteInput => mgmt::render_note_input(f, centered(area, 60, 20), app),
         Mode::Edit | Mode::TempoEntry => {}
     }
