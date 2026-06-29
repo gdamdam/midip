@@ -1,13 +1,17 @@
+<div align="center">
+
 # midip
 
-A **terminal MIDI pattern sequencer** for the Roland AIRA Compact **T‑8** (drums + bass)
-and **S‑1** (synth). Browse a large built‑in pattern library, play it to your hardware as
-a 3‑lane groovebox, edit patterns live, and stay in time manually or via **Ableton Link** —
-all from an ASCII UI in your terminal.
+**A terminal MIDI sequencer & live groovebox for the Roland AIRA Compact T‑8 and S‑1**
 
-midip is **MIDI‑only**: it makes *your* devices play the notes. It is the sequencer; your
-gear is the sound. (It never triggers a device's own internal pattern — see
-[Devices & MIDI](#devices--midi).)
+[![License](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
+[![Version](https://img.shields.io/badge/version-0.8.0-success.svg)](CHANGELOG.md)
+[![Rust](https://img.shields.io/badge/rust-2021%20edition-orange.svg)](https://www.rust-lang.org)
+[![Tests](https://img.shields.io/badge/tests-662%20passing-brightgreen.svg)](docs/HARDWARE-ACCEPTANCE.md)
+[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg)](#build--run)
+[![Built with ratatui](https://img.shields.io/badge/TUI-ratatui-blueviolet.svg)](https://ratatui.rs)
+
+</div>
 
 ```
 ▶ PLAY  124 BPM  LINK 2 LOCKED  001.2.3  SW 56%  SAVED
@@ -19,6 +23,34 @@ EDIT DRUM | Steps 1-16 of 16 | Cursor 1 | Playhead 4
 Step 1 · BD · Velocity 120 [-/+] · Probability 100% [p/P] · Ratchet x1 [y/Y]
 [space]play [tab]lane [arrows]move [enter]toggle [0-9]vel [?]controls
 ```
+
+midip is **MIDI‑only**: it makes *your* devices play the notes. It is the sequencer; your
+gear is the sound. (It never triggers a device's own internal pattern — see
+[Devices & MIDI](#devices--midi).)
+
+---
+
+## Table of contents
+
+- [Features](#features)
+- [Requirements](#requirements)
+- [Build & run](#build--run)
+- [Quick start](#quick-start)
+- [The interface](#the-interface)
+- [Controls](#controls)
+- [Devices & MIDI](#devices--midi)
+- [Tempo & Ableton Link](#tempo--ableton-link)
+- [Patterns, library & sets](#patterns-library--sets)
+- [Favorites & crates](#favorites--crates)
+- [Performance controls](#performance-controls)
+- [Scale-aware editing](#scale-aware-editing)
+- [Configuration](#configuration)
+- [Project layout](#project-layout)
+- [Testing](#testing)
+- [Status](#status)
+- [License](#license)
+
+---
 
 ## Features
 
@@ -36,9 +68,18 @@ Step 1 · BD · Velocity 120 [-/+] · Probability 100% [p/P] · Ratchet x1 [y/Y]
   disrupting the others. Lanes show `ACTIVE` and `QUEUED⟶` markers; `C` cancels a queue.
 - **Configurable per‑lane MIDI routing** — assign each lane its own output port, MIDI channel,
   and clock‑out flag via the route editor (`w`).
-- **Virtual mirror output** — `M` toggles an optional virtual MIDI source named `midip` that
-  other apps on the same machine can subscribe to; shows `MIR` when active. Purely additive —
-  hardware output is identical with or without it.
+- **Virtual `midip` port** — a routable virtual MIDI source that other apps on the same machine
+  can subscribe to. Route any lane directly to "midip" in the route editor, or use `M` to mirror
+  the full output stream to it. The port appears as `midip` in any DAW or app.
+- **Favorites & crates** — star patterns (`f`), filter to favorites (`F`), and collect them into
+  named **crates** for set-based performance. The **live crate view** (`V`) lets you browse and
+  launch patterns mid-performance, quantized and role-matched (drums→drum lane, etc.).
+- **Performance controls** — mute individual drum voices live (backtick `` ` ``), restart a
+  drifted lane's phase without changing its pattern (`i`), and overlay a temporary fill (`f`/`F`)
+  that reverts cleanly if not committed.
+- **Scale-aware melodic editing** — choose a root + scale per melodic lane (`n`/`N` scale,
+  `h`/`H` root); `↑`/`↓` moves by scale degree; `X` conforms existing notes to the scale;
+  `I` opens a QWERTY piano note-input sub-mode.
 - **Tempo** — type an exact BPM, nudge it, **tap tempo**, or sync to **Ableton Link**
   (embedded — no separate bridge app). Link bar‑locks playback start so no notes fire before
   the bar boundary. midip is the clock master (24 PPQN).
@@ -47,7 +88,7 @@ Step 1 · BD · Velocity 120 [-/+] · Probability 100% [p/P] · Ratchet x1 [y/Y]
   (startup offers Recover / Discard / Open on an unclean shutdown). Full set management:
   save‑as, rename, duplicate, new, and delete. Save the focused lane as a user pattern (`A`),
   clear it (`Z`), and load user patterns from a "User" section in the library.
-- Tasteful static color, a context‑sensitive footer, and a full scrollable `?` controls overlay.
+- Tasteful static color, a context‑sensitive footer, and a full scrollable two-column `?` controls overlay.
 
 ## Requirements
 
@@ -69,7 +110,7 @@ Other commands:
 
 ```sh
 cargo build --release        # just build the binary (target/release/midip)
-cargo test                   # run the test suite
+cargo test                   # run the test suite (662 tests, no hardware needed)
 ```
 
 > Run it in a real terminal (not piped) — it takes over the screen while running and restores
@@ -99,16 +140,18 @@ cargo test                   # run the test suite
 - **Editor** — adapts to the focused lane:
   - **Drums**: a TR‑style grid (voice rows × steps); velocity shown as cell shading.
   - **Melodic**: a note lane with pitch names, note length (sustain spans cells), and slides
-    drawn as a glide tie between notes.
+    drawn as a glide tie between notes. Scale degree shown when a scale is active.
   - Shows an `EDIT … | Steps x‑y of N | Cursor | Playhead` header and a per‑step detail line.
   - Patterns longer than 16 steps **page** (the view follows the cursor).
-- **Library** overlay — genre column + pattern column; `a` to audition, Enter to commit.
+- **Library** overlay (`l`) — genre column + pattern column; `a` to audition, Enter to commit,
+  `f`/`F` for favorites, `b` toggle launch quant.
 - **Set manager** overlay (`o`) — load, save‑as, rename, duplicate, new, delete.
 - **Route editor** overlay (`w`) — per‑lane port / channel / clock‑out assignment.
+- **Live crate view** overlay (`V`) — browse crates and launch patterns quantized to role-matched lanes.
 
 ## Controls
 
-Press **`?`** in‑app for the full scrollable list. `space` and `!` work in every mode.
+Press **`?`** in‑app for the full scrollable two-column list. `space` and `!` work in every mode.
 
 ### Transport
 
@@ -146,16 +189,25 @@ Press **`?`** in‑app for the full scrollable list. `space` and `!` work in eve
 | `←` `→` `↑` `↓` | Move cursor |
 | `e` / `E` | Euclidean pulses add / remove |
 | `[` / `]` | Euclidean rotation |
+| `` ` `` | Toggle mute on focused drum voice (latched, non-destructive) |
+| `i` | Quantized lane restart (re-sync phase at next bar/beat) |
+| `f` | Temporary fill — toggle overlay on/off (reverts on lane focus change) |
+| `F` | Commit fill as a permanent (undoable) edit |
 
 ### Melodic
 
 | Key | Action |
 |-----|--------|
 | `←` / `→` | Step cursor |
-| `↑` / `↓` | Pitch up / down |
+| `↑` / `↓` | Pitch up / down (by scale degree when scale is set) |
 | `g` | Toggle slide |
 | `,` / `.` | Note length |
 | `[` / `]` | Octave down / up |
+| `n` / `N` | Cycle scale forward / backward |
+| `h` / `H` | Root note down / up (semitone) |
+| `X` | Conform all existing notes to current scale (with undo) |
+| `I` | Note-input sub-mode (QWERTY piano; Esc to exit) |
+| `i` | Quantized lane restart |
 
 ### Library (`l` to open)
 
@@ -167,7 +219,22 @@ Press **`?`** in‑app for the full scrollable list. `space` and `!` work in eve
 | `enter` | Commit pattern (queues at next bar/beat when playing) |
 | `b` | Toggle launch quantization: next bar / next beat |
 | `C` | Cancel pending queued launch |
+| `f` | Toggle favorite on selected pattern |
+| `F` | Toggle favorites-only filter |
 | `esc` / `l` | Close library |
+
+### Live Crate View (`V` to open)
+
+| Key | Action |
+|-----|--------|
+| `↑` / `↓` | Select entry (never changes playback) |
+| `←` / `→` | Switch crate |
+| `enter` | Launch selected pattern (quantized, role-matched) |
+| `a` | Audition selected pattern (gated) |
+| `f` | Toggle favorite |
+| `C` | Cancel pending queued launch |
+| `z` | Pre-performance validation (report missing/unavailable) |
+| `esc` | Close crate view |
 
 ### Set Manager (`o` to open)
 
@@ -201,13 +268,14 @@ Press **`?`** in‑app for the full scrollable list. `space` and `!` work in eve
 | `ctrl+y` | Redo |
 | `m` | Mute focused lane |
 | `S` | Solo focused lane |
-| `M` | Toggle virtual mirror output |
+| `M` | Toggle virtual mirror output (`MIR` indicator) |
 | `A` | Save focused lane as user pattern |
 | `Z` | Clear focused lane pattern (with confirmation) |
 | `b` | Toggle launch quantization: next bar / next beat |
 | `C` | Cancel pending queued launch |
 | `w` | Open route editor |
 | `l` | Open library |
+| `V` | Open live crate view |
 | `o` | Open set manager |
 | `s` | Save set |
 | `?` | Help overlay |
@@ -232,12 +300,13 @@ transport Start/Stop — so your gear plays *only* the notes midip sends, never 
 pattern. A failed send or unplugged device flips that lane to `○`; replugging reconnects
 automatically.
 
-### Virtual mirror output
+### Virtual `midip` port
 
-`M` creates an optional virtual MIDI source named **`midip`** (macOS / Linux) that other apps
-on the same machine can subscribe to. When `MIR` is shown, the full output stream (all lanes'
-notes + 24 PPQN clock) is also sent to this virtual port. The mirror is purely additive:
-hardware output is identical whether it is on or off.
+From v0.7.0 the virtual MIDI source is a **first-class routable destination**. In the route
+editor (`w`), select "midip" as any lane's output port — that lane's MIDI goes straight to the
+virtual source (shown as `CON ●`), available to any DAW or app on the machine. `M` still
+mirrors the full output stream additively; it does not double-send a lane already routed to
+"midip". The hardware path is unaffected in all cases.
 
 ## Tempo & Ableton Link
 
@@ -266,6 +335,49 @@ hardware output is identical whether it is on or off.
 - **Autosave** writes a recovery file in the background (never overwrites a deliberate save).
   On an **unclean shutdown**, startup prompts **Recover / Discard / Open** saved.
 - **Set management** (`o`): save‑as, rename, duplicate, new, and delete with confirmation.
+
+## Favorites & crates
+
+- **Favorite patterns** — star any vendored or user pattern in the library with `f`; filter
+  to favorites-only with `F`. Favorites persist across runs.
+- **Crates** — named, ordered, reusable collections of pattern references. Create, rename,
+  duplicate, delete, and reorder entries; a pattern can live in multiple crates.
+- **Live crate view** (`V`) — browse crates and launch patterns live without touching the
+  library. `Enter` launches the selected entry **quantized** to the **role-matched lane**
+  (drums→drum lane, bass→bass, synth→synth). `a` auditions (gated), `←/→` switches crates,
+  `f` favorites, `C` cancels a queued launch.
+- **Pre-performance validation** (`z` in the crate view) — reports entries whose pattern is
+  missing or whose target lane's device is unavailable before a set.
+
+## Performance controls
+
+Available in Edit mode (v0.7.0+):
+
+- **Per-drum-voice mute** (backtick `` ` ``) — mute a single drum voice (e.g. just the hi-hat)
+  live, latched and non-destructive. Muting releases the voice's sounding note immediately.
+- **Quantized lane restart** (`i`) — re-sync a drifted lane by restarting its phase at the
+  next bar or beat boundary, without changing its pattern.
+- **Temporary fill** (`f` / `F`) — overlay a deterministic fill on the focused lane. `f`
+  toggles the fill on/off (toggling off reverts exactly). `F` commits it as a permanent,
+  undoable edit. Changing lane focus reverts an uncommitted fill; a fill is never saved to
+  disk until committed.
+
+## Scale-aware editing
+
+Available on melodic lanes (v0.8.0+):
+
+- `n` / `N` — cycle the lane's scale (Chromatic, Major, Natural/Harmonic Minor, modes, Major/
+  Minor Pentatonic, Blues). Default is Chromatic — existing patterns are unchanged.
+- `h` / `H` — move the root note up / down by a semitone.
+- `↑` / `↓` in Edit — moves a note by scale degree (semitone in Chromatic); new notes fold
+  into the scale automatically.
+- `X` — conform all existing notes in the lane to its current scale (shows a count + undo).
+- `I` — note-input sub-mode: a QWERTY piano for entering melodies. White keys `a s d f g h j k`,
+  black keys `w e t y u`, `z`/`x` shift octave, Backspace clears the step, Esc exits. Entered
+  notes fold to the scale. The whole session is one undo step.
+
+Changing the scale never silently rewrites existing notes — only `X` or `I` do that, with
+explicit intent.
 
 ## Configuration
 
@@ -302,14 +414,15 @@ cargo test
 ```
 
 The engine writes through a `MidiSink` trait, so playback, scheduling, slides, probability,
-ratcheting, polymeter, quantized launch, and the reducer are all tested with a recording sink —
-**no hardware needed**. UI views are checked with ratatui's `TestBackend`. (Live MIDI and
-Ableton Link are hardware paths — see [`docs/HARDWARE-ACCEPTANCE.md`](docs/HARDWARE-ACCEPTANCE.md).)
+ratcheting, polymeter, quantized launch, favorites, crates, scale-aware editing, and the
+reducer are all tested with a recording sink — **no hardware needed**. UI views are checked
+with ratatui's `TestBackend`. 662 tests, 0 failures. (Live MIDI and Ableton Link are hardware
+paths — see [`docs/HARDWARE-ACCEPTANCE.md`](docs/HARDWARE-ACCEPTANCE.md).)
 
 ## Status
 
-v0.5.0 — feature‑complete and green. See [`docs/KNOWN-ISSUES.md`](docs/KNOWN-ISSUES.md) for
-minor open items, and [`docs/superpowers/specs/`](docs/superpowers/specs/) for the design.
+v0.8.0 — feature‑complete and green. See [`docs/KNOWN-ISSUES.md`](docs/KNOWN-ISSUES.md) for
+open items, and [`CHANGELOG.md`](CHANGELOG.md) for the full history.
 
 ## License
 
