@@ -5,6 +5,7 @@
 //! clock. Only the headless driver is unit-tested — the threaded one is not deterministic.
 
 pub mod clock;
+pub mod clock_in;
 pub mod scheduler;
 pub mod transport;
 
