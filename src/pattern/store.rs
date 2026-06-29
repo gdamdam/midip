@@ -357,7 +357,9 @@ pub fn validate_and_repair(set: &mut Set) -> Vec<String> {
     }
 
     // ── scenes ────────────────────────────────────────────────────────────────
+    let lane_count = set.lanes.len();
     for (scene_idx, scene) in set.scenes.iter_mut().enumerate() {
+        // Clamp per-assignment fields first (only over existing assignments).
         for (assign_idx, a) in scene.assignments.iter_mut().enumerate() {
             let orig_transpose = a.transpose;
             a.transpose = a.transpose.clamp(-24, 24);
@@ -375,6 +377,40 @@ pub fn validate_and_repair(set: &mut Set) -> Vec<String> {
                     scene_idx, assign_idx, orig_octave, a.octave
                 ));
             }
+        }
+
+        // Reconcile assignment count to match lane count so T2 can safely index
+        // assignments by lane index without bounds checks.
+        let got = scene.assignments.len();
+        if got > lane_count {
+            // Too many: truncate excess assignments (spurious lanes no longer present).
+            scene.assignments.truncate(lane_count);
+            notes.push(format!(
+                "scene {} truncated assignments {}→{}",
+                scene_idx, got, lane_count
+            ));
+        } else if got < lane_count {
+            // Too few: pad with a neutral assignment referencing the lane's current pattern.
+            // Using the lane's current PatternRef::User id is the safest default —
+            // it resolves immediately from the set's inline patterns and leaves performance
+            // state (mute/solo/transpose/octave) at neutral values.
+            for lane_idx in got..lane_count {
+                scene
+                    .assignments
+                    .push(crate::pattern::model::LaneAssignment {
+                        pattern: crate::pattern::refs::PatternRef::User(
+                            set.lanes[lane_idx].pattern.id.clone(),
+                        ),
+                        mute: false,
+                        solo: false,
+                        transpose: 0,
+                        octave: 0,
+                    });
+            }
+            notes.push(format!(
+                "scene {} padded assignments {}→{}",
+                scene_idx, got, lane_count
+            ));
         }
     }
 
@@ -1919,6 +1955,88 @@ mod tests {
             a.octave
         );
         assert!(!notes.is_empty(), "repair must note that scene was fixed");
+    }
+
+    /// A scene with too many assignments is truncated to `lanes.len()`;
+    /// a scene with too few is padded to `lanes.len()`.
+    /// Neither must panic, and the resulting count must equal lane count.
+    #[test]
+    fn validate_reconciles_scene_assignment_count_to_lane_count() {
+        use crate::pattern::model::{LaneAssignment, Scene};
+        use crate::pattern::refs::PatternRef;
+
+        let mut set = Set::default_set(default_profiles());
+        // Give all lane patterns non-nil ids so padding can reference them.
+        for lane in &mut set.lanes {
+            lane.pattern.ensure_id();
+        }
+        let lane_count = set.lanes.len(); // 3
+
+        // Scene A: too many assignments (5 > 3).
+        let too_many = Scene {
+            id: persist::mint_id(),
+            name: "Too Many".to_string(),
+            assignments: (0..5)
+                .map(|_| LaneAssignment {
+                    pattern: PatternRef::User(persist::mint_id()),
+                    mute: false,
+                    solo: false,
+                    transpose: 0,
+                    octave: 0,
+                })
+                .collect(),
+        };
+
+        // Scene B: too few assignments (1 < 3).
+        let too_few = Scene {
+            id: persist::mint_id(),
+            name: "Too Few".to_string(),
+            assignments: vec![LaneAssignment {
+                pattern: PatternRef::User(set.lanes[0].pattern.id.clone()),
+                mute: true,
+                solo: false,
+                transpose: 2,
+                octave: 0,
+            }],
+        };
+
+        set.scenes = vec![too_many, too_few];
+        let notes = validate_and_repair(&mut set);
+
+        // Both scenes must now have exactly lane_count assignments — no panic.
+        assert_eq!(
+            set.scenes[0].assignments.len(),
+            lane_count,
+            "too-many scene must be truncated to lane count"
+        );
+        assert_eq!(
+            set.scenes[1].assignments.len(),
+            lane_count,
+            "too-few scene must be padded to lane count"
+        );
+
+        // The padded assignments must have neutral values.
+        let padded = &set.scenes[1].assignments;
+        // First assignment was already there — preserved.
+        assert!(padded[0].mute, "original assignment[0] must be preserved");
+        assert_eq!(padded[0].transpose, 2);
+        // Padded slots must be neutral.
+        for a in &padded[1..] {
+            assert!(!a.mute, "padded assignment must have mute=false");
+            assert!(!a.solo, "padded assignment must have solo=false");
+            assert_eq!(a.transpose, 0, "padded assignment must have transpose=0");
+            assert_eq!(a.octave, 0, "padded assignment must have octave=0");
+        }
+
+        // Repair notes must mention both scenes.
+        assert!(
+            notes.iter().any(|n| n.contains("truncated")),
+            "repair notes must mention truncation"
+        );
+        assert!(
+            notes.iter().any(|n| n.contains("padded")),
+            "repair notes must mention padding"
+        );
     }
 
     #[test]

@@ -310,7 +310,10 @@ impl Scene {
             .lanes
             .iter()
             .map(|lane| LaneAssignment {
-                // Lane patterns in a Set are always inline user patterns identified by id.
+                // PatternRef::User is always correct here: Set lanes hold inline user
+                // patterns (identified by id), never vendored library patterns. There is
+                // no vendored-lane capture path, so a Vendored ref can never appear in
+                // a live lane's pattern field.
                 pattern: PatternRef::User(lane.pattern.id.clone()),
                 mute: lane.mute,
                 solo: lane.solo,

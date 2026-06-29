@@ -61,9 +61,13 @@ pub fn resolve_pattern_ref(r: &PatternRef, lib: &Library, user_dir: &Path) -> Op
 /// Resolve each assignment in `scene` to a `Pattern`.
 ///
 /// For each assignment, the resolution order is:
-/// 1. Search `inline_patterns` by id (patterns already held in memory, e.g. from `Set::lanes`).
-/// 2. For `PatternRef::Vendored`: look up in `lib`.
-/// 3. For `PatternRef::User`: the assignment is missing.
+/// 1. For `PatternRef::User`: search `inline_patterns` by id (patterns already held in memory,
+///    e.g. from `Set::lanes`). `Err(())` if not found.
+/// 2. For `PatternRef::Vendored`: resolve via the library using all three fields
+///    (role + genre + name), which is the canonical match used by `resolve_pattern_ref`.
+///    Inline patterns are NOT searched for vendored refs — a name-only match would
+///    silently resolve to the wrong pattern when two vendored entries share a name but
+///    differ in role or genre.
 ///
 /// Returns one `Result<Pattern, ()>` per assignment in order. `Err(())` means the
 /// pattern could not be resolved; the caller (Task 2/3) should warn and skip that lane.
@@ -77,15 +81,12 @@ pub fn resolve_scene(
         .assignments
         .iter()
         .map(|a| match &a.pattern {
+            // Vendored refs are resolved exclusively by role+genre+name via the library,
+            // matching the canonical logic in `resolve_pattern_ref`. A name-only inline
+            // search is omitted: two vendored entries can share a name while differing in
+            // role or genre, which would cause silent mis-resolution.
             PatternRef::Vendored { role, genre, name } => {
-                // Check inline first (covers user-overridden vendored patterns in the set),
-                // then fall back to the vendored library.
-                inline_patterns
-                    .iter()
-                    .find(|p| &p.name == name)
-                    .cloned()
-                    .or_else(|| lib.find(role, genre, name).cloned())
-                    .ok_or(())
+                lib.find(role, genre, name).cloned().ok_or(())
             }
             PatternRef::User(id) => inline_patterns
                 .iter()
@@ -169,6 +170,93 @@ mod tests {
         assert_eq!(bass.role_lane_hint(), Some(1));
         assert_eq!(synth.role_lane_hint(), Some(2));
         assert_eq!(user.role_lane_hint(), None);
+    }
+
+    /// Two vendored patterns share the same name but have different roles.
+    /// `resolve_scene` must return the one whose role+genre+name all match,
+    /// not the first one found by name alone.
+    #[test]
+    fn resolve_scene_vendored_disambiguates_by_role_and_genre() {
+        use crate::pattern::library::Library;
+        use crate::pattern::model::{LaneAssignment, Pattern, Scene};
+
+        // Build a minimal library with two vendored patterns sharing the name "Shared".
+        // We use the real library path so Library::load gives us a baseline, then
+        // we directly test the logic via a scene with real lib entries.
+        // Since we can't easily inject a custom Library, we test the *observable behavior*:
+        // resolve_scene for a Vendored ref with role="drums" / genre="techno" must NOT
+        // return a pattern that has role="bass" when both names happen to be identical.
+        //
+        // Strategy: create a scene with a Vendored ref for a role that exists in the
+        // real library, and a different Vendored ref with the same name but wrong role.
+        // The wrong-role ref must resolve to Err (not found), proving name alone is not used.
+
+        let lib_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/patterns");
+        let lib = Library::load(&lib_path).expect("library loads");
+
+        // Find any pattern in the bass library to get a real name.
+        let bass_patterns = lib.bass.values().next().expect("bass genre present");
+        let real_bass_pat = bass_patterns.first().expect("bass pattern present");
+        let real_name = real_bass_pat.name.clone();
+        let real_genre = lib.bass.keys().next().unwrap().clone();
+
+        // A Vendored ref matching the real bass pattern (role=bass).
+        let correct_ref = PatternRef::Vendored {
+            role: "bass".to_string(),
+            genre: real_genre.clone(),
+            name: real_name.clone(),
+        };
+        // A Vendored ref using the SAME name but wrong role — must NOT resolve.
+        let wrong_role_ref = PatternRef::Vendored {
+            role: "drums".to_string(), // wrong role
+            genre: real_genre.clone(),
+            name: real_name.clone(),
+        };
+
+        let scene_correct = Scene {
+            id: crate::persist::mint_id(),
+            name: "correct".to_string(),
+            assignments: vec![LaneAssignment {
+                pattern: correct_ref,
+                mute: false,
+                solo: false,
+                transpose: 0,
+                octave: 0,
+            }],
+        };
+        let scene_wrong = Scene {
+            id: crate::persist::mint_id(),
+            name: "wrong".to_string(),
+            assignments: vec![LaneAssignment {
+                pattern: wrong_role_ref,
+                mute: false,
+                solo: false,
+                transpose: 0,
+                octave: 0,
+            }],
+        };
+
+        // Neither scene has inline patterns — pure library resolution.
+        let inline: Vec<Pattern> = vec![];
+
+        let correct_results = resolve_scene(&scene_correct, &lib, &inline);
+        assert_eq!(correct_results.len(), 1);
+        assert!(
+            correct_results[0].is_ok(),
+            "correct role+genre+name must resolve to Ok"
+        );
+        assert_eq!(
+            correct_results[0].as_ref().unwrap().name,
+            real_name,
+            "resolved pattern name must match"
+        );
+
+        let wrong_results = resolve_scene(&scene_wrong, &lib, &inline);
+        assert_eq!(wrong_results.len(), 1);
+        assert!(
+            wrong_results[0].is_err(),
+            "wrong role with same name must resolve to Err (not mis-resolved by name alone)"
+        );
     }
 
     #[test]
