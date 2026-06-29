@@ -3365,6 +3365,15 @@ impl App {
                     *slot = None;
                 }
             }
+            // M10 T4: external MIDI clock-in lock/loss. The persistent status display + key
+            // binding are T5; for now surface a toast so the user sees lock/loss feedback.
+            EngineEvent::ClockInStatus { locked, tempo, .. } => {
+                if locked {
+                    self.set_status(format!("Clock in: locked {} BPM", tempo.round() as u32));
+                } else {
+                    self.set_status("Clock in: lost");
+                }
+            }
         }
         cmds
     }

@@ -9,7 +9,7 @@ pub mod clock_in;
 pub mod scheduler;
 pub mod transport;
 
-use crate::engine::clock_in::ClockInMsg;
+use crate::engine::clock_in::{ClockInMsg, ClockInState};
 use crate::link::LinkClock;
 use crate::midi::ports::{
     connect, connect_clock_in, list_output_ports, match_port, MidiSink, MidirClockIn, NullSink,
@@ -99,6 +99,12 @@ pub enum UiCommand {
     /// Latch fill-active performance state. Read by Fill/NotFill trig conditions
     /// in the scheduler. Separate from ToggleFill (a pattern transform).
     SetFillActive(bool),
+    /// M10 T4: select (or clear) the external MIDI clock-input port AND switch the
+    /// tempo source to `ClockIn`. `Some(port)` follows that port's clock; `None` clears
+    /// the port and reverts the source to `Manual`. In the real engine the
+    /// `spawn_engine` loop also intercepts this to (re)connect the clock-input watcher.
+    /// Switching to ClockIn releases the other tempo sources (see `apply_command`).
+    SetClockInPort(Option<crate::pattern::model::PortRef>),
     Quit,
 }
 
@@ -134,6 +140,15 @@ pub enum EngineEvent {
     /// M3: engine-confirmed that a queued per-lane launch fired at global `step`
     /// (so the UI can flip ACTIVE↔QUEUED on confirmation).
     Launched { lane: usize, step: usize },
+    /// M10 T4: external MIDI clock-input status. `locked` is true while ticks are arriving
+    /// (a stable tempo is being followed) and false when the clock is lost / stopped.
+    /// `tempo` is the followed BPM (smoothed; falls back to manual when not yet locked).
+    /// `deviation` is the |followed − manual| BPM gap (display hint; 0.0 when not locked).
+    ClockInStatus {
+        locked: bool,
+        tempo: f64,
+        deviation: f64,
+    },
 }
 
 /// Handle returned by `spawn_engine`.
@@ -145,6 +160,23 @@ pub struct EngineHandle {
 
 /// Emit a `LinkStatus` event roughly this often (in ticks) to avoid flooding.
 const LINK_STATUS_EVERY: u64 = 200;
+
+/// M10 T4: clock-in loss timeout, expressed in MIDI ticks of silence. 24 ticks = one
+/// quarter note at 24 PPQN — a full beat with no incoming tick means the external clock
+/// has stopped or vanished, so we halt + release. Tolerant of normal inter-tick jitter.
+const CLOCK_IN_TIMEOUT_TICKS: u64 = 24;
+
+/// Floor for the clock-in loss timeout (µs) used before any tempo is known (no lock yet),
+/// or as a lower bound at very fast tempos. 500 ms ≈ one beat at 120 BPM.
+const CLOCK_IN_TIMEOUT_FLOOR_MICROS: u64 = 500_000;
+
+/// Derive the clock-in loss timeout (µs) from the currently-followed/expected BPM.
+/// One MIDI tick ≈ `step_dur_micros(bpm) / 6` (6 ticks per 16th step). The timeout is
+/// `CLOCK_IN_TIMEOUT_TICKS` such intervals, floored at `CLOCK_IN_TIMEOUT_FLOOR_MICROS`.
+fn clock_in_timeout_micros(bpm: f64) -> u64 {
+    let tick_interval = scheduler::step_dur_micros(bpm) / 6;
+    (tick_interval * CLOCK_IN_TIMEOUT_TICKS).max(CLOCK_IN_TIMEOUT_FLOOR_MICROS)
+}
 
 /// Mutable engine state shared by both drivers.
 struct EngineState {
@@ -169,6 +201,18 @@ struct EngineState {
     /// port IN ADDITION TO the hardware fanout — purely additive; hardware path is
     /// byte-identical either way (a lane explicitly routed to "midip" is not double-sent).
     mirror_on: bool,
+    /// M10 T4: pure clock-input accumulator (tick→step boundary + tempo smoothing).
+    /// Driven only while `transport.source == ClockIn` and ticks are draining in.
+    clock_in_state: ClockInState,
+    /// Smoothed clock-in BPM (None until enough ticks for a stable estimate). Passed to
+    /// `Transport::effective_bpm` so the clock generator + scheduler follow the external tempo.
+    clock_in_bpm: Option<f64>,
+    /// Last received Song Position Pointer beat (SPP). PARSED + STORED ONLY — the engine does
+    /// NOT reposition on it yet (deferred per spec; the field makes T-future SPP-ready).
+    clock_in_song_position: Option<u16>,
+    /// Whether the external clock is currently locked (ticks arriving). Tracks the last
+    /// reported state so `ClockInStatus` is emitted only on a lock↔unlock transition.
+    clock_in_locked: bool,
 }
 
 impl EngineState {
@@ -188,8 +232,23 @@ impl EngineState {
             tick_count: 0,
             route_dirty: false,
             mirror_on: false,
+            clock_in_state: ClockInState::new(),
+            clock_in_bpm: None,
+            clock_in_song_position: None,
+            clock_in_locked: false,
         }
     }
+}
+
+/// M10 T4: leave the ClockIn tempo source (if active), restoring internal-timing advance.
+/// Idempotent. Disengages clock-driven step advance and forgets the followed tempo, but does
+/// NOT stop the transport — the caller decides whether playback continues under the new
+/// source. Used when switching to Manual/Link or clearing the clock-in port.
+fn disengage_clock_in(st: &mut EngineState) {
+    st.seq.set_clock_driven(false);
+    st.clock_in_bpm = None;
+    st.clock_in_locked = false;
+    st.clock_in_state.reset();
 }
 
 /// Apply a single UI command to engine state at time `now`.
@@ -225,11 +284,15 @@ fn apply_command(
             events.push(EngineEvent::Stopped);
         }
         UiCommand::SetBpm(bpm) => {
+            // 3-way exclusivity: an explicit manual BPM takes over from Link/ClockIn.
+            disengage_clock_in(st);
             st.transport.manual_bpm = bpm;
             st.transport.source = TempoSource::Manual(bpm);
             st.seq.set_bpm(bpm);
         }
         UiCommand::Tap => {
+            // 3-way exclusivity: tapping a tempo takes over from Link/ClockIn.
+            disengage_clock_in(st);
             st.transport.tap(now);
             st.transport.source = TempoSource::Manual(st.transport.manual_bpm);
             st.seq.set_bpm(st.transport.manual_bpm);
@@ -241,6 +304,10 @@ fn apply_command(
             st.seq.set_swing(s);
         }
         UiCommand::ToggleLink(on) => {
+            // 3-way exclusivity: enabling Link takes over from ClockIn (and vice versa).
+            if on {
+                disengage_clock_in(st);
+            }
             st.link_enabled = on;
             link.set_enabled(on);
             st.transport.source = if on {
@@ -361,6 +428,36 @@ fn apply_command(
         UiCommand::SetFillActive(on) => {
             st.seq.set_fill_active(on);
         }
+        UiCommand::SetClockInPort(port) => {
+            match port {
+                Some(_) => {
+                    // Enter ClockIn: disable Link (3-way exclusivity), engage clock-driven
+                    // advance, and follow the external clock. The actual port (re)connection
+                    // is handled by the spawn_engine loop, which intercepts this command and
+                    // talks to the clock-input watcher; here we own the transport-source state.
+                    if st.link_enabled {
+                        st.link_enabled = false;
+                        link.set_enabled(false);
+                    }
+                    // Fresh lock attempt: clear stale tick/tempo history so a previously-lost
+                    // source does not immediately re-trigger a loss on the first new tick.
+                    st.clock_in_state.reset();
+                    st.clock_in_bpm = None;
+                    st.clock_in_locked = false;
+                    st.transport.source = TempoSource::ClockIn;
+                    st.seq.set_clock_driven(true);
+                }
+                None => {
+                    // Clear the clock-in port: leave ClockIn, revert to Manual. If we were
+                    // playing under the external clock, the next internal tick resumes timing
+                    // from the current position at manual_bpm.
+                    disengage_clock_in(st);
+                    if !st.link_enabled {
+                        st.transport.source = TempoSource::Manual(st.transport.manual_bpm);
+                    }
+                }
+            }
+        }
         UiCommand::Quit => {
             // Release all sounding notes before exiting — avoids hanging notes on hardware.
             st.seq.panic(now, sink);
@@ -377,6 +474,7 @@ fn step_engine(
     st: &mut EngineState,
     now: u64,
     pending: &mut Vec<(u64, UiCommand)>,
+    clock_in_msgs: &mut Vec<ClockInMsg>,
     link: &mut dyn LinkClock,
     sink: &mut dyn MidiSink,
     events: &mut Vec<EngineEvent>,
@@ -398,16 +496,109 @@ fn step_engine(
         return true;
     }
 
+    // 1b. M10 T4 — drain incoming external MIDI clock messages. They are acted upon ONLY
+    //     while the tempo source is ClockIn; otherwise they are drained + discarded (a stale
+    //     port may still be delivering until the watcher reconnects). `clock_advanced`
+    //     captures the last step materialized by a tick-driven advance this iteration, so the
+    //     Playhead emit below covers both the internal and clock-driven advance paths.
+    let mut clock_advanced: Option<usize> = None;
+    let following_clock = matches!(st.transport.source, TempoSource::ClockIn);
+    for msg in clock_in_msgs.drain(..) {
+        if !following_clock {
+            continue;
+        }
+        match msg {
+            ClockInMsg::Tick => {
+                // Advance the step accumulator; on every 6th tick (one 16th step) drive the
+                // sequencer forward by EXACTLY one step (tick-driven, NOT step_dur timing).
+                let step_due = st.clock_in_state.on_tick(now);
+                // Update the followed tempo from the smoothed estimate (when stable).
+                if let Some(bpm) = st.clock_in_state.smoothed_bpm() {
+                    st.clock_in_bpm = Some(bpm);
+                }
+                if step_due {
+                    let bpm = st.transport.effective_bpm(None, st.clock_in_bpm);
+                    if let Some(s) = st.seq.advance_clock_step(now, bpm, sink) {
+                        clock_advanced = Some(s);
+                    }
+                    for lane in st.seq.take_launched() {
+                        events.push(EngineEvent::Launched {
+                            lane,
+                            step: st.seq.current_step(),
+                        });
+                    }
+                }
+                // Newly locked? Emit a status transition (false -> true).
+                if !st.clock_in_locked {
+                    st.clock_in_locked = true;
+                    let tempo = st.clock_in_bpm.unwrap_or(st.transport.manual_bpm);
+                    events.push(EngineEvent::ClockInStatus {
+                        locked: true,
+                        tempo,
+                        deviation: (tempo - st.transport.manual_bpm).abs(),
+                    });
+                }
+            }
+            ClockInMsg::Start => {
+                // Restart the tick accumulator and play from the top (origin).
+                st.clock_in_state.reset();
+                st.clock_in_song_position = Some(0);
+                st.seq.play(now);
+                events.push(EngineEvent::Started { at_step: 0 });
+            }
+            ClockInMsg::Continue => {
+                // Resume at the current position (do NOT reset playhead/origin). If the
+                // sequencer was stopped, mark it playing again from where it sits.
+                if !st.seq.is_playing() {
+                    st.seq.resume(now);
+                    events.push(EngineEvent::Started {
+                        at_step: st.seq.current_step(),
+                    });
+                }
+            }
+            ClockInMsg::Stop => {
+                // Release all sounding notes via the existing stop path (M1 note-safety).
+                st.seq.stop(now, sink);
+                events.push(EngineEvent::Stopped);
+            }
+            ClockInMsg::SongPosition(pos) => {
+                // SPP: parse + STORE only. DO NOT reposition (deferred per spec).
+                st.clock_in_song_position = Some(pos);
+            }
+            ClockInMsg::Other => {}
+        }
+    }
+
+    // 1c. M10 T4 — clock-in loss detection. While following an external clock that HAD locked
+    //     (a tick was received), if no tick has arrived within the tempo-derived timeout, treat
+    //     it as a Stop: halt + release all notes (existing path), report unlocked. No drift,
+    //     no runaway (the suppressed internal-timing advance never fills the gap).
+    if following_clock && st.clock_in_locked {
+        let timeout = clock_in_timeout_micros(st.clock_in_bpm.unwrap_or(st.transport.manual_bpm));
+        if st.clock_in_state.is_lost(now, timeout) {
+            st.seq.stop(now, sink); // releases every sounding note (all-notes-off)
+            st.clock_in_locked = false;
+            st.clock_in_bpm = None;
+            let tempo = st.transport.manual_bpm;
+            events.push(EngineEvent::ClockInStatus {
+                locked: false,
+                tempo,
+                deviation: 0.0,
+            });
+            events.push(EngineEvent::Stopped);
+        }
+    }
+
     // 2. Tempo source resolution via Transport::effective_bpm.
-    //    `ToggleLink` keeps `transport.source` in sync (Manual ↔ Link), so this call is
-    //    the single authoritative BPM resolution path for both headless tests and the real
-    //    engine thread.
+    //    `ToggleLink`/`SetClockInPort` keep `transport.source` in sync (Manual ↔ Link ↔
+    //    ClockIn), so this call is the single authoritative BPM resolution path for both
+    //    headless tests and the real engine thread.
     let link_tempo = if st.link_enabled {
         Some(link.tempo())
     } else {
         None
     };
-    let bpm = st.transport.effective_bpm(link_tempo);
+    let bpm = st.transport.effective_bpm(link_tempo, st.clock_in_bpm);
 
     // Link-gated start: once the quantized bar boundary is reached (beat >= 0),
     // fire the sequencer. While armed, seq.playing is false so tick emits nothing.
@@ -422,8 +613,13 @@ fn step_engine(
         st.seq.sync_to_beat(beat, bpm);
     }
 
-    // 3. Advance sequencer + clock.
-    let advanced = st.seq.tick(now, sink);
+    // 3. Advance sequencer + clock. While following an external clock, `seq.tick` is
+    //    clock-driven (its internal step_dur advance loop is suppressed — see
+    //    Sequencer::set_clock_driven), so this call only runs the inaudible-note release +
+    //    flush_due passes; the actual step advance happened above in the Tick handler. This
+    //    is what guarantees no double-advance: the internal-timing path cannot also move a
+    //    step while ClockIn is active.
+    let advanced = st.seq.tick(now, sink).or(clock_advanced);
     // M3: emit a Launched event for each lane whose queued launch fired this tick.
     // The boundary step is the sequencer's current absolute step (launches apply at the
     // step being materialized, which is the latest `current`).
@@ -476,8 +672,27 @@ pub fn run_engine_headless(
     total_micros: u64,
     tick: u64,
 ) -> Vec<EngineEvent> {
+    run_engine_headless_clocked(set, link, sink, commands, vec![], total_micros, tick)
+}
+
+/// M10 T4: headless driver variant that ALSO feeds external MIDI clock-in messages at their
+/// timestamps (simulating a connected clock source pushing `ClockInMsg`s into the engine's
+/// clock-in channel). `clock_in` is a list of `(at_micros, ClockInMsg)`, delivered to the
+/// engine on the first iteration where `now >= at_micros` (mirroring the `commands` queue).
+/// `run_engine_headless` delegates here with an empty clock-in list, so existing callers are
+/// unaffected.
+pub fn run_engine_headless_clocked(
+    set: Set,
+    link: &mut dyn LinkClock,
+    sink: &mut dyn MidiSink,
+    commands: Vec<(u64, UiCommand)>,
+    clock_in: Vec<(u64, ClockInMsg)>,
+    total_micros: u64,
+    tick: u64,
+) -> Vec<EngineEvent> {
     let mut st = EngineState::new(set);
     let mut pending = commands;
+    let mut pending_clock = clock_in;
     let mut events = Vec::new();
     let tick = tick.max(1);
 
@@ -486,7 +701,26 @@ pub fn run_engine_headless(
     // are not emitted. Commands timestamped at 0 fire on the first iteration.
     let mut now: u64 = 0;
     loop {
-        if step_engine(&mut st, now, &mut pending, link, sink, &mut events) {
+        // Drain due clock-in messages (at_micros <= now) into this step's batch, preserving
+        // order, exactly as the real engine drains its clock-in channel each loop iteration.
+        let mut clock_msgs: Vec<ClockInMsg> = Vec::new();
+        let mut ci = 0;
+        while ci < pending_clock.len() {
+            if pending_clock[ci].0 <= now {
+                clock_msgs.push(pending_clock.remove(ci).1);
+            } else {
+                ci += 1;
+            }
+        }
+        if step_engine(
+            &mut st,
+            now,
+            &mut pending,
+            &mut clock_msgs,
+            link,
+            sink,
+            &mut events,
+        ) {
             break;
         }
         now = now.saturating_add(tick);
@@ -1016,11 +1250,10 @@ pub fn spawn_engine(set: Set, mut link: Box<dyn LinkClock>) -> EngineHandle {
 
         // Spawn the clock-input watcher: opens a MidiInput connection to clock_in_port
         // (when set) and forwards ClockInMsg values over `clock_in_rx`. The engine loop
-        // can non-blockingly drain `clock_in_rx`; T4 will act on those messages.
+        // drains `clock_in_rx` non-blockingly each iteration and feeds the batch to
+        // `step_engine`, which acts on it only while the tempo source is ClockIn (M10 T4).
         // Absent/None port → no connection, no panic (watcher starts idle).
-        // `_clock_in_rx` is intentionally unused until T4 wires up engine consumption.
-        // The receiver is held here so the channel stays alive and the watcher can send.
-        let (ci_watcher, ci_cmd_tx, _clock_in_rx) =
+        let (ci_watcher, ci_cmd_tx, clock_in_rx) =
             spawn_clock_in_watcher(initial_clock_in_key.clone());
         let mut ci_watcher = Some(ci_watcher);
         // Tracks the currently connected clock-in port key so SetSet reconnects only on change.
@@ -1117,6 +1350,15 @@ pub fn spawn_engine(set: Set, mut link: Box<dyn LinkClock>) -> EngineHandle {
             // routed there). The hardware path is byte-identical whether the mirror is on or
             // off. `fanout` is scoped to the inner block so its borrow of `port_sinks` is
             // dropped before the health-check / route-replan below re-borrows it.
+            // Drain the clock-input channel (NON-BLOCKING) into this iteration's batch. The
+            // watcher's callback pushes ClockInMsg values from the MIDI input thread; we
+            // collect them in arrival order and hand them to step_engine, which acts on them
+            // only while following an external clock (M10 T4).
+            let mut clock_msgs: Vec<ClockInMsg> = Vec::new();
+            while let Ok(m) = clock_in_rx.try_recv() {
+                clock_msgs.push(m);
+            }
+
             let quit = {
                 let mut fanout = PortFanoutSink {
                     ports: &mut port_sinks,
@@ -1129,6 +1371,7 @@ pub fn spawn_engine(set: Set, mut link: Box<dyn LinkClock>) -> EngineHandle {
                     &mut st,
                     now,
                     &mut pending,
+                    &mut clock_msgs,
                     link.as_mut(),
                     &mut fanout,
                     &mut events,
@@ -1167,16 +1410,28 @@ pub fn spawn_engine(set: Set, mut link: Box<dyn LinkClock>) -> EngineHandle {
             }
 
             // Drain command channel into the pending queue (timestamped at `now`).
-            // Intercept SetSet to update the clock-in watcher when clock_in_port changes.
+            // Intercept SetSet and SetClockInPort to (re)connect the clock-in watcher when the
+            // selected clock-input port changes. The transport-source switch itself is applied
+            // by `apply_command` when `pending` is processed; here we only manage the I/O side.
             while let Ok(cmd) = cmd_rx.try_recv() {
-                if let UiCommand::SetSet(ref set) = cmd {
-                    let new_key: Option<String> = set.clock_in_port.as_ref().map(|p| {
+                let new_clock_key: Option<Option<String>> = match &cmd {
+                    UiCommand::SetSet(set) => Some(set.clock_in_port.as_ref().map(|p| {
                         if p.stable_key.is_empty() {
                             p.name.clone()
                         } else {
                             p.stable_key.clone()
                         }
-                    });
+                    })),
+                    UiCommand::SetClockInPort(port) => Some(port.as_ref().map(|p| {
+                        if p.stable_key.is_empty() {
+                            p.name.clone()
+                        } else {
+                            p.stable_key.clone()
+                        }
+                    })),
+                    _ => None,
+                };
+                if let Some(new_key) = new_clock_key {
                     if new_key != current_clock_in_key {
                         current_clock_in_key = new_key.clone();
                         let _ = ci_cmd_tx.send(ClockInCmd::SetPort(new_key));
@@ -1520,9 +1775,9 @@ mod tests {
         let mut t = Transport::new();
         t.manual_bpm = bpm;
         t.source = TempoSource::Manual(bpm);
-        assert_eq!(t.effective_bpm(None), bpm);
+        assert_eq!(t.effective_bpm(None, None), bpm);
         // And effective_bpm ignores a link tempo when source is Manual.
-        assert_eq!(t.effective_bpm(Some(140.0)), bpm);
+        assert_eq!(t.effective_bpm(Some(140.0), None), bpm);
     }
 
     /// effective_bpm: after ToggleLink(true), transport.source == TempoSource::Link,
@@ -1532,9 +1787,9 @@ mod tests {
         let mut t = Transport::new();
         t.manual_bpm = 120.0;
         t.source = TempoSource::Link;
-        assert_eq!(t.effective_bpm(Some(140.0)), 140.0);
+        assert_eq!(t.effective_bpm(Some(140.0), None), 140.0);
         // Falls back to manual_bpm when link value absent.
-        assert_eq!(t.effective_bpm(None), 120.0);
+        assert_eq!(t.effective_bpm(None, None), 120.0);
     }
 
     /// P2: SetSet must release every sounding note BEFORE replacing the sequencer.
@@ -1838,7 +2093,16 @@ mod tests {
 
         // Arm the engine: send Play command through step_engine
         let mut pending = vec![(0u64, UiCommand::ToggleLink(true)), (0u64, UiCommand::Play)];
-        step_engine(&mut st, 0, &mut pending, &mut link, &mut sink, &mut events);
+        let mut clock_msgs: Vec<ClockInMsg> = Vec::new();
+        step_engine(
+            &mut st,
+            0,
+            &mut pending,
+            &mut clock_msgs,
+            &mut link,
+            &mut sink,
+            &mut events,
+        );
 
         // After arming: no Started yet, sequencer not playing
         assert!(
@@ -1855,10 +2119,12 @@ mod tests {
         link.set_beat(0.0);
         events.clear();
         let mut pending2: Vec<(u64, UiCommand)> = vec![];
+        let mut clock_msgs2: Vec<ClockInMsg> = Vec::new();
         step_engine(
             &mut st,
             1_000,
             &mut pending2,
+            &mut clock_msgs2,
             &mut link,
             &mut sink,
             &mut events,
@@ -2765,5 +3031,492 @@ mod tests {
             "expected real NoteOns in the run; got {:?}",
             sink.events
         );
+    }
+
+    // ---------------------------------------------------------------------------
+    // M10 T4 — follow external MIDI clock (tick-driven advance, transport, loss,
+    // source exclusivity). Driven through the headless harness with a fake clock-in
+    // source pushing ClockInMsg values at virtual timestamps.
+    // ---------------------------------------------------------------------------
+
+    /// A set whose lane-0 drum pattern hits note 36 on EVERY step (so each step advance
+    /// produces an observable NoteOn). Lanes 1/2 are emptied so only lane 0 sounds.
+    fn clock_in_drum_set(bpm: f64) -> Set {
+        use crate::pattern::model::{DrumHit, Pattern, PatternData};
+        let mut set = default_set();
+        set.bpm = bpm;
+        let hit = DrumHit {
+            note: 36,
+            vel: 100,
+            prob: 1.0,
+            ratchet: 1,
+            micro: 0,
+            cond: TrigCond::Always,
+        };
+        let steps: Vec<Vec<DrumHit>> = (0..16).map(|_| vec![hit.clone()]).collect();
+        set.lanes[0].pattern = Pattern {
+            name: "ci".into(),
+            desc: String::new(),
+            length: 16,
+            data: PatternData::Drums(steps),
+            id: crate::persist::Id::nil(),
+            cc: Default::default(),
+        };
+        // Silence the other lanes so the test only sees lane-0 NoteOns.
+        let empty = Pattern {
+            name: "empty".into(),
+            desc: String::new(),
+            length: 16,
+            data: PatternData::Drums((0..16).map(|_| Vec::new()).collect()),
+            id: crate::persist::Id::nil(),
+            cc: Default::default(),
+        };
+        set.lanes[1].pattern = empty.clone();
+        set.lanes[2].pattern = empty;
+        set
+    }
+
+    fn note_on_count(sink: &RecordingSink) -> usize {
+        sink.events
+            .iter()
+            .filter(|(_, m)| matches!(m, crate::midi::MidiMessage::NoteOn { vel, .. } if *vel > 0))
+            .count()
+    }
+
+    /// 6 incoming ticks (one 16th) advance the sequencer EXACTLY one step — and the internal
+    /// `step_dur` timer does NOT also advance it (no double-step). Drives ClockIn, plays from
+    /// top, then feeds 6 ticks spread across virtual time; expects exactly ONE step's NoteOn.
+    #[test]
+    fn clock_in_six_ticks_advance_one_step() {
+        let set = clock_in_drum_set(120.0); // internal step_dur = 125_000 µs
+        let mut link = FakeLink::new();
+        let mut sink = RecordingSink::new();
+
+        // Tick interval at 120 BPM = 125_000/6 ≈ 20_833 µs. Place 6 ticks within the first
+        // 125_000 µs (one internal step) so that, were the internal timer ALSO advancing, we
+        // would see >1 step. Total run is short enough that internal timing alone would only
+        // fire step 0 anyway — so to prove suppression we ALSO assert step count == 1 here and
+        // rely on the dedicated no-double-advance test below for the long-run guarantee.
+        let mut clock_in = vec![(0, ClockInMsg::Start)];
+        for i in 1..=6u64 {
+            clock_in.push((i * 20_000, ClockInMsg::Tick));
+        }
+        let evs = run_engine_headless_clocked(
+            set,
+            &mut link,
+            &mut sink,
+            vec![(0, UiCommand::SetClockInPort(Some(test_port_ref())))],
+            clock_in,
+            200_000,
+            1_000,
+        );
+
+        // Exactly one step advance → exactly one lane-0 NoteOn.
+        assert_eq!(
+            note_on_count(&sink),
+            1,
+            "6 ticks must advance exactly ONE step (one NoteOn); got events {:?}",
+            sink.events
+        );
+        // The advance produced a Playhead at step 0 (the first step materialized by the 6th tick).
+        assert!(
+            evs.iter()
+                .any(|e| matches!(e, EngineEvent::Playhead { step: 0, .. })),
+            "expected a Playhead for step 0; got {:?}",
+            evs
+        );
+    }
+
+    /// While ClockIn is active, the internal `step_dur` timer must NOT advance the sequencer —
+    /// only ticks do. Run for many internal step-durations with ZERO ticks after Start: no step
+    /// should fire (no NoteOn) beyond what ticks would drive (here: none).
+    #[test]
+    fn clock_in_internal_timer_does_not_advance() {
+        let set = clock_in_drum_set(120.0); // internal step_dur = 125_000 µs
+        let mut link = FakeLink::new();
+        let mut sink = RecordingSink::new();
+
+        // Start (play from top) but send NO ticks. Run for 10 internal steps' worth of time.
+        let evs = run_engine_headless_clocked(
+            set,
+            &mut link,
+            &mut sink,
+            vec![(0, UiCommand::SetClockInPort(Some(test_port_ref())))],
+            vec![(0, ClockInMsg::Start)],
+            1_300_000, // > 10 * 125_000
+            1_000,
+        );
+
+        assert_eq!(
+            note_on_count(&sink),
+            0,
+            "internal timer must NOT advance steps while ClockIn active (no ticks → no NoteOn); \
+             got {:?}",
+            sink.events
+        );
+        // No spurious Playhead step advances either (only the initial step-0 emit is gated on
+        // play; with clock-driven we never call play's step 0 via internal tick).
+        let advances = evs
+            .iter()
+            .filter(|e| matches!(e, EngineEvent::Playhead { .. }))
+            .count();
+        assert!(
+            advances <= 1,
+            "at most the initial playhead; got {advances} Playhead events: {evs:?}"
+        );
+    }
+
+    /// `Start` plays from the TOP (origin): after Start + 6 ticks, current_step is the first
+    /// step (0) — a fresh run, not a resume.
+    #[test]
+    fn clock_in_start_plays_from_top() {
+        let set = clock_in_drum_set(120.0);
+        let mut link = FakeLink::new();
+        let mut sink = RecordingSink::new();
+        let mut clock_in = vec![(0, ClockInMsg::Start)];
+        for i in 1..=6u64 {
+            clock_in.push((i * 20_000, ClockInMsg::Tick));
+        }
+        let evs = run_engine_headless_clocked(
+            set,
+            &mut link,
+            &mut sink,
+            vec![(0, UiCommand::SetClockInPort(Some(test_port_ref())))],
+            clock_in,
+            200_000,
+            1_000,
+        );
+        assert!(
+            evs.iter()
+                .any(|e| matches!(e, EngineEvent::Started { at_step: 0 })),
+            "Start must emit Started{{at_step:0}} (play from top); got {evs:?}"
+        );
+        assert!(
+            evs.iter()
+                .any(|e| matches!(e, EngineEvent::Playhead { step: 0, .. })),
+            "first materialized step after Start is step 0; got {evs:?}"
+        );
+    }
+
+    /// `Continue` resumes at the CURRENT position (does not rewind). Start + advance a few
+    /// steps, Stop, then Continue: playback resumes from where it was, not from step 0.
+    #[test]
+    fn clock_in_continue_resumes_position() {
+        let set = clock_in_drum_set(120.0);
+        let mut link = FakeLink::new();
+        let mut sink = RecordingSink::new();
+
+        // Start, advance 3 steps (18 ticks), Stop, then Continue + 1 more step (6 ticks).
+        let mut clock_in = vec![(0, ClockInMsg::Start)];
+        let mut t = 10_000u64;
+        for _ in 0..18 {
+            clock_in.push((t, ClockInMsg::Tick));
+            t += 20_000;
+        }
+        // Stop after 3 steps (current_step should be 2, next_step 3).
+        clock_in.push((t, ClockInMsg::Stop));
+        t += 20_000;
+        // Continue then 6 more ticks → one more step. It must be step 3 (resume), not step 0.
+        clock_in.push((t, ClockInMsg::Continue));
+        for _ in 0..6 {
+            t += 20_000;
+            clock_in.push((t, ClockInMsg::Tick));
+        }
+        let evs = run_engine_headless_clocked(
+            set,
+            &mut link,
+            &mut sink,
+            vec![(0, UiCommand::SetClockInPort(Some(test_port_ref())))],
+            clock_in,
+            t + 100_000,
+            1_000,
+        );
+
+        // The LAST Playhead step must be 3 (resumed forward), proving no rewind to 0.
+        let last_step = evs
+            .iter()
+            .rev()
+            .find_map(|e| match e {
+                EngineEvent::Playhead { step, .. } => Some(*step),
+                _ => None,
+            })
+            .expect("at least one Playhead");
+        assert_eq!(
+            last_step, 3,
+            "Continue must resume at the next position (step 3), not rewind; got {evs:?}"
+        );
+    }
+
+    /// `Stop` halts playback AND releases all sounding notes via the existing stop path —
+    /// the registry ends empty and every NoteOn is matched by a NoteOff.
+    #[test]
+    fn clock_in_stop_releases_all_notes() {
+        use crate::midi::MidiMessage;
+        use crate::pattern::model::{MelodicNote, MelodicStep, Pattern, PatternData};
+
+        // Use a melodic lane holding a LONG note so a NoteOn is sounding when Stop arrives.
+        let mut set = default_set();
+        set.bpm = 120.0;
+        let mut steps = vec![MelodicStep::default(); 16];
+        steps[0] = MelodicStep::from(vec![MelodicNote {
+            semi: 0,
+            vel: 1.0,
+            slide: false,
+            len: 16.0, // holds across the whole pattern
+            prob: 1.0,
+            ratchet: 1,
+            micro: 0,
+            cond: TrigCond::Always,
+        }]);
+        set.lanes[0].pattern = Pattern {
+            name: "held".into(),
+            desc: String::new(),
+            length: 16,
+            data: PatternData::Melodic(steps),
+            id: crate::persist::Id::nil(),
+            cc: Default::default(),
+        };
+
+        let mut link = FakeLink::new();
+        let mut sink = RecordingSink::new();
+        // Start, 6 ticks (materialize step 0 → NoteOn sounding), then Stop.
+        let mut clock_in = vec![(0, ClockInMsg::Start)];
+        let mut t = 10_000u64;
+        for _ in 0..6 {
+            clock_in.push((t, ClockInMsg::Tick));
+            t += 20_000;
+        }
+        clock_in.push((t, ClockInMsg::Stop));
+        let evs = run_engine_headless_clocked(
+            set,
+            &mut link,
+            &mut sink,
+            vec![(0, UiCommand::SetClockInPort(Some(test_port_ref())))],
+            clock_in,
+            t + 100_000,
+            1_000,
+        );
+
+        // A NoteOn fired, and Stop emitted a Stopped event.
+        assert!(
+            note_on_count(&sink) >= 1,
+            "a held NoteOn must have sounded before Stop; got {:?}",
+            sink.events
+        );
+        assert!(
+            evs.iter().any(|e| matches!(e, EngineEvent::Stopped)),
+            "Stop must emit Stopped; got {evs:?}"
+        );
+        // Note-safety: net per-(channel,note) balance is zero (every NoteOn released).
+        use std::collections::HashMap;
+        let mut net: HashMap<(u8, u8), i32> = HashMap::new();
+        for (_, m) in &sink.events {
+            match m {
+                MidiMessage::NoteOn { channel, note, vel } if *vel > 0 => {
+                    *net.entry((*channel, *note)).or_insert(0) += 1;
+                }
+                MidiMessage::NoteOn { channel, note, .. } => {
+                    *net.entry((*channel, *note)).or_insert(0) -= 1;
+                }
+                MidiMessage::NoteOff { channel, note } => {
+                    *net.entry((*channel, *note)).or_insert(0) -= 1;
+                }
+                _ => {}
+            }
+        }
+        let hung: Vec<_> = net.iter().filter(|(_, &v)| v > 0).collect();
+        assert!(
+            hung.is_empty(),
+            "Stop must release all notes (no hung notes); leftover {hung:?}; events {:?}",
+            sink.events
+        );
+    }
+
+    /// `SongPosition` is parsed + stored but NOT acted upon: position is unchanged (deferred).
+    #[test]
+    fn clock_in_song_position_does_not_reposition() {
+        let set = clock_in_drum_set(120.0);
+        let mut link = FakeLink::new();
+        let mut sink = RecordingSink::new();
+        // Start, advance 2 steps (12 ticks → steps 0,1), send an SPP, advance 1 more step
+        // (6 ticks → step 2). The SPP must NOT move the playhead — steps stay monotonic.
+        let mut clock_in = vec![(0, ClockInMsg::Start)];
+        let mut t = 10_000u64;
+        for _ in 0..12 {
+            clock_in.push((t, ClockInMsg::Tick));
+            t += 20_000;
+        }
+        clock_in.push((t, ClockInMsg::SongPosition(64))); // far-away beat; must be ignored
+        for _ in 0..6 {
+            t += 20_000;
+            clock_in.push((t, ClockInMsg::Tick));
+        }
+        let evs = run_engine_headless_clocked(
+            set,
+            &mut link,
+            &mut sink,
+            vec![(0, UiCommand::SetClockInPort(Some(test_port_ref())))],
+            clock_in,
+            t + 100_000,
+            1_000,
+        );
+        // Steps advanced 0,1,2 then 3 — the SPP(64) did NOT jump the playhead to beat 64.
+        let last_step = evs
+            .iter()
+            .rev()
+            .find_map(|e| match e {
+                EngineEvent::Playhead { step, .. } => Some(*step),
+                _ => None,
+            })
+            .expect("a Playhead");
+        assert_eq!(
+            last_step, 2,
+            "SongPosition must NOT reposition (step stays monotonic at 2, not 64*4); got {evs:?}"
+        );
+    }
+
+    /// No tick within the loss timeout → engine treats it as Stop: halts, releases all notes,
+    /// and emits ClockInStatus{locked:false}.
+    #[test]
+    fn clock_in_loss_timeout_stops_and_releases() {
+        use crate::midi::MidiMessage;
+        use crate::pattern::model::{MelodicNote, MelodicStep, Pattern, PatternData};
+
+        let mut set = default_set();
+        set.bpm = 120.0;
+        let mut steps = vec![MelodicStep::default(); 16];
+        steps[0] = MelodicStep::from(vec![MelodicNote {
+            semi: 0,
+            vel: 1.0,
+            slide: false,
+            len: 16.0,
+            prob: 1.0,
+            ratchet: 1,
+            micro: 0,
+            cond: TrigCond::Always,
+        }]);
+        set.lanes[0].pattern = Pattern {
+            name: "held".into(),
+            desc: String::new(),
+            length: 16,
+            data: PatternData::Melodic(steps),
+            id: crate::persist::Id::nil(),
+            cc: Default::default(),
+        };
+
+        let mut link = FakeLink::new();
+        let mut sink = RecordingSink::new();
+        // Start + 6 ticks (a NoteOn sounds), then SILENCE. The loss timeout (~one beat) elapses
+        // and the engine stops + releases. Run well past the timeout.
+        let mut clock_in = vec![(0, ClockInMsg::Start)];
+        let mut t = 10_000u64;
+        for _ in 0..6 {
+            clock_in.push((t, ClockInMsg::Tick));
+            t += 20_000;
+        }
+        // Last tick around t≈130_000. Loss timeout ~500_000 µs → lost by ~700_000. Run to 2 s.
+        let evs = run_engine_headless_clocked(
+            set,
+            &mut link,
+            &mut sink,
+            vec![(0, UiCommand::SetClockInPort(Some(test_port_ref())))],
+            clock_in,
+            2_000_000,
+            1_000,
+        );
+
+        assert!(
+            evs.iter()
+                .any(|e| matches!(e, EngineEvent::ClockInStatus { locked: false, .. })),
+            "loss must emit ClockInStatus{{locked:false}}; got {evs:?}"
+        );
+        // Note-safety: the held note is released by the loss-stop (no hung note).
+        use std::collections::HashMap;
+        let mut net: HashMap<(u8, u8), i32> = HashMap::new();
+        for (_, m) in &sink.events {
+            match m {
+                MidiMessage::NoteOn { channel, note, vel } if *vel > 0 => {
+                    *net.entry((*channel, *note)).or_insert(0) += 1;
+                }
+                MidiMessage::NoteOn { channel, note, .. } => {
+                    *net.entry((*channel, *note)).or_insert(0) -= 1;
+                }
+                MidiMessage::NoteOff { channel, note } => {
+                    *net.entry((*channel, *note)).or_insert(0) -= 1;
+                }
+                _ => {}
+            }
+        }
+        let hung: Vec<_> = net.iter().filter(|(_, &v)| v > 0).collect();
+        assert!(
+            hung.is_empty(),
+            "loss timeout must release all notes; leftover {hung:?}; events {:?}",
+            sink.events
+        );
+    }
+
+    /// Switching INTO ClockIn disables Link (3-way exclusivity); switching OUT (clear port)
+    /// reverts to Manual. Verified through apply_command on EngineState.
+    #[test]
+    fn clock_in_switch_releases_other_sources() {
+        let set = default_set();
+        let mut st = EngineState::new(set);
+        let mut link = FakeLink::new();
+        let mut sink = RecordingSink::new();
+        let mut events = Vec::new();
+
+        // Start in Link.
+        apply_command(
+            &mut st,
+            UiCommand::ToggleLink(true),
+            0,
+            &mut link,
+            &mut sink,
+            &mut events,
+        );
+        assert_eq!(st.transport.source, TempoSource::Link);
+        assert!(st.link_enabled && link.enabled());
+
+        // Switch to ClockIn → Link must be disabled, source ClockIn, clock-driven engaged.
+        apply_command(
+            &mut st,
+            UiCommand::SetClockInPort(Some(test_port_ref())),
+            0,
+            &mut link,
+            &mut sink,
+            &mut events,
+        );
+        assert_eq!(st.transport.source, TempoSource::ClockIn);
+        assert!(
+            !st.link_enabled,
+            "Link must be disabled when entering ClockIn"
+        );
+        assert!(
+            !link.enabled(),
+            "Link clock must be disabled when entering ClockIn"
+        );
+
+        // Clear the port → revert to Manual (Link stays off).
+        apply_command(
+            &mut st,
+            UiCommand::SetClockInPort(None),
+            0,
+            &mut link,
+            &mut sink,
+            &mut events,
+        );
+        assert!(
+            matches!(st.transport.source, TempoSource::Manual(_)),
+            "clearing the clock-in port reverts to Manual; got {:?}",
+            st.transport.source
+        );
+    }
+
+    /// A `PortRef` for clock-in tests (the headless engine never opens it).
+    fn test_port_ref() -> crate::pattern::model::PortRef {
+        crate::pattern::model::PortRef {
+            name: "TestClock".into(),
+            stable_key: "TestClock".into(),
+        }
     }
 }

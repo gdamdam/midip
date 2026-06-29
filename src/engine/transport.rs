@@ -35,16 +35,21 @@ impl Transport {
         }
     }
 
-    /// Resolve the effective BPM given an optional Link-reported tempo.
-    /// Returns the Link tempo when `source == Link` and one is present;
-    /// otherwise returns `manual_bpm`.
-    pub fn effective_bpm(&self, link_tempo: Option<f64>) -> f64 {
+    /// Resolve the effective BPM given an optional Link-reported tempo and an optional
+    /// clock-in (external MIDI clock) tempo.
+    ///
+    /// - `source == Link`  → the Link tempo when present, else `manual_bpm`.
+    /// - `source == ClockIn` → the smoothed clock-in tempo when present (i.e. the external
+    ///   clock has locked), else `manual_bpm` (no lock yet / clock lost).
+    /// - `source == Manual` → `manual_bpm`, ignoring both.
+    ///
+    /// `clock_in_bpm` mirrors `link_tempo`: a per-call optional value the engine resolves
+    /// from `ClockInState::smoothed_bpm()` each step. No shared mutable tempo state.
+    pub fn effective_bpm(&self, link_tempo: Option<f64>, clock_in_bpm: Option<f64>) -> f64 {
         match self.source {
             TempoSource::Link => link_tempo.unwrap_or(self.manual_bpm),
             TempoSource::Manual(_) => self.manual_bpm,
-            // Clock-in tempo tracking is wired in M10 T4. Until then (or when
-            // no MIDI clock is arriving), fall back to manual_bpm.
-            TempoSource::ClockIn => self.manual_bpm,
+            TempoSource::ClockIn => clock_in_bpm.unwrap_or(self.manual_bpm),
         }
     }
 
@@ -97,8 +102,8 @@ mod tests {
     fn effective_bpm_uses_manual_when_source_manual() {
         let mut t = Transport::new();
         t.manual_bpm = 128.0;
-        // Even if a Link tempo is present, Manual source ignores it.
-        assert_eq!(t.effective_bpm(Some(140.0)), 128.0);
+        // Even if a Link tempo (or clock-in tempo) is present, Manual source ignores both.
+        assert_eq!(t.effective_bpm(Some(140.0), Some(95.0)), 128.0);
     }
 
     #[test]
@@ -106,9 +111,19 @@ mod tests {
         let mut t = Transport::new();
         t.source = TempoSource::Link;
         t.manual_bpm = 128.0;
-        assert_eq!(t.effective_bpm(Some(140.0)), 140.0);
+        // Link source ignores clock_in_bpm.
+        assert_eq!(t.effective_bpm(Some(140.0), Some(95.0)), 140.0);
         // Falls back to manual if Link tempo is absent.
-        assert_eq!(t.effective_bpm(None), 128.0);
+        assert_eq!(t.effective_bpm(None, None), 128.0);
+    }
+
+    #[test]
+    fn effective_bpm_uses_clock_in_tempo_when_source_clock_in_and_present() {
+        let mut t = Transport::new();
+        t.source = TempoSource::ClockIn;
+        t.manual_bpm = 128.0;
+        // ClockIn source follows the smoothed clock-in tempo, ignoring any Link tempo.
+        assert_eq!(t.effective_bpm(Some(140.0), Some(95.0)), 95.0);
     }
 
     #[test]
@@ -129,7 +144,7 @@ mod tests {
         t.manual_bpm = 130.0;
         // When no external clock-in tempo is known, falls back to manual_bpm.
         assert_eq!(
-            t.effective_bpm(None),
+            t.effective_bpm(None, None),
             130.0,
             "ClockIn with no tempo must fall back to manual_bpm"
         );

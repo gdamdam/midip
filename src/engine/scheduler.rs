@@ -174,6 +174,13 @@ pub struct Sequencer {
     /// conditions. Separate from ToggleFill (a pattern transform) — this is a
     /// momentary performance state toggled live via SetFillActive.
     fill_active: bool,
+    /// M10 T4: when true (external MIDI clock followed), `tick()`'s internal
+    /// `step_dur`-based advance loop is SUPPRESSED — steps advance ONLY via
+    /// `advance_clock_step` (called once per 6 external ticks). `tick()` still runs its
+    /// inaudible-note release pass and flushes due NoteOffs (note-safety/output), so
+    /// disabling the advance loop never strands a note. This guarantees no-double-advance:
+    /// while clock-driven, exactly ONE path moves `current`.
+    clock_driven: bool,
 }
 
 /// Default PRNG seed (a fixed nonzero constant so playback is reproducible).
@@ -198,6 +205,7 @@ impl Sequencer {
             just_launched: Vec::new(),
             cc_cache: HashMap::new(),
             fill_active: false,
+            clock_driven: false,
         }
     }
 
@@ -429,6 +437,19 @@ impl Sequencer {
         // tick lands exactly on the origin (step_start == now_micros).
     }
 
+    /// M10 T4: resume playback at the CURRENT position without rewinding (MIDI Continue).
+    /// Unlike `play`, this does NOT reset `current`/`next_step` or clear lane state — it only
+    /// marks the sequencer playing again and re-anchors the accumulated clock to `at_micros`
+    /// so a subsequent internal-timing tick schedules from here (no catch-up burst). No-op if
+    /// already playing.
+    pub fn resume(&mut self, at_micros: u64) {
+        if self.playing {
+            return;
+        }
+        self.playing = true;
+        self.last_step_at = Some(at_micros);
+    }
+
     /// Halt the sequencer, releasing every sounding note (including drums whose
     /// NoteOn was flushed but NoteOff is still queued — P4 fix), then halting.
     /// `release_all` is called BEFORE `queue.clear()` so no queued NoteOff drops.
@@ -589,6 +610,17 @@ impl Sequencer {
 
         let mut advanced: Option<usize> = None;
 
+        // M10 T4 — when following an external MIDI clock, step advance is driven ONLY by
+        // `advance_clock_step` (one step per 6 incoming ticks), NOT by this internal
+        // `step_dur` accumulator. Skip the advance loop entirely so the internal-timing
+        // path can never also advance the same step (no double-advance). The inaudible
+        // release pass above and `flush_due` below still run — disabling advance does not
+        // strand a note.
+        if self.clock_driven {
+            self.flush_due(now_micros, sink);
+            return None;
+        }
+
         // Fix #5 — accumulated schedule: the next step is due at
         // `last_step_at + current_dur` (or at `origin_micros` for step 0).
         // Recomputing `dur` from the CURRENT bpm on every iteration means a
@@ -627,6 +659,48 @@ impl Sequencer {
         // Flush all queued events with at_micros <= now.
         self.flush_due(now_micros, sink);
         advanced
+    }
+
+    /// M10 T4: enable/disable external-clock-driven advance. When enabled, `tick()`'s
+    /// internal `step_dur` advance loop is suppressed and steps advance only via
+    /// `advance_clock_step`. Toggling this does NOT touch playing/position — the caller
+    /// (engine) owns transport (play/stop) and source exclusivity.
+    pub fn set_clock_driven(&mut self, on: bool) {
+        self.clock_driven = on;
+    }
+
+    /// M10 T4: advance exactly ONE step, driven by an external MIDI clock (called once per
+    /// 6 incoming ticks). No-op when stopped. Materializes the next step at fire time
+    /// `now_micros` using `bpm` for gate/swing duration math, then flushes due events.
+    ///
+    /// Reuses the SAME emission path as the internal `tick()` loop (`apply_due_launches`
+    /// then `materialize_step_at`), so notes/CC/launches behave identically — the only
+    /// difference is what triggers the advance. Returns the materialized step index.
+    ///
+    /// `last_step_at` is kept consistent (set to `now_micros`) so that if the source later
+    /// switches back to internal timing, the next internal step is scheduled from here
+    /// rather than back-filling a burst.
+    pub fn advance_clock_step(
+        &mut self,
+        now_micros: u64,
+        bpm: f64,
+        sink: &mut dyn MidiSink,
+    ) -> Option<usize> {
+        if !self.playing {
+            return None;
+        }
+        let dur = step_dur_micros(bpm);
+        let step = self.next_step;
+        // Apply any queued launches whose boundary matches this step BEFORE materializing it
+        // (identical ordering to the internal tick loop).
+        self.apply_due_launches(step, now_micros, sink);
+        self.materialize_step_at(step, dur, now_micros);
+        self.current = step;
+        self.next_step += 1;
+        self.last_step_at = Some(now_micros);
+        // Flush any NoteOffs (gate ends) that are already due at this fire time.
+        self.flush_due(now_micros, sink);
+        Some(step)
     }
 
     /// Link mode: place the sequencer at musical `beat` (16th = beat*4) at `bpm`.
