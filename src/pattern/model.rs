@@ -419,6 +419,8 @@ pub struct Set {
     pub id: persist::Id,
     /// Named scenes stored inside this set. Defaults to empty so old set files load unchanged.
     pub scenes: Vec<Scene>,
+    /// Song-mode chains (M7). Defaults to empty so old set files load unchanged.
+    pub chains: Vec<Chain>,
 }
 
 impl Set {
@@ -460,6 +462,7 @@ impl Set {
             lanes,
             id: persist::Id::nil(),
             scenes: Vec::new(),
+            chains: Vec::new(),
         }
     }
 

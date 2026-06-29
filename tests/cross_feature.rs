@@ -93,6 +93,7 @@ fn three_lane_set() -> Set {
         ],
         id: midip::persist::Id::nil(),
         scenes: Vec::new(),
+        chains: Vec::new(),
     }
 }
 
@@ -516,6 +517,7 @@ fn setset_releases_held_notes_and_adopts_new_bpm() {
         lanes: vec![lane(profs[1], held)],
         id: midip::persist::Id::nil(),
         scenes: Vec::new(),
+        chains: Vec::new(),
     };
 
     // Second set: a different BPM and a note on every step so timing is observable.
@@ -527,6 +529,7 @@ fn setset_releases_held_notes_and_adopts_new_bpm() {
         lanes: vec![lane(profs[1], dense)],
         id: midip::persist::Id::nil(),
         scenes: Vec::new(),
+        chains: Vec::new(),
     };
 
     let mut link = FakeLink::new();
@@ -964,6 +967,7 @@ fn chord_survives_save_load_and_plays_with_clean_release() {
         lanes: vec![lane(s1_prof, chord_pat)],
         id: midip::persist::Id::nil(),
         scenes: Vec::new(),
+        chains: Vec::new(),
     };
 
     // ── 2. Save → load round-trip ──
@@ -1125,6 +1129,7 @@ fn scene_capture_save_load_recall_roundtrip() {
         ],
         id: persist::mint_id(),
         scenes: Vec::new(),
+        chains: Vec::new(),
     };
 
     // Give each lane a DISTINCT non-default performance state.

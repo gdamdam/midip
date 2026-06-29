@@ -1286,6 +1286,7 @@ mod sequencer_tests {
             lanes,
             id: crate::persist::Id::nil(),
             scenes: Vec::new(),
+            chains: Vec::new(),
         }
     }
 

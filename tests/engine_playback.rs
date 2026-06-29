@@ -120,6 +120,7 @@ fn three_lane_set() -> Set {
         lanes,
         id: midip::persist::Id::nil(),
         scenes: Vec::new(),
+        chains: Vec::new(),
     }
 }
 

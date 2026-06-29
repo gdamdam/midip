@@ -4,7 +4,7 @@ use anyhow::{anyhow, Context};
 use serde::{Deserialize, Serialize};
 
 use crate::devices::profiles::profile_by_id;
-use crate::pattern::model::{Lane, LaneRoute, Pattern, Scene, Set};
+use crate::pattern::model::{Chain, Lane, LaneRoute, Pattern, Scene, Set};
 use crate::pattern::refs::PatternRef;
 use crate::persist;
 
@@ -42,7 +42,7 @@ pub fn save_prefs(dir: &Path, prefs: &Prefs) -> anyhow::Result<()> {
 }
 
 /// The current on-disk schema version. Increment when the format changes.
-pub const CURRENT_SET_VERSION: u32 = 1;
+pub const CURRENT_SET_VERSION: u32 = 2;
 
 /// On-disk lane: stores the profile *id* (not the static profile), rehydrated on load.
 #[derive(Serialize, Deserialize)]
@@ -80,6 +80,9 @@ struct SetDto {
     /// Scenes stored in the set. Absent in old files → serde default `[]`.
     #[serde(default)]
     scenes: Vec<Scene>,
+    /// Song-mode chains (M7). Absent in old files → serde default `[]`.
+    #[serde(default)]
+    chains: Vec<Chain>,
 }
 
 impl From<&Lane> for LaneDto {
@@ -109,6 +112,7 @@ impl From<&Set> for SetDto {
             swing: set.swing,
             lanes: set.lanes.iter().map(LaneDto::from).collect(),
             scenes: set.scenes.clone(),
+            chains: set.chains.clone(),
         }
     }
 }
@@ -160,6 +164,11 @@ fn migrate_v0_to_v1(v: &mut serde_json::Value) {
     }
 }
 
+/// Migration: v1 → v2 (M7 adds `chains`; serde default supplies `[]`, no rewrite needed).
+fn migrate_v1_to_v2(v: &mut serde_json::Value) {
+    v["version"] = serde_json::json!(2u32);
+}
+
 /// Run the migration ladder on a `serde_json::Value` before typed parse.
 /// Rejects files saved by a newer midip; upgrades older files in-place.
 pub fn migrate_set_value(v: &mut serde_json::Value) -> anyhow::Result<()> {
@@ -174,6 +183,7 @@ pub fn migrate_set_value(v: &mut serde_json::Value) -> anyhow::Result<()> {
     while cur < CURRENT_SET_VERSION {
         match cur {
             0 => migrate_v0_to_v1(v),
+            1 => migrate_v1_to_v2(v),
             _ => break,
         }
         cur += 1;
@@ -234,6 +244,7 @@ pub fn load_set_with_report(path: &Path) -> anyhow::Result<(Set, Vec<String>)> {
         lanes,
         id: dto.id,
         scenes: dto.scenes,
+        chains: dto.chains,
     };
     let notes = validate_and_repair(&mut set);
     Ok((set, notes))
@@ -857,7 +868,7 @@ mod tests {
     fn migrate_v0_assigns_version_and_ids() {
         let mut v: serde_json::Value = serde_json::from_str(OLD_SET_JSON_NO_VERSION).unwrap();
         migrate_set_value(&mut v).unwrap();
-        assert_eq!(v["version"], 1);
+        assert_eq!(v["version"], CURRENT_SET_VERSION);
         assert!(
             v["id"].as_str().map(|s| !s.is_empty()).unwrap_or(false),
             "set id must be non-empty after migration"
@@ -886,7 +897,7 @@ mod tests {
     }
 
     #[test]
-    fn already_v1_file_passes_through_unchanged() {
+    fn already_v1_file_migrates_to_current_version() {
         let id = persist::Id::generate(0xABCD, 1);
         let mut v = serde_json::json!({
             "version": 1u32,
@@ -897,7 +908,8 @@ mod tests {
             "lanes": []
         });
         migrate_set_value(&mut v).unwrap();
-        assert_eq!(v["version"], 1);
+        assert_eq!(v["version"], CURRENT_SET_VERSION);
+        // id must be preserved through migration
         assert_eq!(v["id"].as_str().unwrap(), id.as_str());
     }
 
@@ -2080,5 +2092,48 @@ mod tests {
         );
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // ── M7 Task 2: chain persistence ─────────────────────────────────────────
+
+    /// Minimal v1 Set JSON (no `chains` key) — simulates a file saved before M7.
+    const MINIMAL_V1_SET_JSON: &str = r#"{
+        "version": 1,
+        "id": "abcdef0123456789",
+        "name": "pre-m7",
+        "bpm": 120.0,
+        "swing": 0.5,
+        "lanes": []
+    }"#;
+
+    #[test]
+    fn v1_set_without_chains_loads_with_empty_chains() {
+        let mut v: serde_json::Value = serde_json::from_str(MINIMAL_V1_SET_JSON).unwrap();
+        migrate_set_value(&mut v).unwrap();
+        assert_eq!(v["version"], 2, "v1 must migrate to version 2");
+        // Deserialize into SetDto — missing `chains` key must default to [].
+        let dto: SetDto = serde_json::from_value(v).unwrap();
+        assert!(dto.chains.is_empty(), "missing chains field must default to empty");
+    }
+
+    #[test]
+    fn set_with_chains_roundtrips() {
+        use crate::pattern::model::{Chain, ChainEntry};
+        let dir = unique_dir("chain-roundtrip");
+        let mut set = Set::default_set(default_profiles());
+        let mut c = Chain::new("A->B");
+        c.entries.push(ChainEntry { scene_id: persist::mint_id(), repeats: 2, bars: 4 });
+        set.chains.push(c);
+        let path = save_set(&dir, &mut set).unwrap();
+        let loaded = load_set(&path).unwrap();
+        assert_eq!(loaded.chains.len(), 1, "chain must survive save/load");
+        assert_eq!(loaded.chains[0].entries[0].bars, 4);
+        assert_eq!(loaded.chains[0].entries[0].repeats, 2);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn set_version_is_2() {
+        assert_eq!(CURRENT_SET_VERSION, 2);
     }
 }
