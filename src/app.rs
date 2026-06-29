@@ -1197,7 +1197,17 @@ impl App {
             Action::Save => {
                 // Cross-task dependency: `config::data_dir()` is defined in Task 21.
                 let dir = crate::config::data_dir().join("sets");
-                match crate::pattern::store::save_set(&dir, &mut self.set) {
+                // Ensure stable ids on the LIVE set first so that any uncommitted
+                // fill's lane inherits the same id it already had (or gets one now),
+                // and so that re-saves always produce the same filename.
+                self.set.ensure_id();
+                for l in &mut self.set.lanes {
+                    l.pattern.ensure_id();
+                }
+                // Build the committed view (fill reverted to original) and write that
+                // to disk. The live set — with the active fill — is untouched.
+                let mut committed = self.committed_set();
+                match crate::pattern::store::save_set(&dir, &mut committed) {
                     Ok(path) => {
                         self.current_set_path = Some(path);
                         self.set_status("Saved");
@@ -1523,8 +1533,16 @@ impl App {
                 let dir = crate::config::data_dir().join("sets");
                 self.set.name = name.clone();
                 self.set.id = crate::persist::Id::nil();
+                // Ensure stable ids on the live set (and all lane patterns) so that
+                // subsequent re-saves use the same filename.
                 self.set.ensure_id();
-                match crate::pattern::store::save_set(&dir, &mut self.set) {
+                for l in &mut self.set.lanes {
+                    l.pattern.ensure_id();
+                }
+                // Write the committed view (fill reverted) while keeping the live set
+                // (with the active fill) intact in memory.
+                let mut committed = self.committed_set();
+                match crate::pattern::store::save_set(&dir, &mut committed) {
                     Ok(path) => {
                         self.current_set_path = Some(path);
                         self.dirty = false;
@@ -2060,6 +2078,22 @@ impl App {
     /// Whether the Set has unsaved mutations.
     pub fn dirty(&self) -> bool {
         self.dirty
+    }
+
+    /// Returns a clone of `self.set` with any uncommitted fill reverted to its
+    /// pre-fill original. When no fill is active this is identical to `self.set.clone()`.
+    ///
+    /// Use this whenever writing to disk (save / recovery) so that a latched but
+    /// uncommitted fill is never baked into a file.  The live `self.set` (and the
+    /// engine) are intentionally NOT touched.
+    pub fn committed_set(&self) -> Set {
+        let mut s = self.set.clone();
+        if let Some(tt) = &self.temp_transform {
+            if tt.lane < s.lanes.len() {
+                s.lanes[tt.lane].pattern = tt.original.clone();
+            }
+        }
+        s
     }
 
     fn move_cursor(&mut self, drow: i32, dcol: i32) {
@@ -6998,5 +7032,157 @@ mod tests {
             "status must indicate no transform; got: {:?}",
             app.status
         );
+    }
+
+    // ── M4b fix: committed_set + save non-destructive while fill is latched ──
+
+    #[test]
+    fn committed_set_reverts_active_fill() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(0));
+        let original = drum_pattern_with_hit();
+        app.set.lanes[0].pattern = original.clone();
+
+        // With no fill: committed_set == self.set.
+        let no_fill = app.committed_set();
+        assert_eq!(
+            no_fill.lanes[0].pattern, app.set.lanes[0].pattern,
+            "committed_set with no fill must equal live set lane"
+        );
+        assert!(app.temp_transform.is_none());
+
+        // Apply fill; now committed_set should revert lane 0 to the original.
+        app.apply(Action::ToggleFill);
+        assert!(
+            app.temp_transform.is_some(),
+            "temp_transform must be Some after ToggleFill"
+        );
+        // The live set has the fill applied.
+        assert_ne!(
+            app.set.lanes[0].pattern, original,
+            "live set must have the fill pattern after ToggleFill"
+        );
+
+        let committed = app.committed_set();
+        assert_eq!(
+            committed.lanes[0].pattern, original,
+            "committed_set must revert fill lane to original"
+        );
+        // Other lanes must be unaffected.
+        for i in 1..app.set.lanes.len() {
+            assert_eq!(
+                committed.lanes[i].pattern, app.set.lanes[i].pattern,
+                "committed_set must not alter unaffected lanes"
+            );
+        }
+        // Live set must still have the fill active.
+        assert!(
+            app.temp_transform.is_some(),
+            "temp_transform must still be Some — committed_set must not mutate app"
+        );
+    }
+
+    #[test]
+    fn save_while_fill_active_persists_original() {
+        use crate::pattern::store;
+
+        let tok = unique_token("m4bfix-save-fill");
+        let tmp_sets = std::env::temp_dir().join(format!("midip-{}-sets", tok));
+        std::fs::create_dir_all(&tmp_sets).unwrap();
+
+        let mut app = new_app();
+        app.apply(Action::FocusLane(0));
+        let original = drum_pattern_with_hit();
+        app.set.lanes[0].pattern = original.clone();
+
+        // Toggle fill — lane 0 in live set is now the filled pattern.
+        app.apply(Action::ToggleFill);
+        assert!(app.temp_transform.is_some(), "fill must be latched");
+        let filled = app.set.lanes[0].pattern.clone();
+        assert_ne!(
+            filled, original,
+            "fill must differ from original for this test to be meaningful"
+        );
+
+        // Ensure ids so we can round-trip via save_set / load_set directly.
+        app.set.ensure_id();
+        for l in &mut app.set.lanes {
+            l.pattern.ensure_id();
+        }
+
+        // Save the committed view to a temp dir and load it back.
+        let mut committed = app.committed_set();
+        let saved_path = store::save_set(&tmp_sets, &mut committed).expect("save_set must succeed");
+        let loaded = store::load_set(&saved_path).expect("load_set must succeed");
+
+        // The saved file must contain the ORIGINAL, not the fill.
+        assert_eq!(
+            loaded.lanes[0].pattern.data, original.data,
+            "saved file must contain original pattern, not the uncommitted fill"
+        );
+
+        // The live app state must be untouched: fill still active.
+        assert!(
+            app.temp_transform.is_some(),
+            "temp_transform must still be Some after saving"
+        );
+        assert_eq!(
+            app.set.lanes[0].pattern.data, filled.data,
+            "live set must still hold the filled pattern after saving"
+        );
+
+        // Cleanup.
+        std::fs::remove_file(&saved_path).ok();
+        std::fs::remove_dir_all(&tmp_sets).ok();
+    }
+
+    #[test]
+    fn save_keeps_stable_id_with_fill_active() {
+        use crate::pattern::store;
+
+        let tok = unique_token("m4bfix-stable-id");
+        let tmp_sets = std::env::temp_dir().join(format!("midip-{}-sets", tok));
+        std::fs::create_dir_all(&tmp_sets).unwrap();
+
+        let mut app = new_app();
+        app.apply(Action::FocusLane(0));
+        app.set.lanes[0].pattern = drum_pattern_with_hit();
+
+        // Latch a fill.
+        app.apply(Action::ToggleFill);
+        assert!(app.temp_transform.is_some());
+
+        // First save.
+        app.set.ensure_id();
+        for l in &mut app.set.lanes {
+            l.pattern.ensure_id();
+        }
+        let set_id = app.set.id.clone();
+        assert!(!set_id.is_nil(), "set id must be non-nil before saving");
+
+        let mut committed1 = app.committed_set();
+        let path1 = store::save_set(&tmp_sets, &mut committed1).expect("first save must succeed");
+
+        // Second save (fill still latched).
+        let mut committed2 = app.committed_set();
+        let path2 = store::save_set(&tmp_sets, &mut committed2).expect("second save must succeed");
+
+        // Both saves must produce the same path (stable id → stable filename).
+        assert_eq!(
+            path1, path2,
+            "re-saving with fill latched must produce the same filename (stable id)"
+        );
+
+        // Loaded set must have the same id.
+        let loaded = store::load_set(&path1).expect("load must succeed");
+        assert_eq!(
+            loaded.id, set_id,
+            "loaded set id must match the live set id"
+        );
+        assert!(!loaded.id.is_nil(), "saved id must be non-nil");
+
+        // Cleanup.
+        std::fs::remove_file(&path1).ok();
+        std::fs::remove_dir_all(&tmp_sets).ok();
     }
 }
