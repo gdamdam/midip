@@ -1131,6 +1131,8 @@ fn generative_preview_commit_undo_roundtrip() {
         muted_voices: Vec::new(),
         scale: Scale::Major,
         root: None,
+        swing: None,
+        clock_div: None,
     };
 
     let set = Set {
@@ -1295,6 +1297,8 @@ fn generative_vary_identity_and_mutation() {
             muted_voices: Vec::new(),
             scale: Scale::Major,
             root: None,
+            swing: None,
+            clock_div: None,
         };
         let set = Set {
             name: "vary-test".into(),

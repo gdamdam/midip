@@ -1,6 +1,8 @@
 use crate::music::scale::fold_to_scale;
 use crate::pattern::euclid::bjorklund;
-use crate::pattern::model::{DrumHit, Lane, MelodicNote, MelodicStep, Pattern, PatternData};
+use crate::pattern::model::{
+    DrumHit, Lane, MelodicNote, MelodicStep, Pattern, PatternData, TrigCond,
+};
 
 /// Which generation strategy to apply.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -111,6 +113,8 @@ fn generate_drums(params: &GenParams, source: &Pattern) -> Pattern {
                     vel,
                     prob: 1.0,
                     ratchet: 1,
+                    micro: 0,
+                    cond: TrigCond::Always,
                 }]
             } else {
                 vec![]
@@ -184,6 +188,8 @@ fn generate_melodic(params: &GenParams, source: &Pattern, lane: &Lane) -> Patter
                     len: lane.profile.gate_fraction,
                     prob: 1.0,
                     ratchet: 1,
+                    micro: 0,
+                    cond: TrigCond::Always,
                 }])
             } else {
                 MelodicStep::default()
@@ -232,6 +238,8 @@ fn vary_drums(params: &GenParams, source: &Pattern) -> Pattern {
                         vel,
                         prob: 1.0,
                         ratchet: 1,
+                        micro: 0,
+                        cond: TrigCond::Always,
                     });
                 } else {
                     // remove hits (toggle off)
@@ -276,6 +284,8 @@ fn vary_melodic(params: &GenParams, source: &Pattern, lane: &Lane) -> Pattern {
                         len: lane.profile.gate_fraction,
                         prob: 1.0,
                         ratchet: 1,
+                        micro: 0,
+                        cond: TrigCond::Always,
                     });
                 } else {
                     // Nudge pitch and jitter velocity.
@@ -339,6 +349,8 @@ mod gen_core_tests {
             muted_voices: vec![],
             scale: Scale::Chromatic,
             root: None,
+            swing: None,
+            clock_div: None,
         };
         let params = GenParams::default();
         (params, src, lane)
@@ -413,6 +425,8 @@ mod gen_core_tests {
                 muted_voices: vec![],
                 scale: Scale::Chromatic,
                 root: None,
+                swing: None,
+                clock_div: None,
             }
         };
         let params = GenParams {
@@ -448,6 +462,8 @@ mod gen_core_tests {
                 muted_voices: vec![],
                 scale: Scale::Chromatic,
                 root: None,
+                swing: None,
+                clock_div: None,
             }
         };
         let p1 = GenParams {
@@ -486,6 +502,8 @@ mod gen_core_tests {
                 muted_voices: vec![],
                 scale: Scale::Chromatic,
                 root: None,
+                swing: None,
+                clock_div: None,
             }
         };
         let params = GenParams {
@@ -531,6 +549,8 @@ mod gen_core_tests {
             muted_voices: vec![],
             scale,
             root: None,
+            swing: None,
+            clock_div: None,
         };
         let params = GenParams {
             density: 75,
@@ -729,6 +749,8 @@ mod gen_core_tests {
                         vel: 100,
                         prob: 1.0,
                         ratchet: 1,
+                        micro: 0,
+                        cond: TrigCond::Always,
                     });
                 }
             }
@@ -747,6 +769,8 @@ mod gen_core_tests {
                 muted_voices: vec![],
                 scale: Scale::Chromatic,
                 root: None,
+                swing: None,
+                clock_div: None,
             }
         };
         (src, lane)
@@ -763,6 +787,8 @@ mod gen_core_tests {
                     len: 0.5,
                     prob: 1.0,
                     ratchet: 1,
+                    micro: 0,
+                    cond: TrigCond::Always,
                 }])
             })
             .collect();
@@ -782,6 +808,8 @@ mod gen_core_tests {
             muted_voices: vec![],
             scale,
             root: None,
+            swing: None,
+            clock_div: None,
         };
         (src, lane)
     }
