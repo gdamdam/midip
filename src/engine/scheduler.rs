@@ -3,7 +3,7 @@
 
 use crate::midi::ports::MidiSink;
 use crate::midi::MidiMessage;
-use crate::pattern::model::{Lane, Pattern, PatternData, Set};
+use crate::pattern::model::{Lane, MelodicNote, Pattern, PatternData, Set};
 
 /// Ownership domain of a sounding note (design §3.1). M1 only produces Playback;
 /// the field + release_domain exist so M3 audition / M15 preview can reuse the registry.
@@ -756,13 +756,26 @@ impl Sequencer {
         let transpose = lane.transpose;
         let octave = lane.octave;
 
-        // Mono behavior (M5b Task 1): a step is now a Vec; play its FIRST note. Multi-note
-        // (poly) playback is Task 3 — here we preserve today's single-note emission exactly.
-        let note = match &lane.pattern.data {
-            PatternData::Melodic(steps) => steps.get(local).and_then(|s| s.first()).cloned(),
-            PatternData::Drums(_) => None,
+        // M5b Task 3: read the step's full note Vec. 0 notes = rest, 1 = mono
+        // (today's behavior, byte-identical), >=2 = chord (poly).
+        let step_notes: Vec<MelodicNote> = match &lane.pattern.data {
+            PatternData::Melodic(steps) => steps.get(local).map(|s| s.to_vec()).unwrap_or_default(),
+            PatternData::Drums(_) => Vec::new(),
         };
-        let note = match note {
+
+        // Chord (>=2 notes): emit each note independently, sharing the step timing.
+        // SLIDE is a monophonic 303/SH-101 concept (legato tie to the next step's
+        // single note); a chord is NOT slid — each chord note gets its own NoteOff
+        // at its own gate. This keeps mono playback exactly as today and gives sane
+        // chord behavior. The mono lane (<=1 note) never reaches this branch.
+        if step_notes.len() >= 2 {
+            self.materialize_chord_step(lane_idx, &step_notes, channel, swung, dur);
+            return;
+        }
+
+        // 0 or 1 note: the original single-note path below is preserved byte-for-byte
+        // (`first()` of a <=1-element Vec is the lone note or None == rest).
+        let note = match step_notes.into_iter().next() {
             Some(n) => n,
             None => return, // rest: nothing to emit, prior active note keeps its NoteOff.
         };
@@ -917,6 +930,124 @@ impl Sequencer {
             }
         }
         false
+    }
+
+    /// M5b Task 3: emit a CHORD step (>=2 notes) on a poly lane. Each note fires its
+    /// own NoteOn at the shared step time and a scheduled NoteOff at its own gate,
+    /// honoring per-note velocity / length / probability / ratchet. SLIDE is NOT
+    /// applied to chords (it is a monophonic legato tie); the per-note NoteOffs are
+    /// scheduled unconditionally, so no chord note is ever held open by slide.
+    ///
+    /// REGISTRY/RELEASE (M1 invariant): every NoteOn/NoteOff routes through `emit()`
+    /// at flush time, which registers/deregisters by (channel, note) in the authoritative
+    /// `sounding` registry. Distinct chord notes (distinct note numbers) are tracked
+    /// independently, so `release_all` / `release_domain` / `release_lanes` / `release_note`
+    /// release ALL of them — no hung notes on stop/panic/mute/solo/set-load/disconnect.
+    /// The single-note `active[lane_idx]` legato slot is cleared here: a chord has no
+    /// single legato anchor, and release is owned entirely by the registry.
+    fn materialize_chord_step(
+        &mut self,
+        lane_idx: usize,
+        notes: &[MelodicNote],
+        channel: u8,
+        swung: u64,
+        dur: u64,
+    ) {
+        use crate::devices::profiles::{melodic_velocity, resolve_melodic_pitch};
+
+        let lane = &self.set.lanes[lane_idx];
+        let root = lane.profile.root_note;
+        let transpose = lane.transpose;
+        let octave = lane.octave;
+        let on_at = swung;
+
+        // Release any prior slide-held mono note on this lane on the chord's onset
+        // (legato into a chord resolves the held note), then drop the legato anchor:
+        // a chord is not a single sounding note, so it leaves no `active` to slide.
+        if let Some(prev) = self.active[lane_idx].take() {
+            if prev.off_at.is_none() {
+                Self::enqueue(
+                    &mut self.queue,
+                    ScheduledEvent {
+                        at_micros: on_at,
+                        lane: lane_idx,
+                        msg: MidiMessage::NoteOff {
+                            channel: prev.channel,
+                            note: prev.note,
+                        },
+                    },
+                );
+            }
+        }
+        // No active note tracked for a chord; the registry owns release.
+        self.active[lane_idx] = None;
+
+        for note in notes {
+            // Probability is rolled per note (a failed roll skips just that note).
+            if !self.rolls_fire(note.prob) {
+                continue;
+            }
+            let pitch = resolve_melodic_pitch(root, note.semi, transpose, octave);
+            let vel = melodic_velocity(note.vel);
+            // Ratchet: R evenly-spaced gated retriggers across the step, per note.
+            let r = note.ratchet.max(1) as u64;
+            let sub = dur / r;
+            if r > 1 {
+                let ratchet_gate = note_len_micros(note.len.min(1.0), sub);
+                for i in 0..r {
+                    let at = on_at + i * sub;
+                    Self::enqueue(
+                        &mut self.queue,
+                        ScheduledEvent {
+                            at_micros: at,
+                            lane: lane_idx,
+                            msg: MidiMessage::NoteOn {
+                                channel,
+                                note: pitch,
+                                vel,
+                            },
+                        },
+                    );
+                    Self::enqueue(
+                        &mut self.queue,
+                        ScheduledEvent {
+                            at_micros: at + ratchet_gate,
+                            lane: lane_idx,
+                            msg: MidiMessage::NoteOff {
+                                channel,
+                                note: pitch,
+                            },
+                        },
+                    );
+                }
+            } else {
+                // Single hit: NoteOn now, NoteOff at the note's gate (no slide hold).
+                let off_at = on_at + note_len_micros(note.len, dur);
+                Self::enqueue(
+                    &mut self.queue,
+                    ScheduledEvent {
+                        at_micros: on_at,
+                        lane: lane_idx,
+                        msg: MidiMessage::NoteOn {
+                            channel,
+                            note: pitch,
+                            vel,
+                        },
+                    },
+                );
+                Self::enqueue(
+                    &mut self.queue,
+                    ScheduledEvent {
+                        at_micros: off_at,
+                        lane: lane_idx,
+                        msg: MidiMessage::NoteOff {
+                            channel,
+                            note: pitch,
+                        },
+                    },
+                );
+            }
+        }
     }
 
     /// Insert keeping `queue` sorted ascending by `at_micros` (stable for equal times).
@@ -3063,5 +3194,252 @@ mod sequencer_tests {
             "note must be removed from muted_voices"
         );
         assert!(sink.events.is_empty(), "unmute must not emit any MIDI");
+    }
+
+    // --- M5b Task 3: polyphonic (chord) melodic steps -------------------
+
+    /// Build an S1 (poly) melodic lane from explicit per-step note Vecs, so a step
+    /// can hold a CHORD (>1 note). This bypasses the edit-layer mono guard (Task 2)
+    /// by constructing the model directly — the scheduler must play whatever the
+    /// model holds.
+    fn poly_lane_from_steps(steps: Vec<Vec<MelodicNote>>) -> Lane {
+        let len = steps.len();
+        let steps: Vec<MelodicStep> = steps.into_iter().map(MelodicStep::from).collect();
+        Lane {
+            profile: S1,
+            pattern: Pattern {
+                name: "poly".to_string(),
+                desc: String::new(),
+                length: len,
+                data: PatternData::Melodic(steps),
+                id: crate::persist::Id::nil(),
+            },
+            mute: false,
+            solo: false,
+            transpose: 0,
+            octave: 0,
+            route: None,
+            muted_voices: Vec::new(),
+            scale: crate::music::scale::Scale::Chromatic,
+            root: None,
+        }
+    }
+
+    fn plain_note(semi: i8) -> MelodicNote {
+        MelodicNote {
+            semi,
+            vel: 1.0,
+            slide: false,
+            len: 1.0,
+            prob: 1.0,
+            ratchet: 1,
+        }
+    }
+
+    /// A 3-note chord step on a poly lane emits 3 NoteOns at the step time and
+    /// 3 matching NoteOffs at/after the gate — one per chord note.
+    #[test]
+    fn poly_step_emits_all_notes() {
+        let dur = step_dur_micros(120.0);
+        // step 0: chord of semis 0, 4, 7 (S1 root 48 → notes 48, 52, 55).
+        let chord = vec![plain_note(0), plain_note(4), plain_note(7)];
+        let lane = poly_lane_from_steps(vec![chord, Vec::new(), Vec::new(), Vec::new()]);
+        let root = lane.profile.root_note;
+        let expected: Vec<u8> = [0i8, 4, 7]
+            .iter()
+            .map(|&s| (root as i8 + s) as u8)
+            .collect();
+
+        let mut seq = Sequencer::new(set_with(vec![lane]));
+        let mut sink = RecordingSink::new();
+        seq.play(0);
+        run(&mut seq, &mut sink, 4 * dur, 1_000);
+
+        for &note in &expected {
+            // NoteOn at step time (0) on the S1 channel.
+            assert!(
+                sink.events.iter().any(|(t, m)| *t == 0
+                    && *m
+                        == MidiMessage::NoteOn {
+                            channel: 0,
+                            note,
+                            vel: 100
+                        }),
+                "chord note {note} must have a NoteOn at t=0; got {:?}",
+                sink.events
+            );
+            // matching NoteOff at/after the gate (len 1.0 * dur).
+            let off_at = note_len_micros(1.0, dur);
+            assert!(
+                sink.events
+                    .iter()
+                    .any(|(t, m)| *t >= off_at && *m == MidiMessage::NoteOff { channel: 0, note }),
+                "chord note {note} must have a NoteOff at/after gate; got {:?}",
+                sink.events
+            );
+        }
+    }
+
+    /// A 1-note step on a (poly-capable) lane plays IDENTICALLY to the pre-T3
+    /// single-note path, including slide/legato to the next 1-note step. This is
+    /// the mono regression guard: replicates `slide_note_on_precedes_prior_note_off`
+    /// but built via the direct (poly) model path to prove the single-note branch
+    /// is byte-identical.
+    #[test]
+    fn mono_step_unchanged() {
+        let dur = step_dur_micros(120.0);
+        // step 0: note A (semi 0, no slide). step 1: note B (semi 5, slide=true).
+        let mut a = plain_note(0);
+        a.slide = false;
+        let mut b = plain_note(5);
+        b.slide = true;
+        let lane = poly_lane_from_steps(vec![vec![a], vec![b], Vec::new(), Vec::new()]);
+        let root = lane.profile.root_note; // S1 root
+        let note_a = root; // semi 0
+        let note_b = (root as i8 + 5) as u8; // semi 5
+
+        let mut seq = Sequencer::new(set_with(vec![lane]));
+        let mut sink = RecordingSink::new();
+        seq.play(0);
+        // Run steps 0..=3 only (stop before the pattern loops back to step 0 at
+        // 4*dur), so note A fires exactly once at step 0.
+        run(&mut seq, &mut sink, 3 * dur, 1_000);
+
+        // Exactly one NoteOn + one NoteOff per note (single-note path, no extras).
+        let count = |target: &MidiMessage| sink.events.iter().filter(|(_, m)| m == target).count();
+        assert_eq!(
+            count(&MidiMessage::NoteOn {
+                channel: 0,
+                note: note_a,
+                vel: 100
+            }),
+            1,
+            "A must fire exactly one NoteOn"
+        );
+        assert_eq!(
+            count(&MidiMessage::NoteOff {
+                channel: 0,
+                note: note_a
+            }),
+            1,
+            "A must have exactly one NoteOff"
+        );
+
+        // Slide/legato: A is released only after B sounds.
+        let a_off = sink
+            .events
+            .iter()
+            .find(|(_, m)| {
+                *m == MidiMessage::NoteOff {
+                    channel: 0,
+                    note: note_a,
+                }
+            })
+            .map(|(t, _)| *t)
+            .expect("A must have a NoteOff");
+        let b_on = sink
+            .events
+            .iter()
+            .find(|(_, m)| {
+                *m == MidiMessage::NoteOn {
+                    channel: 0,
+                    note: note_b,
+                    vel: 100,
+                }
+            })
+            .map(|(t, _)| *t)
+            .expect("B must have a NoteOn");
+        assert!(a_off >= b_on, "legato: A off ({a_off}) >= B on ({b_on})");
+    }
+
+    /// After a 3-note chord NoteOn, the stop/release path emits a NoteOff for ALL
+    /// 3 chord notes — zero hung notes. Covers `release_all` (via `stop`) plus the
+    /// per-lane `release_lanes` stop path.
+    #[test]
+    fn release_all_clears_chord_notes() {
+        // Long chord (len 4.0) still sounding when we stop.
+        let chord = vec![
+            {
+                let mut n = plain_note(0);
+                n.len = 4.0;
+                n
+            },
+            {
+                let mut n = plain_note(4);
+                n.len = 4.0;
+                n
+            },
+            {
+                let mut n = plain_note(7);
+                n.len = 4.0;
+                n
+            },
+        ];
+        let lane = poly_lane_from_steps(vec![chord, Vec::new(), Vec::new(), Vec::new()]);
+        let root = lane.profile.root_note;
+        let expected: Vec<u8> = [0i8, 4, 7]
+            .iter()
+            .map(|&s| (root as i8 + s) as u8)
+            .collect();
+
+        let mut seq = Sequencer::new(set_with(vec![lane]));
+        let mut sink = RecordingSink::new();
+        seq.play(0);
+        seq.tick(0, &mut sink); // emit the 3 chord NoteOns
+
+        // All 3 are sounding (none hung / un-tracked).
+        assert_eq!(
+            seq.sounding.len(),
+            3,
+            "all 3 chord notes must be registered"
+        );
+
+        seq.stop(1_000, &mut sink);
+        assert!(!seq.is_playing());
+
+        for &note in &expected {
+            assert!(
+                sink.events
+                    .iter()
+                    .any(|(t, m)| *t >= 1_000 && *m == MidiMessage::NoteOff { channel: 0, note }),
+                "stop must release chord note {note}; got {:?}",
+                sink.events
+            );
+        }
+        assert!(seq.sounding.is_empty(), "registry must be empty after stop");
+    }
+
+    /// `release_lanes` (the per-lane stop path used by launch/replace) must also
+    /// release every chord note on the targeted lane — no hang.
+    #[test]
+    fn release_lanes_clears_chord_notes() {
+        let chord = vec![plain_note(0), plain_note(4), plain_note(7)];
+        let lane = poly_lane_from_steps(vec![chord, Vec::new(), Vec::new(), Vec::new()]);
+        let root = lane.profile.root_note;
+        let expected: Vec<u8> = [0i8, 4, 7]
+            .iter()
+            .map(|&s| (root as i8 + s) as u8)
+            .collect();
+
+        let mut seq = Sequencer::new(set_with(vec![lane]));
+        let mut sink = RecordingSink::new();
+        seq.play(0);
+        seq.tick(0, &mut sink);
+        assert_eq!(seq.sounding.len(), 3);
+
+        seq.release_lanes(&[0], 2_000, &mut sink);
+        for &note in &expected {
+            assert!(
+                sink.events
+                    .iter()
+                    .any(|(t, m)| *t >= 2_000 && *m == MidiMessage::NoteOff { channel: 0, note }),
+                "release_lanes must release chord note {note}; got {:?}",
+                sink.events
+            );
+        }
+        assert!(
+            seq.sounding.iter().all(|s| s.lane != 0),
+            "lane 0 chord notes must be cleared from the registry"
+        );
     }
 }
