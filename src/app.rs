@@ -302,6 +302,16 @@ pub enum Action {
     NoteInputOctave(i8),
     /// Clear the cursor step and step back one (Backspace/Delete in NoteInput).
     NoteInputBackspace,
+    // ── M5b Task 4: chord entry on poly lanes ────────────────────────────────
+    /// Build a scale-aware triad on the cursor step (Edit mode, key `'j'`, was unbound).
+    /// From the step's root note (its first note) add a 3rd (+2 scale degrees) and a 5th
+    /// (+4 scale degrees), folded to the lane's scale. No-op with a status message if the
+    /// step is empty or the lane is mono (`poly == false`). Snapshots for undo.
+    BuildTriad,
+    /// Remove the LAST note from the cursor step (Edit mode, key `'J'`/Shift+j, was unbound).
+    /// On a single-note step this clears it (becomes a rest). No-op on an empty step.
+    /// Snapshots for undo.
+    RemoveChordNote,
     None,
 }
 
@@ -2055,10 +2065,16 @@ impl App {
                     // Snapshot ONCE on entry — the whole session is one undo unit.
                     self.snapshot();
                     self.note_input_octave = 0;
+                    let is_poly = self.set.lanes[self.focus].profile.poly;
                     self.mode = Mode::NoteInput;
-                    self.set_status(
-                        "NOTE INPUT  [a-k]notes [w/e/t/y/u]black [z/x]octave [bksp]del [esc]exit",
-                    );
+                    // Poly lanes STACK keys into a chord on one step (press the same key
+                    // again to toggle it off); mono lanes replace+advance like typing a
+                    // melody. Reflect that distinction in the entry banner.
+                    self.set_status(if is_poly {
+                        "NOTE INPUT (poly: keys STACK a chord; repeat=off) [a-k]/[w/e/t/y/u] [z/x]oct [bksp]del [esc]exit"
+                    } else {
+                        "NOTE INPUT  [a-k]notes [w/e/t/y/u]black [z/x]octave [bksp]del [esc]exit"
+                    });
                 }
             }
             Action::CloseNoteInput => {
@@ -2074,9 +2090,9 @@ impl App {
                     let col = self.cur_col;
                     let lane = &mut self.set.lanes[self.focus];
                     let is_poly = lane.profile.poly;
+                    let gate = lane.profile.gate_fraction;
                     if let PatternData::Melodic(steps) = &mut lane.pattern.data {
                         if let Some(slot) = steps.get_mut(col) {
-                            let gate = lane.profile.gate_fraction;
                             let new_note = MelodicNote {
                                 semi: semi_folded,
                                 vel: MEL_DEFAULT_VEL,
@@ -2086,10 +2102,17 @@ impl App {
                                 ratchet: 1,
                             };
                             if is_poly {
-                                // Poly lane (M5b Task 2): allow >1 note per step.
-                                // Task 4 adds chord-stacking UI; for now note input
-                                // still replaces (no stacking path exists yet).
-                                *slot = MelodicStep::from(vec![new_note]);
+                                // Poly lane (M5b Task 4): STACK the pressed pitch onto the
+                                // cursor step to build a chord, and do NOT advance — so
+                                // several key presses build a chord on one step. The cursor
+                                // advances only via the arrow/step keys. Duplicate-pitch
+                                // rule: pressing a pitch already in the step TOGGLES it off
+                                // (so a key acts as a per-pitch on/off), never duplicating.
+                                if let Some(pos) = slot.iter().position(|n| n.semi == semi_folded) {
+                                    slot.remove(pos);
+                                } else {
+                                    slot.push(new_note);
+                                }
                             } else {
                                 // Mono enforcement (M5b Task 2): a mono lane holds AT
                                 // MOST ONE note. Placing a note always replaces any
@@ -2100,10 +2123,13 @@ impl App {
                             }
                         }
                     }
-                    // Advance cursor one step, wrapping within the pattern length.
-                    let pat_len = self.set.lanes[self.focus].pattern.length;
-                    self.cur_col = (self.cur_col + 1) % pat_len.max(1);
-                    self.step_scroll = (self.cur_col / VISIBLE_STEPS) * VISIBLE_STEPS;
+                    // Mono lanes advance one step (melody-typing); poly lanes stay on the
+                    // step so successive presses stack into a chord.
+                    if !is_poly {
+                        let pat_len = self.set.lanes[self.focus].pattern.length;
+                        self.cur_col = (self.cur_col + 1) % pat_len.max(1);
+                        self.step_scroll = (self.cur_col / VISIBLE_STEPS) * VISIBLE_STEPS;
+                    }
                     self.dirty = true;
                     cmds.push(self.load_focused());
                 }
@@ -2123,6 +2149,80 @@ impl App {
                     let col = self.cur_col as isize - 1;
                     self.cur_col = col.rem_euclid(pat_len.max(1) as isize) as usize;
                     self.step_scroll = (self.cur_col / VISIBLE_STEPS) * VISIBLE_STEPS;
+                    self.dirty = true;
+                    cmds.push(self.load_focused());
+                }
+            }
+            Action::BuildTriad => {
+                // Build a scale-aware triad on the cursor step (poly lanes only). From the
+                // step's ROOT note (its first note) add a 3rd and 5th by stepping +2 and +4
+                // scale degrees via `step_by_degree`, folded to the lane's scale. In a Major
+                // scale this yields a major triad (root, M3, P5); in a Minor scale a minor
+                // triad — the interval quality follows the scale automatically. Duplicate
+                // semis are not added (a unison degree, e.g. on some pentatonic folds, is
+                // skipped). No-op with a status message on an empty step or a mono lane.
+                let col = self.cur_col;
+                let scale = self.set.lanes[self.focus].scale;
+                let is_poly = self.set.lanes[self.focus].profile.poly;
+                let root_semi =
+                    if let PatternData::Melodic(steps) = &self.set.lanes[self.focus].pattern.data {
+                        steps.get(col).and_then(|s| s.first()).map(|n| n.semi)
+                    } else {
+                        Option::None
+                    };
+                match (is_poly, root_semi) {
+                    (true, Some(root)) => {
+                        self.snapshot();
+                        let third = step_by_degree(root as i32, 2, scale).clamp(-48, 48) as i8;
+                        let fifth = step_by_degree(root as i32, 4, scale).clamp(-48, 48) as i8;
+                        let lane = &mut self.set.lanes[self.focus];
+                        let gate = lane.profile.gate_fraction;
+                        if let PatternData::Melodic(steps) = &mut lane.pattern.data {
+                            if let Some(slot) = steps.get_mut(col) {
+                                for s in [third, fifth] {
+                                    if !slot.iter().any(|n| n.semi == s) {
+                                        slot.push(MelodicNote {
+                                            semi: s,
+                                            vel: MEL_DEFAULT_VEL,
+                                            slide: false,
+                                            len: gate,
+                                            prob: 1.0,
+                                            ratchet: 1,
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                        self.dirty = true;
+                        self.set_status("Built triad (root + 3rd + 5th)");
+                        cmds.push(self.load_focused());
+                    }
+                    _ => {
+                        self.set_status("Triad needs a poly lane with a root note");
+                    }
+                }
+            }
+            Action::RemoveChordNote => {
+                // Remove the LAST note from the cursor step. On a single-note step this
+                // clears it (becomes a rest). No-op on an empty step. Only snapshot (and
+                // mark dirty) when there is actually a note to remove, so a no-op press
+                // does not create an empty undo step.
+                let col = self.cur_col;
+                let has_note =
+                    if let PatternData::Melodic(steps) = &self.set.lanes[self.focus].pattern.data {
+                        steps.get(col).map(|s| !s.is_empty()).unwrap_or(false)
+                    } else {
+                        false
+                    };
+                if has_note {
+                    self.snapshot();
+                    if let PatternData::Melodic(steps) =
+                        &mut self.set.lanes[self.focus].pattern.data
+                    {
+                        if let Some(slot) = steps.get_mut(col) {
+                            slot.pop();
+                        }
+                    }
                     self.dirty = true;
                     cmds.push(self.load_focused());
                 }
@@ -8093,6 +8193,277 @@ mod tests {
         assert!(
             app2.set.lanes[2].profile.poly,
             "lane 2 must have poly == true"
+        );
+    }
+
+    // ── M5b Task 4: chord entry on poly lanes ────────────────────────────────
+
+    /// On a poly lane in note-input sub-mode, two different piano-key presses on the
+    /// same step STACK into a 2-note chord, and the cursor does NOT advance. Drives the
+    /// real Action path. Lane 2 = S-1 SYNTH (poly == true).
+    #[test]
+    fn add_chord_note_stacks_on_poly_lane() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(2));
+        assert!(app.set.lanes[app.focus].profile.poly, "lane 2 must be poly");
+        app.cur_col = 0;
+        app.apply(Action::OpenNoteInput);
+
+        // Press two DIFFERENT piano keys on the same step.
+        app.apply(Action::NoteInputPlace(0)); // root
+        app.apply(Action::NoteInputPlace(7)); // a fifth above
+
+        assert_eq!(
+            app.cur_col, 0,
+            "poly lane: cursor must NOT advance when stacking a chord"
+        );
+        if let PatternData::Melodic(steps) = &app.set.lanes[app.focus].pattern.data {
+            assert_eq!(
+                steps[0].len(),
+                2,
+                "poly lane: two presses must stack into a 2-note chord"
+            );
+            let semis: Vec<i8> = steps[0].iter().map(|n| n.semi).collect();
+            assert!(
+                semis.contains(&0) && semis.contains(&7),
+                "chord must hold both pitches, got {semis:?}"
+            );
+        } else {
+            panic!("expected melodic");
+        }
+        assert!(app.dirty, "dirty must be set after stacking");
+    }
+
+    /// Duplicate-pitch rule on a poly lane: pressing the SAME pitch again toggles it
+    /// off (no duplication).
+    #[test]
+    fn add_chord_note_toggles_off_duplicate_pitch_on_poly_lane() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(2));
+        app.cur_col = 0;
+        app.apply(Action::OpenNoteInput);
+
+        app.apply(Action::NoteInputPlace(0)); // add C
+        app.apply(Action::NoteInputPlace(4)); // add E
+        app.apply(Action::NoteInputPlace(0)); // press C again → toggles off
+
+        if let PatternData::Melodic(steps) = &app.set.lanes[app.focus].pattern.data {
+            let semis: Vec<i8> = steps[0].iter().map(|n| n.semi).collect();
+            assert_eq!(
+                semis,
+                vec![4],
+                "repeating a pitch must toggle it off (only E remains)"
+            );
+        } else {
+            panic!("expected melodic");
+        }
+    }
+
+    /// Regression guard: on a MONO lane, a note-input key press REPLACES (step holds 1)
+    /// AND advances the cursor (today's melody-typing behaviour). Lane 1 = T-8 BASS.
+    #[test]
+    fn note_input_replaces_and_advances_on_mono_lane() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(1));
+        assert!(
+            !app.set.lanes[app.focus].profile.poly,
+            "lane 1 must be mono"
+        );
+        app.cur_col = 0;
+        app.apply(Action::OpenNoteInput);
+
+        app.apply(Action::NoteInputPlace(0));
+        assert_eq!(
+            app.cur_col, 1,
+            "mono lane: cursor must advance after a placement"
+        );
+
+        if let PatternData::Melodic(steps) = &app.set.lanes[app.focus].pattern.data {
+            assert_eq!(steps[0].len(), 1, "mono lane: step holds exactly one note");
+        } else {
+            panic!("expected melodic");
+        }
+    }
+
+    /// BuildTriad on a poly Major lane adds a scale-aware 3rd (+2 degrees) and 5th
+    /// (+4 degrees): root 0 → {0, 4, 7} (major triad).
+    #[test]
+    fn build_triad_adds_scale_aware_third_and_fifth() {
+        use crate::music::scale::Scale;
+        let mut app = new_app();
+        app.apply(Action::FocusLane(2)); // poly
+        app.set.lanes[app.focus].scale = Scale::Major;
+        app.cur_col = 0;
+        // Seed a root note at semi 0.
+        if let PatternData::Melodic(steps) = &mut app.set.lanes[app.focus].pattern.data {
+            steps[0] = MelodicStep::from(vec![MelodicNote {
+                semi: 0,
+                vel: MEL_DEFAULT_VEL,
+                slide: false,
+                len: 0.9,
+                prob: 1.0,
+                ratchet: 1,
+            }]);
+        }
+
+        app.apply(Action::BuildTriad);
+
+        if let PatternData::Melodic(steps) = &app.set.lanes[app.focus].pattern.data {
+            let mut semis: Vec<i8> = steps[0].iter().map(|n| n.semi).collect();
+            semis.sort_unstable();
+            assert_eq!(
+                semis,
+                vec![0, 4, 7],
+                "Major triad from root 0 must be {{0, 4, 7}}"
+            );
+        } else {
+            panic!("expected melodic");
+        }
+        assert!(app.dirty, "dirty must be set after BuildTriad");
+
+        // Natural Minor: root 0 → {0, 3, 7} (minor third).
+        let mut app2 = new_app();
+        app2.apply(Action::FocusLane(2));
+        app2.set.lanes[app2.focus].scale = Scale::NaturalMinor;
+        app2.cur_col = 0;
+        if let PatternData::Melodic(steps) = &mut app2.set.lanes[app2.focus].pattern.data {
+            steps[0] = MelodicStep::from(vec![MelodicNote {
+                semi: 0,
+                vel: MEL_DEFAULT_VEL,
+                slide: false,
+                len: 0.9,
+                prob: 1.0,
+                ratchet: 1,
+            }]);
+        }
+        app2.apply(Action::BuildTriad);
+        if let PatternData::Melodic(steps) = &app2.set.lanes[app2.focus].pattern.data {
+            let mut semis: Vec<i8> = steps[0].iter().map(|n| n.semi).collect();
+            semis.sort_unstable();
+            assert_eq!(
+                semis,
+                vec![0, 3, 7],
+                "Minor triad from root 0 must be {{0, 3, 7}}"
+            );
+        } else {
+            panic!("expected melodic");
+        }
+    }
+
+    /// BuildTriad is a no-op on a mono lane (poly == false) and on an empty step,
+    /// with a status message.
+    #[test]
+    fn build_triad_noop_on_mono_lane() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(1)); // mono (T-8 BASS)
+        app.cur_col = 0;
+        if let PatternData::Melodic(steps) = &mut app.set.lanes[app.focus].pattern.data {
+            steps[0] = MelodicStep::from(vec![MelodicNote {
+                semi: 0,
+                vel: MEL_DEFAULT_VEL,
+                slide: false,
+                len: 0.5,
+                prob: 1.0,
+                ratchet: 1,
+            }]);
+        }
+        app.apply(Action::BuildTriad);
+        if let PatternData::Melodic(steps) = &app.set.lanes[app.focus].pattern.data {
+            assert_eq!(
+                steps[0].len(),
+                1,
+                "mono lane: BuildTriad must not add notes"
+            );
+        } else {
+            panic!("expected melodic");
+        }
+        assert!(
+            app.status.to_lowercase().contains("poly"),
+            "status must mention poly requirement, got: {:?}",
+            app.status
+        );
+
+        // Empty step on a poly lane is also a no-op with a status.
+        let mut app2 = new_app();
+        app2.apply(Action::FocusLane(2)); // poly
+        app2.cur_col = 0; // step 0 is a rest by default
+        app2.apply(Action::BuildTriad);
+        if let PatternData::Melodic(steps) = &app2.set.lanes[app2.focus].pattern.data {
+            assert!(
+                steps[0].is_empty(),
+                "empty step: BuildTriad must remain a rest"
+            );
+        } else {
+            panic!("expected melodic");
+        }
+    }
+
+    /// RemoveChordNote removes the LAST note from the cursor step.
+    #[test]
+    fn remove_chord_note_removes_last() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(2)); // poly
+        app.cur_col = 0;
+        if let PatternData::Melodic(steps) = &mut app.set.lanes[app.focus].pattern.data {
+            steps[0] = MelodicStep::from(vec![
+                MelodicNote {
+                    semi: 0,
+                    vel: 1.0,
+                    slide: false,
+                    len: 0.9,
+                    prob: 1.0,
+                    ratchet: 1,
+                },
+                MelodicNote {
+                    semi: 4,
+                    vel: 1.0,
+                    slide: false,
+                    len: 0.9,
+                    prob: 1.0,
+                    ratchet: 1,
+                },
+                MelodicNote {
+                    semi: 7,
+                    vel: 1.0,
+                    slide: false,
+                    len: 0.9,
+                    prob: 1.0,
+                    ratchet: 1,
+                },
+            ]);
+        }
+
+        app.apply(Action::RemoveChordNote);
+
+        if let PatternData::Melodic(steps) = &app.set.lanes[app.focus].pattern.data {
+            let semis: Vec<i8> = steps[0].iter().map(|n| n.semi).collect();
+            assert_eq!(
+                semis,
+                vec![0, 4],
+                "RemoveChordNote must drop the last note (7)"
+            );
+        } else {
+            panic!("expected melodic");
+        }
+        assert!(app.dirty, "dirty must be set after RemoveChordNote");
+
+        // Removing on a single-note step clears it (becomes a rest); empty step is a no-op.
+        app.apply(Action::RemoveChordNote); // now [0]
+        app.apply(Action::RemoveChordNote); // now [] (rest)
+        let depth = app.undo.len();
+        app.apply(Action::RemoveChordNote); // no-op on empty step
+        if let PatternData::Melodic(steps) = &app.set.lanes[app.focus].pattern.data {
+            assert!(
+                steps[0].is_empty(),
+                "step must be a rest after removing all notes"
+            );
+        } else {
+            panic!("expected melodic");
+        }
+        assert_eq!(
+            app.undo.len(),
+            depth,
+            "RemoveChordNote on an empty step must not snapshot"
         );
     }
 }

@@ -293,6 +293,12 @@ pub fn key_to_action(key: KeyEvent, mode: Mode, kind: LaneKind) -> Action {
                         // — opens the QWERTY piano note-input sub-mode. Lowercase 'i' is the
                         // global RestartLane (both kinds).
                         'I' => return Action::OpenNoteInput,
+                        // 'j'/'J' were unbound in Edit/melodic (M5b Task 4). 'j' = "join into a
+                        // triad" — builds a scale-aware 3rd + 5th over the cursor step's root
+                        // note (poly lanes only). 'J' (Shift+j) removes the last stacked chord
+                        // note from the cursor step. Melodic-only; drums return Action::None.
+                        'j' => return Action::BuildTriad,
+                        'J' => return Action::RemoveChordNote,
                         _ => {}
                     },
                     LaneKind::Drums => match c {
@@ -1627,6 +1633,47 @@ mod tests {
         assert_eq!(
             key_to_action(k(KeyCode::Delete), Mode::NoteInput, LaneKind::Melodic),
             Action::NoteInputBackspace
+        );
+    }
+
+    // ── M5b Task 4: chord-entry key bindings ─────────────────────────────────
+
+    /// 'j' was unbound (Action::None) in Edit/melodic; now BuildTriad.
+    /// 'J' (Shift+j) was unbound in Edit/melodic; now RemoveChordNote.
+    /// Both are melodic-only — drums return Action::None.
+    #[test]
+    fn j_keys_map_to_chord_actions_in_edit_melodic() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('j')), Mode::Edit, LaneKind::Melodic),
+            Action::BuildTriad,
+            "'j' in Edit/melodic must be BuildTriad (was unbound before M5b-T4)"
+        );
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('J')), Mode::Edit, LaneKind::Melodic),
+            Action::RemoveChordNote,
+            "'J' in Edit/melodic must be RemoveChordNote (was unbound before M5b-T4)"
+        );
+        // Drums — these chars are not bound for drums, must remain None.
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('j')), Mode::Edit, LaneKind::Drums),
+            Action::None,
+            "'j' in Edit/drums must remain Action::None"
+        );
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('J')), Mode::Edit, LaneKind::Drums),
+            Action::None,
+            "'J' in Edit/drums must remain Action::None"
+        );
+    }
+
+    /// The note-input piano keys must still map after the chord additions
+    /// (regression guard — 'j' in NoteInput is still a piano key, not BuildTriad).
+    #[test]
+    fn note_input_j_still_piano_key_after_chord_keys() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('j')), Mode::NoteInput, LaneKind::Melodic),
+            Action::NoteInputPlace(11),
+            "'j' in NoteInput must remain a piano key (offset 11)"
         );
     }
 

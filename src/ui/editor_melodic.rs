@@ -12,6 +12,22 @@ use crate::music::scale::{degree_label, note_name as scale_note_name};
 use crate::pattern::model::{MelodicStep, PatternData};
 use crate::ui::theme::{cursor_style, lane_color, note_name, playhead_style, vel_bar, vel_color};
 
+/// Render a small chord-size badge (number of stacked notes) as a single superscript
+/// glyph. Falls back to a plain digit-ish marker for sizes beyond the table (chords
+/// that large are not practically reachable, but we never panic).
+fn superscript_count(n: usize) -> &'static str {
+    match n {
+        2 => "\u{00B2}", // ²
+        3 => "\u{00B3}", // ³
+        4 => "\u{2074}", // ⁴
+        5 => "\u{2075}", // ⁵
+        6 => "\u{2076}", // ⁶
+        7 => "\u{2077}", // ⁷
+        8 => "\u{2078}", // ⁸
+        _ => "\u{207A}", // ⁺ ("more")
+    }
+}
+
 /// Combined style when cursor and playhead coincide: keep playhead bg, add cursor modifiers.
 fn combined_cursor_playhead_style() -> Style {
     // Fall back to DarkGray if the theme ever drops the playhead bg, so we never panic.
@@ -106,15 +122,25 @@ pub fn render_melodic_editor(f: &mut Frame, area: Rect, app: &App) {
 
         step_spans.push(Span::raw(format!("{:<4}", col + 1)));
 
-        // Mono render (M5b Task 1): show the step's FIRST/primary note. A chord display
-        // (multiple notes per step) is Task 4.
+        // A step holds 0 notes (rest), 1 note (mono — rendered exactly as before), or
+        // 2+ notes (a chord, M5b Task 4). For a chord, the note cell shows the lowest
+        // note's name plus a stacked-count badge (e.g. `C4³`) so the chord is legible at
+        // a glance without disturbing the mono layout. The cursor DETAIL line below lists
+        // every chord note's name + scale degree.
+        let chord_len = steps.get(col).map(|s| s.len()).unwrap_or(0);
         match steps.get(col).and_then(|s| s.first()) {
             Some(note) => {
                 let pitch = resolve_melodic_pitch(root, note.semi, lane.transpose, lane.octave);
                 // Feature #6: a slide note draws a glide tie. When the previous step also
                 // held a note, lead the cell with a connecting line (`─╴`) so the eye reads
                 // a bridge FROM the left note INTO this one; otherwise keep the `~` marker.
-                let label = if note.slide {
+                let label = if chord_len >= 2 {
+                    // Chord: lowest note name + a superscript count badge. Truncate the
+                    // name to keep the 4-cell column width (e.g. "C4²", "C#3³").
+                    let badge = superscript_count(chord_len);
+                    let name = note_name(pitch);
+                    format!("{:<3.3}{}", name, badge)
+                } else if note.slide {
                     if prev_was_note {
                         format!("─╴{:<2}", note_name(pitch))
                     } else {
@@ -170,9 +196,14 @@ pub fn render_melodic_editor(f: &mut Frame, area: Rect, app: &App) {
         }
     }
 
-    // Feature #4: cursor detail line with exact format. Mono: show the primary note.
-    let detail = match steps.get(app.cur_col).and_then(|s| s.first()) {
-        Some(note) => {
+    // Feature #4: cursor detail line. A rest shows "(rest)"; a mono step shows the single
+    // note (unchanged format). A chord (2+ notes, M5b Task 4) lists every note's name and
+    // scale degree so the chord is fully legible.
+    let cursor_step = steps.get(app.cur_col);
+    let detail = match cursor_step.map(|s| s.len()).unwrap_or(0) {
+        0 => format!("Step {} · (rest)", app.cur_col + 1),
+        1 => {
+            let note = cursor_step.unwrap().first().unwrap();
             let pitch = resolve_melodic_pitch(root, note.semi, lane.transpose, lane.octave);
             let slide_indicator = if note.slide { " · ~slide" } else { "" };
             // Show the resolved absolute pitch name and its scale degree.
@@ -190,7 +221,27 @@ pub fn render_melodic_editor(f: &mut Frame, area: Rect, app: &App) {
                 note.ratchet
             )
         }
-        None => format!("Step {} · (rest)", app.cur_col + 1),
+        n => {
+            // Chord: list each note as "Name(degree)" lowest→highest as authored.
+            let notes: Vec<String> = cursor_step
+                .unwrap()
+                .iter()
+                .map(|note| {
+                    let pitch = resolve_melodic_pitch(root, note.semi, lane.transpose, lane.octave);
+                    format!(
+                        "{}({})",
+                        scale_note_name(pitch),
+                        degree_label(pitch, root, lane.scale)
+                    )
+                })
+                .collect();
+            format!(
+                "Step {} · CHORD ({} notes): {} · [j]build triad [J]remove note",
+                app.cur_col + 1,
+                n,
+                notes.join(" ")
+            )
+        }
     };
 
     let lines = vec![
@@ -695,6 +746,92 @@ mod tests {
         assert!(
             whole.contains("C4"),
             "title must show root note name 'C4', got: {whole:?}"
+        );
+    }
+
+    // ── M5b Task 4: chord display ─────────────────────────────────────────────
+
+    /// A multi-note (chord) step renders without panic, shows a stacked-count badge in
+    /// the note cell, and the detail line lists every chord note (more than one note name).
+    #[test]
+    fn chord_step_renders_badge_and_detail_lists_all_notes() {
+        use crate::music::scale::Scale;
+        let mut set = Set::default_set(default_profiles());
+        // Lane 2 = S-1 SYNTH (poly). Major scale, root C4.
+        set.lanes[2].scale = Scale::Major;
+        set.lanes[2].root = Some(60);
+        set.lanes[2].octave = 0;
+        set.lanes[2].transpose = 0;
+        let mut steps: Vec<MelodicStep> = vec![MelodicStep::default(); 16];
+        // C major triad: semis 0, 4, 7 relative to root.
+        steps[0] = MelodicStep::from(vec![
+            MelodicNote {
+                semi: 0,
+                vel: 1.0,
+                slide: false,
+                len: 0.9,
+                prob: 1.0,
+                ratchet: 1,
+            },
+            MelodicNote {
+                semi: 4,
+                vel: 1.0,
+                slide: false,
+                len: 0.9,
+                prob: 1.0,
+                ratchet: 1,
+            },
+            MelodicNote {
+                semi: 7,
+                vel: 1.0,
+                slide: false,
+                len: 0.9,
+                prob: 1.0,
+                ratchet: 1,
+            },
+        ]);
+        set.lanes[2].pattern = Pattern {
+            name: "chord".to_string(),
+            desc: String::new(),
+            length: 16,
+            data: PatternData::Melodic(steps),
+            id: crate::persist::Id::nil(),
+        };
+        let mut app = App::new(set, empty_library());
+        app.focus = 2;
+        app.cur_col = 0;
+        let backend = TestBackend::new(160, 10);
+        let mut term = Terminal::new(backend).unwrap();
+        term.draw(|f| render_melodic_editor(f, f.area(), &app))
+            .unwrap();
+        let whole: String = term
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        // Detail line announces a CHORD with all three note names.
+        assert!(
+            whole.contains("CHORD"),
+            "chord step detail must say CHORD, got: {whole:?}"
+        );
+        assert!(
+            whole.contains("C4"),
+            "chord detail must list root C4, got: {whole:?}"
+        );
+        assert!(
+            whole.contains("E4"),
+            "chord detail must list the 3rd E4, got: {whole:?}"
+        );
+        assert!(
+            whole.contains("G4"),
+            "chord detail must list the 5th G4, got: {whole:?}"
+        );
+        // Note cell shows a superscript count badge for a 3-note chord.
+        assert!(
+            whole.contains('\u{00B3}'),
+            "chord note cell must show a ³ count badge, got: {whole:?}"
         );
     }
 

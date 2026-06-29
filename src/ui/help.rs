@@ -56,6 +56,13 @@ fn left_column_lines() -> Vec<Line<'static>> {
         row("[g]  slide   [, / .]  note len"),
         row("[[ / ]]  octave"),
         blank(),
+        // ── Chords  (poly lanes, e.g. S-1) ────────────────────────────
+        header("Chords  (poly lanes)"),
+        row("[j]  build scale-aware triad (root + 3rd + 5th)"),
+        row("[J]  remove last note from the chord step"),
+        row("note-input on a poly lane STACKS keys into a chord"),
+        row("  (repeat a key to toggle that pitch off)"),
+        blank(),
         // ── Scales ────────────────────────────────────────────────────
         header("Scales  (Melodic mode)"),
         row("[n / N]  cycle scale fwd / bwd"),
@@ -69,6 +76,7 @@ fn left_column_lines() -> Vec<Line<'static>> {
         row("[w e t y u]  black keys"),
         row("[z / x]  octave down / up"),
         row("[Bksp]  clear   [Esc]  exit"),
+        row("mono lane: replace + advance · poly lane: stack chord"),
         blank(),
         // ── Per-step ──────────────────────────────────────────────────
         header("Per-step"),
@@ -416,6 +424,33 @@ mod tests {
         assert!(
             whole.contains("Bksp"),
             "expected Bksp clear hint; got: {whole:?}"
+        );
+    }
+
+    /// M5b Task 4: chord-entry keys and poly-stacking note must appear in the help overlay.
+    #[test]
+    fn help_shows_chord_keys_and_poly_stacking() {
+        // Tall enough to render all groups without scrolling.
+        let whole = render_help_to_string(110, 130, 0);
+        assert!(
+            whole.contains("Chords"),
+            "expected 'Chords' group header; got: {whole:?}"
+        );
+        assert!(
+            whole.contains("triad"),
+            "expected 'triad' hint for [j]; got: {whole:?}"
+        );
+        assert!(
+            whole.contains("[j]"),
+            "expected [j] build-triad key; got: {whole:?}"
+        );
+        assert!(
+            whole.contains("[J]"),
+            "expected [J] remove-note key; got: {whole:?}"
+        );
+        assert!(
+            whole.contains("stack"),
+            "expected note-input poly-stacking hint; got: {whole:?}"
         );
     }
 }
