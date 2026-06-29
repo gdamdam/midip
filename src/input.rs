@@ -258,6 +258,9 @@ pub fn key_to_action(key: KeyEvent, mode: Mode, kind: LaneKind) -> Action {
                         // Adjusts the lane root note down/up by one semitone.
                         'h' => return Action::AdjustRoot(-1),
                         'H' => return Action::AdjustRoot(1),
+                        // 'X' (Shift+x) was unbound in Edit/melodic; chosen for "conform to
+                        // scale" (eXplicit fold). Lowercase 'x' is the global CutStep.
+                        'X' => return Action::OpenConformToScale,
                         _ => {}
                     },
                     LaneKind::Drums => match c {
@@ -1474,6 +1477,30 @@ mod tests {
             key_to_action(k(KeyCode::Char('h')), Mode::Edit, LaneKind::Drums),
             Action::None,
             "'h' in Edit/drums must remain Action::None"
+        );
+    }
+
+    /// 'X' (Shift+x) was unbound (Action::None) in Edit/melodic; now OpenConformToScale.
+    /// Melodic-only — drums return Action::None.
+    /// Lowercase 'x' remains CutStep (global, both lane kinds).
+    #[test]
+    fn shift_x_maps_to_open_conform_to_scale_in_edit_melodic() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('X')), Mode::Edit, LaneKind::Melodic),
+            Action::OpenConformToScale,
+            "'X' in Edit/melodic must be OpenConformToScale (was unbound before M5a-T4)"
+        );
+        // Drums — 'X' is not bound for drums.
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('X')), Mode::Edit, LaneKind::Drums),
+            Action::None,
+            "'X' in Edit/drums must remain Action::None"
+        );
+        // Lowercase 'x' is still CutStep globally.
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('x')), Mode::Edit, LaneKind::Melodic),
+            Action::CutStep,
+            "'x' must remain CutStep"
         );
     }
 }

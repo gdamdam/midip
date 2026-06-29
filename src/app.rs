@@ -40,6 +40,9 @@ pub enum ConfirmAction {
     NewSet,
     DeleteSet(std::path::PathBuf),
     ClearPattern,
+    /// Fold all out-of-scale notes in the focused melodic lane to the lane's scale.
+    /// The `usize` is the count of notes that will be folded (used in the confirm prompt).
+    ConformToScale(usize),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -272,6 +275,14 @@ pub enum Action {
     /// Commit the active temporary fill: snapshot (makes it undoable), clear temp,
     /// mark dirty. No-op with status if no temp is active.
     CommitTransform,
+    // ── M5a Task 4: conform existing notes to scale ──────────────────────────
+    /// Open the conform-to-scale flow: Chromatic → status no-op; 0 out-of-scale notes →
+    /// status no-op; otherwise route to `Mode::Confirm(ConfirmAction::ConformToScale)`.
+    /// Preview is provided by the confirm prompt which shows the count of notes to fold.
+    OpenConformToScale,
+    /// Fold every note in the focused melodic lane to the lane's current scale.
+    /// Snapshots for undo. Chromatic / drum lanes are silent no-ops.
+    ConformToScale,
     None,
 }
 
@@ -1700,6 +1711,7 @@ impl App {
                     ConfirmAction::NewSet => Action::NewSet,
                     ConfirmAction::DeleteSet(path) => Action::DeleteSet(path),
                     ConfirmAction::ClearPattern => Action::ClearPattern,
+                    ConfirmAction::ConformToScale(_) => Action::ConformToScale,
                 };
                 cmds.extend(self.apply(sub));
             }
@@ -1742,6 +1754,59 @@ impl App {
                     self.mode = Mode::Confirm(ConfirmAction::ClearPattern);
                 } else {
                     cmds.extend(self.apply(Action::ClearPattern));
+                }
+            }
+            // ── M5a Task 4: conform existing notes to scale ───────────────────
+            Action::OpenConformToScale => {
+                let lane = &self.set.lanes[self.focus];
+                // Chromatic is the identity — nothing to fold.
+                if lane.scale == Scale::Chromatic {
+                    self.set_status("Chromatic: nothing to conform");
+                } else {
+                    let out_of_scale: usize = match &lane.pattern.data {
+                        PatternData::Melodic(steps) => steps
+                            .iter()
+                            .filter(|s| {
+                                if let Some(note) = s {
+                                    fold_to_scale(note.semi as i32, lane.scale) != note.semi as i32
+                                } else {
+                                    false
+                                }
+                            })
+                            .count(),
+                        _ => 0,
+                    };
+                    if out_of_scale == 0 {
+                        self.set_status("All notes already in scale");
+                    } else {
+                        self.mode = Mode::Confirm(ConfirmAction::ConformToScale(out_of_scale));
+                    }
+                }
+            }
+            Action::ConformToScale => {
+                let lane = &self.set.lanes[self.focus];
+                // Chromatic is identity; drum lanes have no pitch to fold.
+                if lane.scale == Scale::Chromatic || lane.pattern.kind() == LaneKind::Drums {
+                    // silent no-op (callers should use OpenConformToScale for user-facing flow)
+                } else {
+                    let scale = lane.scale;
+                    self.snapshot();
+                    let lane = &mut self.set.lanes[self.focus];
+                    let mut count = 0usize;
+                    if let PatternData::Melodic(steps) = &mut lane.pattern.data {
+                        for note in steps.iter_mut().flatten() {
+                            let folded =
+                                fold_to_scale(note.semi as i32, scale).clamp(-128, 127) as i8;
+                            if folded != note.semi {
+                                note.semi = folded;
+                                count += 1;
+                            }
+                        }
+                    }
+                    let scale_name = self.set.lanes[self.focus].scale.name();
+                    self.dirty = true;
+                    self.set_status(format!("Conformed {} notes to {}", count, scale_name));
+                    cmds.push(self.load_focused());
                 }
             }
             // ── User-pattern load ─────────────────────────────────────────────
@@ -7422,6 +7487,192 @@ mod tests {
             app.set.lanes[app.focus].root,
             Some(0),
             "AdjustRoot must clamp at 0"
+        );
+    }
+
+    // ── M5a Task 4: conform existing notes to scale ───────────────────────────
+
+    /// Helper: build a melodic app with multiple notes at given semitones.
+    fn melodic_app_with_notes(semis: &[i8]) -> App {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(1)); // lane 1 = melodic (bass)
+                                         // Place notes by directly mutating cur_col so relative MoveCursor isn't needed.
+        for (col, &semi) in semis.iter().enumerate() {
+            app.cur_col = col;
+            app.apply(Action::ToggleStep);
+            if let PatternData::Melodic(steps) = &mut app.set.lanes[app.focus].pattern.data {
+                if let Some(Some(n)) = steps.get_mut(col) {
+                    n.semi = semi;
+                }
+            }
+        }
+        // Reset cursor and clear undo history so tests start clean.
+        app.cur_col = 0;
+        app.undo.clear();
+        app.redo.clear();
+        app
+    }
+
+    #[test]
+    fn conform_folds_all_out_of_scale_notes() {
+        // Major scale degrees: 0,2,4,5,7,9,11 — semi=1 and semi=3 are out of scale.
+        // semi=0 (C) and semi=2 (D) are already in Major.
+        let mut app = melodic_app_with_notes(&[0, 1, 2, 3]);
+        app.set.lanes[app.focus].scale = Scale::Major;
+
+        app.apply(Action::ConformToScale);
+
+        if let PatternData::Melodic(steps) = &app.set.lanes[app.focus].pattern.data {
+            let semis: Vec<i8> = steps
+                .iter()
+                .take(4)
+                .filter_map(|s| s.as_ref().map(|n| n.semi))
+                .collect();
+            // Every semi must be in the Major scale degrees (mod 12).
+            for &s in &semis {
+                let folded = fold_to_scale(s as i32, Scale::Major);
+                assert_eq!(
+                    folded, s as i32,
+                    "semi {} should be in-scale after conform",
+                    s
+                );
+            }
+            // In-scale notes (0, 2) must be unchanged; out-of-scale (1→0 or 2, 3→2 or 4).
+            assert_eq!(semis[0], 0, "semi=0 (in-scale) must be unchanged");
+            assert_eq!(semis[2], 2, "semi=2 (in-scale) must be unchanged");
+        } else {
+            panic!("expected Melodic pattern data");
+        }
+    }
+
+    #[test]
+    fn conform_is_undoable() {
+        let mut app = melodic_app_with_notes(&[1, 3]); // both out of Major scale
+        app.set.lanes[app.focus].scale = Scale::Major;
+
+        // Capture original semis.
+        let original: Vec<i8> =
+            if let PatternData::Melodic(steps) = &app.set.lanes[app.focus].pattern.data {
+                steps
+                    .iter()
+                    .take(2)
+                    .filter_map(|s| s.as_ref().map(|n| n.semi))
+                    .collect()
+            } else {
+                panic!("expected Melodic");
+            };
+
+        app.apply(Action::ConformToScale);
+
+        // Verify notes changed.
+        let after: Vec<i8> =
+            if let PatternData::Melodic(steps) = &app.set.lanes[app.focus].pattern.data {
+                steps
+                    .iter()
+                    .take(2)
+                    .filter_map(|s| s.as_ref().map(|n| n.semi))
+                    .collect()
+            } else {
+                panic!("expected Melodic");
+            };
+        assert_ne!(original, after, "conform must change out-of-scale notes");
+
+        // Undo should restore originals.
+        app.apply(Action::Undo);
+        let restored: Vec<i8> =
+            if let PatternData::Melodic(steps) = &app.set.lanes[app.focus].pattern.data {
+                steps
+                    .iter()
+                    .take(2)
+                    .filter_map(|s| s.as_ref().map(|n| n.semi))
+                    .collect()
+            } else {
+                panic!("expected Melodic");
+            };
+        assert_eq!(original, restored, "Undo must restore original semis");
+    }
+
+    #[test]
+    fn conform_chromatic_is_noop() {
+        // Chromatic scale — OpenConformToScale must set status, not enter Confirm mode.
+        let mut app = melodic_app_with_notes(&[1, 3, 6]);
+        // Lane is Chromatic by default.
+        assert_eq!(app.set.lanes[app.focus].scale, Scale::Chromatic);
+
+        let notes_before: Vec<i8> =
+            if let PatternData::Melodic(steps) = &app.set.lanes[app.focus].pattern.data {
+                steps
+                    .iter()
+                    .take(3)
+                    .filter_map(|s| s.as_ref().map(|n| n.semi))
+                    .collect()
+            } else {
+                panic!("expected Melodic");
+            };
+
+        app.apply(Action::OpenConformToScale);
+
+        // Must NOT enter confirm mode.
+        assert_ne!(
+            app.mode,
+            Mode::Confirm(ConfirmAction::ConformToScale(3)),
+            "Chromatic should not route to Confirm"
+        );
+        assert!(
+            app.status.contains("Chromatic"),
+            "status must mention Chromatic, got: {:?}",
+            app.status
+        );
+
+        // Notes must be unchanged.
+        let notes_after: Vec<i8> =
+            if let PatternData::Melodic(steps) = &app.set.lanes[app.focus].pattern.data {
+                steps
+                    .iter()
+                    .take(3)
+                    .filter_map(|s| s.as_ref().map(|n| n.semi))
+                    .collect()
+            } else {
+                panic!("expected Melodic");
+            };
+        assert_eq!(
+            notes_before, notes_after,
+            "notes must not change for Chromatic"
+        );
+    }
+
+    #[test]
+    fn open_conform_routes_to_confirm_when_out_of_scale_notes_exist() {
+        // semi=1 is not in Major.
+        let mut app = melodic_app_with_notes(&[1]);
+        app.set.lanes[app.focus].scale = Scale::Major;
+
+        app.apply(Action::OpenConformToScale);
+
+        assert_eq!(
+            app.mode,
+            Mode::Confirm(ConfirmAction::ConformToScale(1)),
+            "OpenConformToScale with out-of-scale notes must route to Confirm(ConformToScale(1))"
+        );
+    }
+
+    #[test]
+    fn open_conform_noop_when_all_in_scale() {
+        // semi=0, 2, 4 are all in Major.
+        let mut app = melodic_app_with_notes(&[0, 2, 4]);
+        app.set.lanes[app.focus].scale = Scale::Major;
+
+        app.apply(Action::OpenConformToScale);
+
+        // Must NOT enter confirm mode.
+        assert!(
+            !matches!(app.mode, Mode::Confirm(ConfirmAction::ConformToScale(_))),
+            "OpenConformToScale with all in-scale notes must not enter Confirm"
+        );
+        assert!(
+            app.status.contains("already in scale"),
+            "status must say 'already in scale', got: {:?}",
+            app.status
         );
     }
 }

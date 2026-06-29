@@ -39,17 +39,25 @@ pub fn render_name_entry(f: &mut Frame, area: Rect, app: &App) {
 
 /// Render the confirmation dialog into `area`.
 pub fn render_confirm(f: &mut Frame, area: Rect, app: &App) {
-    let (title, message) = match &app.mode {
-        Mode::Confirm(ConfirmAction::NewSet) => {
-            (" NEW SET ", "Unsaved changes will be lost. Create new set?")
-        }
+    let (title, message): (&str, String) = match &app.mode {
+        Mode::Confirm(ConfirmAction::NewSet) => (
+            " NEW SET ",
+            "Unsaved changes will be lost. Create new set?".into(),
+        ),
         Mode::Confirm(ConfirmAction::DeleteSet(_)) => {
-            (" DELETE SET ", "Delete this set file permanently?")
+            (" DELETE SET ", "Delete this set file permanently?".into())
         }
         Mode::Confirm(ConfirmAction::ClearPattern) => {
-            (" CLEAR PATTERN ", "Clear the focused lane pattern?")
+            (" CLEAR PATTERN ", "Clear the focused lane pattern?".into())
         }
-        _ => (" CONFIRM ", "Are you sure?"),
+        Mode::Confirm(ConfirmAction::ConformToScale(n)) => {
+            let lane = &app.set.lanes[app.focus];
+            (
+                " CONFORM TO SCALE ",
+                format!("Conform {} note(s) to {}? [y/n]", n, lane.scale.name()),
+            )
+        }
+        _ => (" CONFIRM ", "Are you sure?".into()),
     };
 
     f.render_widget(Clear, area);
