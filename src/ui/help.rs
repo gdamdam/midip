@@ -105,6 +105,18 @@ fn right_column_lines() -> Vec<Line<'static>> {
         row("[[ / ]]  channel −1 / +1  (1-based, 1-16)"),
         row("[z]  toggle MIDI clock output"),
         row("[esc]  close"),
+        blank(),
+        // ── Crate / Live  [V] ─────────────────────────────────────────
+        header("Crate / Live  [V] to open"),
+        row("[↑ ↓]  select entry   [← →]  change crate"),
+        row("[enter]  launch (quantized, role-matched)"),
+        row("[a]  audition entry   [C]  cancel queue"),
+        row("[z]  validate crate   [V / esc]  close"),
+        blank(),
+        // ── Favorites ─────────────────────────────────────────────────
+        header("Favorites  (Library mode)"),
+        row("[f]  toggle favorite on selected pattern"),
+        row("[F]  toggle favorites-only filter"),
     ]
 }
 
@@ -284,9 +296,10 @@ mod tests {
     fn help_scroll_reveals_bottom_content() {
         let short_scroll0 = render_help_to_string(110, 12, 0);
         let short_scrolled = render_help_to_string(110, 12, 999);
+        // At max scroll, the bottom-most groups (Crate/Live and Favorites) appear.
         assert!(
-            short_scrolled.contains("Route Editor"),
-            "scrolled view should show Route Editor section"
+            short_scrolled.contains("Favorites") || short_scrolled.contains("Crate"),
+            "scrolled view should show bottom sections (Crate/Favorites); got: {short_scrolled:?}"
         );
         assert_ne!(
             short_scroll0, short_scrolled,
@@ -304,6 +317,41 @@ mod tests {
         assert!(
             whole.contains("[L]"),
             "expected [L] double-length key in help; got: {whole:?}"
+        );
+    }
+
+    /// Fix 3: crate-view and favorites keys must appear in the help overlay.
+    #[test]
+    fn help_shows_crate_view_keys() {
+        // Tall enough to render all groups without scrolling.
+        let whole = render_help_to_string(110, 100, 0);
+        assert!(
+            whole.contains("Crate"),
+            "expected 'Crate' group header in help; got: {whole:?}"
+        );
+        assert!(
+            whole.contains("[V]"),
+            "expected [V] open-crate key in help; got: {whole:?}"
+        );
+        assert!(
+            whole.contains("audition"),
+            "expected audition hint in crate-view group; got: {whole:?}"
+        );
+        assert!(
+            whole.contains("validate"),
+            "expected validate hint in crate-view group; got: {whole:?}"
+        );
+        assert!(
+            whole.contains("Favorites"),
+            "expected 'Favorites' group header in help; got: {whole:?}"
+        );
+        assert!(
+            whole.contains("[f]"),
+            "expected [f] favorite key in help; got: {whole:?}"
+        );
+        assert!(
+            whole.contains("[F]"),
+            "expected [F] favorites-filter key in help; got: {whole:?}"
         );
     }
 }

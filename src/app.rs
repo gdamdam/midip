@@ -1608,6 +1608,8 @@ impl App {
                 self.persist_crates();
             }
             Action::AddToCrate(idx) => {
+                // Clear stale validation — crate contents are changing.
+                self.crate_issues.clear();
                 if let Some(r) = self.selected_pattern_ref() {
                     let crate_name = self.crates.crates.get(idx).map(|c| c.name.clone());
                     self.crates.add_entry(
@@ -1626,6 +1628,8 @@ impl App {
                 }
             }
             Action::RemoveFromCrate(crate_idx, entry_idx) => {
+                // Clear stale validation — crate contents are changing.
+                self.crate_issues.clear();
                 self.crates.remove_entry(crate_idx, entry_idx);
                 self.persist_crates();
             }
@@ -1636,6 +1640,16 @@ impl App {
                 self.mode = Mode::CrateView;
             }
             Action::CloseCrateView => {
+                if let Some(prev) = self.audition.take() {
+                    // Cancel audition: restore the engine to the committed pattern.
+                    // (Mirrors CloseLibrary so closing crate-view is glitch-free.)
+                    cmds.push(UiCommand::LoadPattern {
+                        lane: prev.lane,
+                        pattern: self.set.lanes[prev.lane].pattern.clone(),
+                    });
+                    self.set_status("Audition cancelled");
+                }
+                self.crate_issues.clear();
                 self.mode = Mode::Edit;
             }
             Action::CrateEntrySel(d) => {
@@ -1653,6 +1667,8 @@ impl App {
                     self.crate_sel = (self.crate_sel as i32 + d).clamp(0, n as i32 - 1) as usize;
                     self.crate_entry_sel = 0;
                 }
+                // Clear stale validation when the selected crate changes.
+                self.crate_issues.clear();
             }
             Action::LaunchCrateEntry => {
                 let r = self
@@ -6200,6 +6216,124 @@ mod tests {
             key_to_action(k(KeyCode::Char('z')), Mode::CrateView, LaneKind::Drums),
             Action::ValidateCrate,
             "'z' must map to ValidateCrate in CrateView"
+        );
+    }
+
+    // ── M4a review minors ─────────────────────────────────────────────────────
+
+    /// Fix 1: CloseCrateView must restore the engine when an audition is active.
+    /// Mirrors the behaviour of CloseLibrary so closing crate-view is glitch-free.
+    #[test]
+    fn close_crate_view_restores_active_audition() {
+        let set = Set::default_set(crate::devices::profiles::default_profiles());
+        let committed_name = set.lanes[0].pattern.name.clone();
+        let mut app = App::new(set, Library::empty());
+        // Inject an active audition (lane 0) without going through the full
+        // AuditionCrateEntry action (which needs a real resolved pattern on disk).
+        let preview_pat = Pattern {
+            name: "crate-preview".into(),
+            desc: String::new(),
+            length: 16,
+            data: crate::pattern::model::PatternData::Drums(vec![Vec::new(); 16]),
+            id: crate::persist::Id::nil(),
+        };
+        app.audition = Some(AuditionPreview {
+            lane: 0,
+            pattern: preview_pat,
+        });
+        app.mode = Mode::CrateView;
+
+        let cmds = app.apply(Action::CloseCrateView);
+
+        // Audition must be cleared.
+        assert!(app.audition.is_none(), "audition must be cleared on close");
+        // Engine must be restored to the committed pattern.
+        assert!(
+            cmds.iter().any(|c| matches!(
+                c,
+                UiCommand::LoadPattern { lane: 0, pattern } if pattern.name == committed_name
+            )),
+            "must emit LoadPattern restoring the committed pattern; cmds: {cmds:?}"
+        );
+        // Mode returns to Edit.
+        assert_eq!(app.mode, Mode::Edit);
+    }
+
+    /// Fix 2: stale validation results must be cleared on crate/content changes.
+    #[test]
+    fn crate_sel_clears_validation() {
+        let set = Set::default_set(crate::devices::profiles::default_profiles());
+        let mut app = App::new(set, Library::empty());
+        app.crates.add_crate("a".to_string());
+        app.crates.add_crate("b".to_string());
+        // Inject a stale issue.
+        app.crate_issues = vec![CrateIssue::MissingPattern {
+            entry_idx: 0,
+            name: "ghost".to_string(),
+        }];
+        app.crate_sel = 0;
+        app.apply(Action::CrateSel(1));
+        assert!(
+            app.crate_issues.is_empty(),
+            "crate_issues must be cleared when crate changes"
+        );
+    }
+
+    #[test]
+    fn close_crate_view_clears_validation() {
+        let set = Set::default_set(crate::devices::profiles::default_profiles());
+        let mut app = App::new(set, Library::empty());
+        app.mode = Mode::CrateView;
+        app.crate_issues = vec![CrateIssue::MissingPattern {
+            entry_idx: 0,
+            name: "ghost".to_string(),
+        }];
+        app.apply(Action::CloseCrateView);
+        assert!(
+            app.crate_issues.is_empty(),
+            "crate_issues must be cleared on CloseCrateView"
+        );
+    }
+
+    #[test]
+    fn add_remove_from_crate_clears_validation() {
+        use crate::pattern::refs::PatternRef;
+        use crate::pattern::store::CrateEntry;
+        let set = Set::default_set(crate::devices::profiles::default_profiles());
+        let mut app = App::new(set, Library::empty());
+        let idx = app.crates.add_crate("test".to_string());
+        app.crates.add_entry(
+            idx,
+            CrateEntry {
+                pattern: PatternRef::Vendored {
+                    role: "drums".to_string(),
+                    genre: "techno".to_string(),
+                    name: "x".to_string(),
+                },
+                label: None,
+            },
+        );
+        // Stale issues before AddToCrate.
+        app.crate_issues = vec![CrateIssue::MissingPattern {
+            entry_idx: 0,
+            name: "ghost".to_string(),
+        }];
+        // AddToCrate — even if nothing is selected (no-op path), issues must clear.
+        app.apply(Action::AddToCrate(0));
+        assert!(
+            app.crate_issues.is_empty(),
+            "crate_issues must clear on AddToCrate"
+        );
+
+        // Re-inject and test RemoveFromCrate.
+        app.crate_issues = vec![CrateIssue::MissingPattern {
+            entry_idx: 0,
+            name: "ghost".to_string(),
+        }];
+        app.apply(Action::RemoveFromCrate(0, 0));
+        assert!(
+            app.crate_issues.is_empty(),
+            "crate_issues must clear on RemoveFromCrate"
         );
     }
 }
