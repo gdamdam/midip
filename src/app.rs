@@ -5,7 +5,7 @@
 //! `LoadPattern`). Undo/redo snapshot the whole `Set`.
 
 use crate::devices::profiles;
-use crate::engine::scheduler::Quant;
+use crate::engine::scheduler::{LaunchState, Quant};
 use crate::engine::{EngineEvent, UiCommand};
 use crate::music::scale::{fold_to_scale, step_by_degree, Scale};
 use crate::pattern::euclid;
@@ -208,6 +208,12 @@ pub enum Action {
     NewSet,
     /// Delete the set file at `path`. Best-effort removal.
     DeleteSet(std::path::PathBuf),
+    /// M6: recall the scene at `set.scenes[index]` as a single quantized all-lane launch.
+    /// While playing: queues every resolvable lane (pattern + mute/solo/transpose/octave) on
+    /// ONE upcoming boundary (the current `launch_quant`). Stopped: applies immediately. A
+    /// lane whose assignment cannot be resolved is left unchanged and reported in the status.
+    /// Live performance action — NOT an undoable edit; does not mark the set dirty.
+    RecallScene(usize),
     // ── Name-entry dialog ─────────────────────────────────────────────
     OpenNameEntry(NamePurpose),
     NameChar(char),
@@ -657,6 +663,107 @@ impl App {
         } else {
             self.set_status(format!("Loaded {}", name));
             cmds.push(UiCommand::LoadPattern { lane, pattern: pat });
+        }
+        cmds
+    }
+
+    /// M6: recall the scene at `set.scenes[index]` as a single quantized all-lane launch.
+    ///
+    /// Resolves the scene's per-lane assignments via `resolve_scene` (inline user patterns
+    /// from this set's lanes; vendored from the library). For each lane that resolves `Ok`:
+    /// - PLAYING: queue the pattern + the scene's mute/solo/transpose/octave on the SAME
+    ///   upcoming boundary as every other recalled lane (one `QueueScene` carrying all lanes
+    ///   at the current `launch_quant`), restarting each lane at step 1 at that instant. The
+    ///   currently-playing scene keeps sounding until the boundary; state applies at launch.
+    /// - STOPPED: apply immediately (load pattern + state into the lane now).
+    ///
+    /// A lane whose assignment cannot be resolved (missing/deleted pattern) is left UNCHANGED
+    /// and counted in a warning status. Recalling is a live performance action: it neither
+    /// snapshots for undo nor marks the set dirty (matching the M3 pattern-launch precedent).
+    pub fn recall_scene(&mut self, index: usize) -> Vec<UiCommand> {
+        let Some(scene) = self.set.scenes.get(index).cloned() else {
+            self.set_status("No such scene");
+            return vec![];
+        };
+        // Resolve against the library + this set's inline lane patterns (by id).
+        let inline: Vec<Pattern> = self.set.lanes.iter().map(|l| l.pattern.clone()).collect();
+        let resolved = crate::pattern::refs::resolve_scene(&scene, &self.library, &inline);
+
+        let mut missing = 0usize;
+        let n = self.set.lanes.len();
+        let mut cmds = Vec::new();
+
+        if self.engine_playing {
+            // Build ONE QueueScene carrying every resolvable lane at the SAME launch_quant,
+            // so the engine queues them all onto a single boundary (`apply_due_launches`
+            // fires every lane whose `is_boundary(step, quant)` matches the same step).
+            let quant = self.launch_quant;
+            let mut launch_lanes: Vec<(usize, Pattern, LaunchState)> = Vec::new();
+            for (lane, res) in resolved.iter().enumerate() {
+                if lane >= n {
+                    break; // defensive: assignment count > lane count
+                }
+                match res {
+                    Ok(pat) => {
+                        let a = &scene.assignments[lane];
+                        let state = LaunchState {
+                            mute: a.mute,
+                            solo: a.solo,
+                            transpose: a.transpose,
+                            octave: a.octave,
+                        };
+                        self.queued[lane] = Some(pat.name.clone());
+                        launch_lanes.push((lane, pat.clone(), state));
+                    }
+                    Err(()) => missing += 1,
+                }
+            }
+            if !launch_lanes.is_empty() {
+                cmds.push(UiCommand::QueueScene {
+                    quant,
+                    lanes: launch_lanes,
+                });
+            }
+            self.set_status(scene_recall_status(&scene.name, missing, quant, true));
+        } else {
+            // Stopped: apply each resolved lane's pattern + performance state immediately.
+            for (lane, res) in resolved.iter().enumerate() {
+                if lane >= n {
+                    break;
+                }
+                match res {
+                    Ok(pat) => {
+                        let a = &scene.assignments[lane];
+                        let l = &mut self.set.lanes[lane];
+                        l.pattern = pat.clone();
+                        l.mute = a.mute;
+                        l.solo = a.solo;
+                        l.transpose = a.transpose;
+                        l.octave = a.octave;
+                        cmds.push(UiCommand::LoadPattern {
+                            lane,
+                            pattern: pat.clone(),
+                        });
+                        cmds.push(UiCommand::Mute { lane, on: a.mute });
+                        cmds.push(UiCommand::Solo { lane, on: a.solo });
+                        cmds.push(UiCommand::Transpose {
+                            lane,
+                            semis: a.transpose,
+                        });
+                        cmds.push(UiCommand::SetOctave {
+                            lane,
+                            octave: a.octave,
+                        });
+                    }
+                    Err(()) => missing += 1,
+                }
+            }
+            self.set_status(scene_recall_status(
+                &scene.name,
+                missing,
+                self.launch_quant,
+                false,
+            ));
         }
         cmds
     }
@@ -1498,12 +1605,28 @@ impl App {
                 self.set_status(format!("Launch: {}", quant_label(self.launch_quant)));
             }
             Action::CancelQueue => {
-                let lane = self.focus;
-                if self.queued[lane].is_some() {
-                    self.queued[lane] = None;
-                    self.set_status(format!("Queue cancelled (lane {})", lane + 1));
-                    cmds.push(UiCommand::CancelQueue { lane });
+                // M6: if a scene recall queued multiple lanes, cancel ALL of them; otherwise
+                // fall back to cancelling just the focused lane's single queued launch.
+                let queued_lanes: Vec<usize> = (0..self.queued.len())
+                    .filter(|&l| self.queued[l].is_some())
+                    .collect();
+                if queued_lanes.len() > 1 {
+                    for &lane in &queued_lanes {
+                        self.queued[lane] = None;
+                        cmds.push(UiCommand::CancelQueue { lane });
+                    }
+                    self.set_status("Scene recall cancelled");
+                } else {
+                    let lane = self.focus;
+                    if self.queued[lane].is_some() {
+                        self.queued[lane] = None;
+                        self.set_status(format!("Queue cancelled (lane {})", lane + 1));
+                        cmds.push(UiCommand::CancelQueue { lane });
+                    }
                 }
+            }
+            Action::RecallScene(index) => {
+                cmds.extend(self.recall_scene(index));
             }
             Action::RestartLane => {
                 if self.engine_playing {
@@ -3009,6 +3132,21 @@ fn quant_label(q: Quant) -> &'static str {
     match q {
         Quant::NextBar => "next bar",
         Quant::NextBeat => "next beat",
+    }
+}
+
+/// M6: build the status toast for a scene recall, noting how many lanes were skipped
+/// (missing/unresolvable pattern). `playing` selects the queued-vs-immediate wording.
+fn scene_recall_status(name: &str, missing: usize, quant: Quant, playing: bool) -> String {
+    let base = if playing {
+        format!("Recall {} ({})", name, quant_label(quant))
+    } else {
+        format!("Recalled {}", name)
+    };
+    if missing > 0 {
+        format!("{} — {} lane(s) skipped (missing pattern)", base, missing)
+    } else {
+        base
     }
 }
 
@@ -5240,6 +5378,213 @@ mod tests {
                 .any(|c| matches!(c, UiCommand::CancelQueue { lane: 1 })),
             "CancelQueue must emit UiCommand::CancelQueue{{lane:1}}; got: {:?}",
             cmds
+        );
+    }
+
+    // ── M6 Task 2: all-lane quantized scene recall ──────────────────────────
+
+    /// Build an app whose 3 lanes hold patterns with DISTINCT ids, plus one scene
+    /// `assignments[i] = User(lane i's id)` so `resolve_scene` resolves each lane via
+    /// the inline set patterns. The scene also carries per-lane mute/solo/transpose/octave.
+    fn app_with_scene() -> App {
+        use crate::pattern::model::{LaneAssignment, Scene};
+        let mut app = new_app();
+        // Give each lane's pattern a distinct id so User-ref resolution is unambiguous.
+        let ids: Vec<crate::persist::Id> = (0..app.set.lanes.len())
+            .map(|_| crate::persist::mint_id())
+            .collect();
+        for (i, lane) in app.set.lanes.iter_mut().enumerate() {
+            lane.pattern.id = ids[i].clone();
+            lane.pattern.name = format!("p{i}");
+        }
+        let assignments = ids
+            .iter()
+            .enumerate()
+            .map(|(i, id)| LaneAssignment {
+                pattern: PatternRef::User(id.clone()),
+                mute: i == 0, // lane 0 muted in the scene
+                solo: false,
+                transpose: if i == 1 { 5 } else { 0 }, // lane 1 transposed +5
+                octave: if i == 2 { 1 } else { 0 },    // lane 2 octave +1
+            })
+            .collect();
+        app.set.scenes.push(Scene {
+            id: crate::persist::mint_id(),
+            name: "Scene 1".into(),
+            assignments,
+        });
+        app
+    }
+
+    #[test]
+    fn recall_scene_queues_all_lanes_on_one_boundary() {
+        let mut app = app_with_scene();
+        app.engine_playing = true;
+        let cmds = app.apply(Action::RecallScene(0));
+        // Exactly one QueueScene carrying all 3 resolvable lanes at one quant.
+        let scene_cmds: Vec<&UiCommand> = cmds
+            .iter()
+            .filter(|c| matches!(c, UiCommand::QueueScene { .. }))
+            .collect();
+        assert_eq!(
+            scene_cmds.len(),
+            1,
+            "recall must emit ONE QueueScene; got {cmds:?}"
+        );
+        if let UiCommand::QueueScene { quant, lanes } = scene_cmds[0] {
+            assert_eq!(*quant, Quant::NextBar, "uses the current launch_quant");
+            assert_eq!(
+                lanes.len(),
+                3,
+                "all 3 lanes queued together on ONE boundary"
+            );
+            let mut idxs: Vec<usize> = lanes.iter().map(|(l, _, _)| *l).collect();
+            idxs.sort_unstable();
+            assert_eq!(idxs, vec![0, 1, 2]);
+        }
+        // No immediate LoadPattern while playing — everything is queued.
+        assert!(
+            !cmds
+                .iter()
+                .any(|c| matches!(c, UiCommand::LoadPattern { .. })),
+            "while playing, recall must NOT load immediately; got {cmds:?}"
+        );
+        // queued[] display set for every lane.
+        assert!(
+            app.queued.iter().all(|q| q.is_some()),
+            "all lanes shown queued"
+        );
+    }
+
+    #[test]
+    fn recall_scene_applies_mute_solo_transpose_octave_at_launch() {
+        let mut app = app_with_scene();
+        app.engine_playing = true;
+        let cmds = app.apply(Action::RecallScene(0));
+        let UiCommand::QueueScene { lanes, .. } = cmds
+            .iter()
+            .find(|c| matches!(c, UiCommand::QueueScene { .. }))
+            .expect("QueueScene emitted")
+        else {
+            unreachable!()
+        };
+        // The per-lane LaunchState carries the scene's mute/transpose/octave (applied at the
+        // launch instant by the engine — NOT applied to the live lanes now).
+        let find = |idx: usize| lanes.iter().find(|(l, _, _)| *l == idx).map(|(_, _, s)| *s);
+        assert!(find(0).unwrap().mute, "lane 0 mute carried");
+        assert_eq!(find(1).unwrap().transpose, 5, "lane 1 transpose carried");
+        assert_eq!(find(2).unwrap().octave, 1, "lane 2 octave carried");
+        // The LIVE lanes are untouched until the boundary (state applies at launch).
+        assert!(
+            !app.set.lanes[0].mute,
+            "live lane 0 not muted before the boundary"
+        );
+        assert_eq!(
+            app.set.lanes[1].transpose, 0,
+            "live lane 1 not transposed yet"
+        );
+    }
+
+    #[test]
+    fn recall_scene_when_stopped_applies_immediately() {
+        let mut app = app_with_scene();
+        app.engine_playing = false;
+        let cmds = app.apply(Action::RecallScene(0));
+        // Immediate: LoadPattern per resolvable lane, no QueueScene.
+        assert!(
+            !cmds
+                .iter()
+                .any(|c| matches!(c, UiCommand::QueueScene { .. })),
+            "stopped recall must apply immediately, not queue; got {cmds:?}"
+        );
+        assert!(
+            cmds.iter()
+                .any(|c| matches!(c, UiCommand::LoadPattern { lane: 0, .. })),
+            "stopped recall loads patterns now; got {cmds:?}"
+        );
+        // The live lanes carry the scene's performance state now.
+        assert!(
+            app.set.lanes[0].mute,
+            "lane 0 muted immediately when stopped"
+        );
+        assert_eq!(
+            app.set.lanes[1].transpose, 5,
+            "lane 1 transposed immediately"
+        );
+        assert_eq!(
+            app.set.lanes[2].octave, 1,
+            "lane 2 octave applied immediately"
+        );
+        // queued[] stays clear — nothing is pending.
+        assert!(app.queued.iter().all(|q| q.is_none()));
+    }
+
+    #[test]
+    fn recall_scene_skips_missing_pattern_and_warns() {
+        let mut app = app_with_scene();
+        // Break lane 1's assignment: point it at an id no inline pattern has.
+        app.set.scenes[0].assignments[1].pattern = PatternRef::User(crate::persist::mint_id());
+        app.engine_playing = true;
+        let cmds = app.apply(Action::RecallScene(0));
+        let UiCommand::QueueScene { lanes, .. } = cmds
+            .iter()
+            .find(|c| matches!(c, UiCommand::QueueScene { .. }))
+            .expect("QueueScene emitted")
+        else {
+            unreachable!()
+        };
+        // Only lanes 0 and 2 are queued; lane 1 (missing) is skipped.
+        let idxs: Vec<usize> = lanes.iter().map(|(l, _, _)| *l).collect();
+        assert!(
+            idxs.contains(&0) && idxs.contains(&2),
+            "resolvable lanes queued"
+        );
+        assert!(!idxs.contains(&1), "missing lane must be skipped");
+        assert!(app.queued[1].is_none(), "missing lane not shown queued");
+        // A warning is surfaced in the status.
+        assert!(
+            app.status.contains("skipped"),
+            "status must warn about skipped lane(s); got {:?}",
+            app.status
+        );
+    }
+
+    #[test]
+    fn cancel_clears_queued_scene_recall() {
+        let mut app = app_with_scene();
+        app.engine_playing = true;
+        app.apply(Action::RecallScene(0));
+        assert!(
+            app.queued.iter().all(|q| q.is_some()),
+            "all lanes queued by recall"
+        );
+        // C cancels the whole queued scene (every lane it queued).
+        let cmds = app.apply(Action::CancelQueue);
+        assert!(
+            app.queued.iter().all(|q| q.is_none()),
+            "CancelQueue must clear ALL queued scene lanes"
+        );
+        let cancels = cmds
+            .iter()
+            .filter(|c| matches!(c, UiCommand::CancelQueue { .. }))
+            .count();
+        assert_eq!(cancels, 3, "one CancelQueue per queued lane; got {cmds:?}");
+    }
+
+    #[test]
+    fn recall_scene_does_not_mark_dirty_or_snapshot() {
+        let mut app = app_with_scene();
+        app.engine_playing = true;
+        let undo_before = app.undo.len();
+        app.apply(Action::RecallScene(0));
+        assert!(
+            !app.dirty,
+            "recall is a live action — must not mark the set dirty"
+        );
+        assert_eq!(
+            app.undo.len(),
+            undo_before,
+            "recall must not push an undo snapshot"
         );
     }
 
