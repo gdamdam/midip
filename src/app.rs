@@ -2073,19 +2073,31 @@ impl App {
                     let semi_folded = fold_to_scale(semi_raw, lane_scale).clamp(-128, 127) as i8;
                     let col = self.cur_col;
                     let lane = &mut self.set.lanes[self.focus];
+                    let is_poly = lane.profile.poly;
                     if let PatternData::Melodic(steps) = &mut lane.pattern.data {
                         if let Some(slot) = steps.get_mut(col) {
                             let gate = lane.profile.gate_fraction;
-                            // Mono (M5b Task 1): note input replaces the step with a single
-                            // note. Chord stacking on poly lanes is Task 4.
-                            *slot = MelodicStep::from(vec![MelodicNote {
+                            let new_note = MelodicNote {
                                 semi: semi_folded,
                                 vel: MEL_DEFAULT_VEL,
                                 slide: false,
                                 len: gate,
                                 prob: 1.0,
                                 ratchet: 1,
-                            }]);
+                            };
+                            if is_poly {
+                                // Poly lane (M5b Task 2): allow >1 note per step.
+                                // Task 4 adds chord-stacking UI; for now note input
+                                // still replaces (no stacking path exists yet).
+                                *slot = MelodicStep::from(vec![new_note]);
+                            } else {
+                                // Mono enforcement (M5b Task 2): a mono lane holds AT
+                                // MOST ONE note. Placing a note always replaces any
+                                // existing note, preserving the step's single-note
+                                // invariant. Slide and other per-step fields come from
+                                // the new note (identical to today's mono behaviour).
+                                *slot = MelodicStep::from(vec![new_note]);
+                            }
                         }
                     }
                     // Advance cursor one step, wrapping within the pattern length.
@@ -2385,8 +2397,10 @@ impl App {
             }
             PatternData::Melodic(steps) => {
                 if let Some(slot) = steps.get_mut(col) {
-                    // Mono (M5b Task 1): a non-empty step toggles off to a rest; an empty
-                    // step toggles on to a single default note. Chords are Tasks 3–4.
+                    // Toggle: a non-empty step toggles off to a rest; an empty step
+                    // toggles on to a single default note (mono for all lanes here —
+                    // chord stacking via ToggleStep is not supported; poly lanes get
+                    // chord entry via dedicated Actions in M5b Task 4).
                     if !slot.is_empty() {
                         *slot = MelodicStep::default();
                     } else {
@@ -8027,5 +8041,58 @@ mod tests {
         app.apply(Action::FocusLane(1));
         app.apply(Action::OpenNoteInput);
         assert_eq!(app.context_label(), "NOTE INPUT");
+    }
+
+    // ── M5b Task 2: poly profile flag + mono enforcement ─────────────────────
+
+    /// Placing a second note on a mono lane (poly == false) replaces the first,
+    /// leaving exactly one note in the step (not two).
+    ///
+    /// Lane 1 = T-8 BASS (poly == false).
+    ///
+    /// Note: T4 will add chord-stacking Actions for poly lanes. Here we verify
+    /// only the mono enforcement guard in NoteInputPlace. For poly lanes, the
+    /// guard is absent — chord-stacking path doesn't exist yet (Task 4), so we
+    /// assert poly simply via the profile flag, not via stacking behaviour.
+    #[test]
+    fn mono_lane_step_holds_one_note() {
+        // ── Mono lane (T-8 BASS, lane 1) ──────────────────────────────────
+        let mut app = new_app();
+        app.apply(Action::FocusLane(1));
+        assert!(
+            !app.set.lanes[app.focus].profile.poly,
+            "lane 1 must have poly == false"
+        );
+        app.cur_col = 0;
+        app.apply(Action::OpenNoteInput);
+
+        // Place first note (semi 0 → C).
+        app.apply(Action::NoteInputPlace(0));
+        // Move cursor back to col 0 to place a second note on the same step.
+        app.cur_col = 0;
+        // Place second note (semi 2 → D, chromatic offset 2).
+        app.apply(Action::NoteInputPlace(2));
+
+        if let PatternData::Melodic(steps) = &app.set.lanes[app.focus].pattern.data {
+            let step = &steps[0];
+            assert_eq!(
+                step.len(),
+                1,
+                "mono lane: second note must REPLACE the first (step must hold exactly 1 note)"
+            );
+            assert_eq!(
+                step[0].semi, 2,
+                "mono lane: the surviving note must be the most-recently placed one"
+            );
+        } else {
+            panic!("expected melodic data on lane 1");
+        }
+
+        // ── Poly lane (S-1 SYNTH, lane 2) — verify flag only ──────────────
+        let app2 = new_app();
+        assert!(
+            app2.set.lanes[2].profile.poly,
+            "lane 2 must have poly == true"
+        );
     }
 }
