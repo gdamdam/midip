@@ -129,9 +129,17 @@ pub struct Lane {
     pub octave: i8,    // octaves (melodic)
     /// Explicit routing override. `None` = derive from profile via `effective_route()`.
     pub route: Option<LaneRoute>,
+    /// Per-voice mute: MIDI notes whose playback is silenced (non-destructive, latched).
+    /// Persisted via LaneDto; old files without this field get an empty vec on load.
+    pub muted_voices: Vec<u8>,
 }
 
 impl Lane {
+    /// Returns `true` when `note` is in the per-voice mute list (silenced).
+    pub fn is_voice_muted(&self, note: u8) -> bool {
+        self.muted_voices.contains(&note)
+    }
+
     /// The MIDI channel this lane emits on: the explicit route's channel when set,
     /// else the profile channel. Allocation-free — safe for the scheduler hot path
     /// (unlike `effective_route()`, which clones the port's `String`s).
@@ -194,6 +202,7 @@ impl Set {
                     transpose: 0,
                     octave: 0,
                     route: None,
+                    muted_voices: Vec::new(),
                 }
             })
             .collect();
@@ -361,6 +370,7 @@ mod tests {
             transpose: 0,
             octave: 0,
             route: None,
+            muted_voices: Vec::new(),
         };
         let r = lane.effective_route();
         assert_eq!(r.channel, profiles[0].channel);
@@ -388,6 +398,7 @@ mod tests {
             transpose: 0,
             octave: 0,
             route: Some(explicit.clone()),
+            muted_voices: Vec::new(),
         };
         let r = lane.effective_route();
         assert_eq!(r, explicit);
@@ -405,6 +416,7 @@ mod tests {
             transpose: 0,
             octave: 0,
             route: None,
+            muted_voices: Vec::new(),
         };
         assert_eq!(lane.route_channel(), profiles[0].channel);
 

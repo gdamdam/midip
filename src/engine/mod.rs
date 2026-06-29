@@ -73,6 +73,14 @@ pub enum UiCommand {
     /// Enable or disable the virtual-port mirror (T2: toggled by the UI toggle).
     /// Safe to receive in headless mode — just sets the flag; no port is opened.
     SetMirror(bool),
+    /// Per-drum-voice mute (§2.6): silence a single MIDI note on a drum lane, latched.
+    /// When `on=true`, the note is added to `lane.muted_voices` and any sounding instance
+    /// is immediately released. When `on=false`, the note is removed (unmuted silently).
+    MuteVoice {
+        lane: usize,
+        note: u8,
+        on: bool,
+    },
     Quit,
 }
 
@@ -320,6 +328,9 @@ fn apply_command(
         }
         UiCommand::SetMirror(on) => {
             st.mirror_on = on;
+        }
+        UiCommand::MuteVoice { lane, note, on } => {
+            st.seq.set_voice_mute(lane, note, on, now, sink);
         }
         UiCommand::Quit => {
             // Release all sounding notes before exiting — avoids hanging notes on hardware.

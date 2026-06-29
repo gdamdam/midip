@@ -322,6 +322,54 @@ impl Sequencer {
         self.sounding.len()
     }
 
+    /// Release a single (channel, note) from the sounding registry, sending a NoteOff.
+    /// No-op if the note is not currently sounding. Used by `set_voice_mute`.
+    fn release_note(
+        sounding: &mut Vec<SoundingNote>,
+        channel: u8,
+        note: u8,
+        at: u64,
+        sink: &mut dyn MidiSink,
+    ) {
+        let before = sounding.len();
+        sounding.retain(|s| !(s.channel == channel && s.note == note));
+        if sounding.len() < before {
+            sink.send(MidiMessage::NoteOff { channel, note }, at);
+        }
+    }
+
+    /// Latch or unlatch a per-voice mute on `lane`. When muting (`on=true`), any
+    /// currently-sounding instance of `note` on that lane is immediately released.
+    /// Unmuting (`on=false`) is silent — future steps will fire normally.
+    pub fn set_voice_mute(
+        &mut self,
+        lane: usize,
+        note: u8,
+        on: bool,
+        at: u64,
+        sink: &mut dyn MidiSink,
+    ) {
+        if let Some(l) = self.set.lanes.get_mut(lane) {
+            if on {
+                if !l.muted_voices.contains(&note) {
+                    l.muted_voices.push(note);
+                }
+            } else {
+                l.muted_voices.retain(|&n| n != note);
+            }
+        }
+        if on {
+            // Release the note if it is currently sounding on this lane.
+            let channel = self
+                .set
+                .lanes
+                .get(lane)
+                .map(|l| l.route_channel())
+                .unwrap_or(0);
+            Self::release_note(&mut self.sounding, channel, note, at, sink);
+        }
+    }
+
     pub fn play(&mut self, at_micros: u64) {
         self.playing = true;
         self.origin_micros = at_micros;
@@ -654,6 +702,10 @@ impl Sequencer {
             PatternData::Melodic(_) => Vec::new(),
         };
         for hit in hits {
+            // Per-voice mute: skip this hit entirely when the voice is silenced.
+            if self.set.lanes[lane_idx].is_voice_muted(hit.note) {
+                continue;
+            }
             // Probability is rolled per hit; a failed roll skips the whole hit.
             if !self.rolls_fire(hit.prob) {
                 continue;
@@ -1009,6 +1061,7 @@ mod sequencer_tests {
             transpose: 0,
             octave: 0,
             route: None,
+            muted_voices: Vec::new(),
         }
     }
 
@@ -1028,6 +1081,7 @@ mod sequencer_tests {
             transpose: 0,
             octave: 0,
             route: None,
+            muted_voices: Vec::new(),
         }
     }
 
@@ -1343,6 +1397,7 @@ mod sequencer_tests {
             transpose: 0,
             octave: 0,
             route: None,
+            muted_voices: Vec::new(),
         }
     }
 
@@ -1571,6 +1626,7 @@ mod sequencer_tests {
             transpose: 0,
             octave: 0,
             route: None,
+            muted_voices: Vec::new(),
         }
     }
 
@@ -1635,6 +1691,7 @@ mod sequencer_tests {
             transpose: 0,
             octave: 0,
             route: None,
+            muted_voices: Vec::new(),
         };
         let run_once = |seed: u64| -> Vec<u64> {
             let mut seq = Sequencer::new(set_with(vec![lane.clone()]));
@@ -1825,6 +1882,7 @@ mod sequencer_tests {
             transpose: 0,
             octave: 0,
             route: None,
+            muted_voices: Vec::new(),
         }
     }
 
@@ -2013,6 +2071,7 @@ mod sequencer_tests {
             transpose: 0,
             octave: 0,
             route: None,
+            muted_voices: Vec::new(),
         }
     }
 
@@ -2158,6 +2217,7 @@ mod sequencer_tests {
             transpose: 0,
             octave: 0,
             route: None,
+            muted_voices: Vec::new(),
         }
     }
 
@@ -2509,6 +2569,7 @@ mod sequencer_tests {
             transpose: 0,
             octave: 0,
             route: None,
+            muted_voices: Vec::new(),
         }
     }
 
@@ -2828,5 +2889,142 @@ mod sequencer_tests {
             launched.contains(&0),
             "take_launched must report lane 0 launched; got {launched:?}"
         );
+    }
+
+    // ── Per-drum-voice mute tests (§2.6) ────────────────────────────────────
+
+    /// Build a drum lane with two voices: kick (36) on step 0, hat (42) on step 0.
+    fn drum_lane_kick_and_hat() -> Lane {
+        let mut steps: Vec<Vec<DrumHit>> = vec![Vec::new(); 4];
+        steps[0].push(DrumHit {
+            note: 36,
+            vel: 100,
+            prob: 1.0,
+            ratchet: 1,
+        });
+        steps[0].push(DrumHit {
+            note: 42,
+            vel: 80,
+            prob: 1.0,
+            ratchet: 1,
+        });
+        Lane {
+            profile: T8_DRUMS,
+            pattern: Pattern {
+                name: "kh".to_string(),
+                desc: String::new(),
+                length: 4,
+                data: PatternData::Drums(steps),
+                id: crate::persist::Id::nil(),
+            },
+            mute: false,
+            solo: false,
+            transpose: 0,
+            octave: 0,
+            route: None,
+            muted_voices: Vec::new(),
+        }
+    }
+
+    /// A lane with kick (36) muted: note 36 must not fire, hat (42) must fire.
+    #[test]
+    fn muted_drum_voice_is_silent() {
+        let mut lane = drum_lane_kick_and_hat();
+        lane.muted_voices = vec![36];
+        let mut seq = Sequencer::new(set_with(vec![lane]));
+        let mut sink = RecordingSink::new();
+        seq.play(0);
+        let dur = step_dur_micros(120.0);
+        run(&mut seq, &mut sink, dur * 4, 1000);
+
+        let has_kick_on = sink
+            .events
+            .iter()
+            .any(|(_, m)| matches!(m, MidiMessage::NoteOn { note: 36, .. }));
+        let has_hat_on = sink
+            .events
+            .iter()
+            .any(|(_, m)| matches!(m, MidiMessage::NoteOn { note: 42, .. }));
+        assert!(!has_kick_on, "muted kick (36) must not produce a NoteOn");
+        assert!(has_hat_on, "unmuted hat (42) must still fire");
+    }
+
+    /// Empty muted_voices → event stream identical to baseline (regression guard).
+    #[test]
+    fn unmuted_voices_unchanged() {
+        // Baseline: kick lane, no mutes.
+        let mut seq_base = Sequencer::new(set_with(vec![drum_lane_kick_and_hat()]));
+        let mut sink_base = RecordingSink::new();
+        seq_base.play(0);
+        let dur = step_dur_micros(120.0);
+        run(&mut seq_base, &mut sink_base, dur * 4, 1000);
+
+        // Same lane with explicit empty muted_voices.
+        let mut lane = drum_lane_kick_and_hat();
+        lane.muted_voices = Vec::new();
+        let mut seq_mut = Sequencer::new(set_with(vec![lane]));
+        let mut sink_mut = RecordingSink::new();
+        seq_mut.play(0);
+        run(&mut seq_mut, &mut sink_mut, dur * 4, 1000);
+
+        assert_eq!(
+            sink_base.events, sink_mut.events,
+            "empty muted_voices must produce byte-identical event stream"
+        );
+    }
+
+    /// set_voice_mute(on=true) releases a currently-sounding note and removes it from registry.
+    #[test]
+    fn set_voice_mute_releases_sounding_note() {
+        let mut seq = Sequencer::new(set_with(vec![drum_lane_kick_and_hat()]));
+        let mut sink = RecordingSink::new();
+        // Manually inject a sounding note for lane 0, note 36 on channel 9.
+        inject_sounding(&mut seq, 9, 36, 0, NoteDomain::Playback);
+        assert_eq!(seq.sounding_count(), 1);
+
+        // Mute note 36 on lane 0 at t=1000.
+        seq.set_voice_mute(0, 36, true, 1000, &mut sink);
+
+        // Registry must no longer contain note 36.
+        assert_eq!(
+            seq.sounding_count(),
+            0,
+            "sounding registry must be empty after voice mute"
+        );
+        // A NoteOff must have been emitted.
+        let has_note_off = sink.events.iter().any(|(at, m)| {
+            *at == 1000
+                && matches!(
+                    m,
+                    MidiMessage::NoteOff {
+                        channel: 9,
+                        note: 36
+                    }
+                )
+        });
+        assert!(
+            has_note_off,
+            "set_voice_mute must emit NoteOff for sounding note; got {:?}",
+            sink.events
+        );
+        // The note must be in muted_voices now.
+        assert!(seq.set.lanes[0].muted_voices.contains(&36));
+    }
+
+    /// set_voice_mute(on=false) removes note from muted_voices, no NoteOff emitted.
+    #[test]
+    fn set_voice_mute_unmute_removes_from_list() {
+        let mut lane = drum_lane_kick_and_hat();
+        lane.muted_voices = vec![36];
+        let mut seq = Sequencer::new(set_with(vec![lane]));
+        let mut sink = RecordingSink::new();
+
+        seq.set_voice_mute(0, 36, false, 0, &mut sink);
+
+        assert!(
+            !seq.set.lanes[0].muted_voices.contains(&36),
+            "note must be removed from muted_voices"
+        );
+        assert!(sink.events.is_empty(), "unmute must not emit any MIDI");
     }
 }

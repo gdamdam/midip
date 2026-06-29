@@ -248,6 +248,8 @@ pub fn key_to_action(key: KeyEvent, mode: Mode, kind: LaneKind) -> Action {
                         'E' => return Action::Euclid { dp: -1, dr: 0 },
                         '[' => return Action::Euclid { dp: 0, dr: -1 },
                         ']' => return Action::Euclid { dp: 0, dr: 1 },
+                        // ` (backtick): toggle per-voice mute on the cursor row (§2.6)
+                        '`' => return Action::ToggleVoiceMute,
                         _ => {}
                     },
                 }
@@ -1301,6 +1303,22 @@ mod tests {
         assert_eq!(
             key_to_action(shift_c, Mode::CrateView, LaneKind::Drums),
             Action::CancelQueue
+        );
+    }
+
+    /// §2.6: backtick is ToggleVoiceMute in Edit/Drums; unbound elsewhere.
+    #[test]
+    fn backtick_maps_to_toggle_voice_mute_in_drums() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('`')), Mode::Edit, LaneKind::Drums),
+            Action::ToggleVoiceMute,
+            "backtick must map to ToggleVoiceMute in Edit+Drums"
+        );
+        // Must be unbound (None) on melodic lanes — voice mute is drums-only.
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('`')), Mode::Edit, LaneKind::Melodic),
+            Action::None,
+            "backtick must be unbound in Edit+Melodic"
         );
     }
 

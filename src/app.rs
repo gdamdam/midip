@@ -240,6 +240,9 @@ pub enum Action {
     FavoriteCrateEntry,
     /// Run pre-performance validation on the current crate; stores results and shows summary.
     ValidateCrate,
+    /// Per-drum-voice mute (§2.6): toggle the mute on the voice row under the cursor.
+    /// Drums only — no-op with a status message on melodic lanes.
+    ToggleVoiceMute,
     None,
 }
 
@@ -774,6 +777,32 @@ impl App {
                     lane: self.focus,
                     on: self.set.lanes[self.focus].mute,
                 });
+            }
+            Action::ToggleVoiceMute => {
+                if self.focused_kind() != LaneKind::Drums {
+                    self.set_status("Voice mute is drums-only".to_string());
+                } else {
+                    let note = profiles::DRUM_VOICES[self.cur_row].note;
+                    self.snapshot();
+                    let lane = &mut self.set.lanes[self.focus];
+                    let already = lane.muted_voices.contains(&note);
+                    if already {
+                        lane.muted_voices.retain(|&n| n != note);
+                    } else {
+                        lane.muted_voices.push(note);
+                    }
+                    let on = !already;
+                    self.set_status(format!(
+                        "Voice {} {}",
+                        note,
+                        if on { "muted" } else { "unmuted" }
+                    ));
+                    cmds.push(UiCommand::MuteVoice {
+                        lane: self.focus,
+                        note,
+                        on,
+                    });
+                }
             }
             Action::ToggleSolo => {
                 self.snapshot();
@@ -4034,6 +4063,67 @@ mod tests {
         assert!(app.dirty, "mute must mark dirty");
         app.apply(Action::Undo);
         assert!(!app.focused_lane().mute, "undo must unmute the lane");
+    }
+
+    // ── Per-drum-voice mute (§2.6) ────────────────────────────────────────────
+
+    #[test]
+    fn toggle_voice_mute_updates_lane_and_emits() {
+        let mut app = new_app();
+        // Focus lane 0 (drums), cur_row=0 → DRUM_VOICES[0].note.
+        app.apply(Action::FocusLane(0));
+        let note = profiles::DRUM_VOICES[0].note;
+        assert!(!app.focused_lane().muted_voices.contains(&note));
+
+        let cmds = app.apply(Action::ToggleVoiceMute);
+
+        // Lane must now contain the note in muted_voices.
+        assert!(
+            app.focused_lane().muted_voices.contains(&note),
+            "muted_voices must include the cursor voice note after toggle"
+        );
+        // Must be dirty (snapshot taken).
+        assert!(app.dirty, "ToggleVoiceMute must mark dirty");
+        // Must emit MuteVoice{on:true}.
+        assert!(
+            cmds.iter().any(
+                |c| matches!(c, UiCommand::MuteVoice { lane: 0, note: n, on: true } if *n == note)
+            ),
+            "must emit MuteVoice{{lane:0, note:{note}, on:true}}; got: {cmds:?}"
+        );
+
+        // Toggle again → unmute.
+        let cmds2 = app.apply(Action::ToggleVoiceMute);
+        assert!(
+            !app.focused_lane().muted_voices.contains(&note),
+            "muted_voices must not contain note after second toggle"
+        );
+        assert!(
+            cmds2.iter().any(
+                |c| matches!(c, UiCommand::MuteVoice { lane: 0, note: n, on: false } if *n == note)
+            ),
+            "second toggle must emit MuteVoice{{on:false}}; got: {cmds2:?}"
+        );
+    }
+
+    #[test]
+    fn toggle_voice_mute_noop_on_melodic() {
+        let mut app = new_app();
+        // Focus lane 1 (melodic).
+        app.apply(Action::FocusLane(1));
+        assert_eq!(app.focused_kind(), LaneKind::Melodic);
+
+        let cmds = app.apply(Action::ToggleVoiceMute);
+
+        // No MuteVoice command emitted.
+        assert!(
+            !cmds
+                .iter()
+                .any(|c| matches!(c, UiCommand::MuteVoice { .. })),
+            "melodic lane must not emit MuteVoice; got: {cmds:?}"
+        );
+        // Not dirty.
+        assert!(!app.dirty, "melodic voice mute must not mark dirty");
     }
 
     #[test]

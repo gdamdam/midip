@@ -84,6 +84,7 @@ fn three_lane_set() -> Set {
             transpose: 0,
             octave: 0,
             route: None,
+            muted_voices: Vec::new(),
         },
         Lane {
             profile: profs[1],
@@ -93,6 +94,7 @@ fn three_lane_set() -> Set {
             transpose: 0,
             octave: 0,
             route: None,
+            muted_voices: Vec::new(),
         },
         Lane {
             profile: profs[2],
@@ -102,6 +104,7 @@ fn three_lane_set() -> Set {
             transpose: 0,
             octave: 0,
             route: None,
+            muted_voices: Vec::new(),
         },
     ];
     Set {
