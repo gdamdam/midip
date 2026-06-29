@@ -1339,6 +1339,38 @@ mod tests {
         );
     }
 
+    #[test]
+    fn help_mode_page_down_scrolls_page() {
+        assert_eq!(
+            key_to_action(k(KeyCode::PageDown), Mode::Help, LaneKind::Drums),
+            Action::HelpScroll(10)
+        );
+    }
+
+    #[test]
+    fn help_mode_page_up_scrolls_page() {
+        assert_eq!(
+            key_to_action(k(KeyCode::PageUp), Mode::Help, LaneKind::Drums),
+            Action::HelpScroll(-10)
+        );
+    }
+
+    #[test]
+    fn help_mode_end_jumps_to_bottom() {
+        assert_eq!(
+            key_to_action(k(KeyCode::End), Mode::Help, LaneKind::Drums),
+            Action::HelpScroll(i32::MAX / 2)
+        );
+    }
+
+    #[test]
+    fn help_mode_home_jumps_to_top() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Home), Mode::Help, LaneKind::Drums),
+            Action::HelpScroll(i32::MIN / 2)
+        );
+    }
+
     // ── M4a Task 3: favorites key bindings in Library mode ───────────────────
 
     #[test]
