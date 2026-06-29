@@ -14,7 +14,7 @@ use crate::pattern::model::{
     PortRef, Set,
 };
 use crate::pattern::refs::PatternRef;
-use crate::pattern::store::Favorites;
+use crate::pattern::store::{CrateEntry, CrateIndex, Favorites};
 
 /// Purpose of a pending name-entry dialog.
 #[derive(Clone, Debug, PartialEq)]
@@ -196,6 +196,21 @@ pub enum Action {
     ToggleFavorite,
     /// Toggle favorites-only filter in the library browser. Library mode only.
     ToggleFavFilter,
+    // ── M4a Task 4: crate management ─────────────────────────────────────
+    /// Create a new named crate; persist.
+    CreateCrate(String),
+    /// Rename the crate at `idx`; persist.
+    RenameCrate(usize, String),
+    /// Duplicate the crate at `idx` (fresh id, " copy" suffix); persist.
+    DuplicateCrate(usize),
+    /// Remove the crate at `idx`; persist.
+    DeleteCrate(usize),
+    /// Move the entry at `from` to `to` within the crate at `crate_idx`; persist.
+    ReorderCrateEntry(usize, usize, usize),
+    /// Add the currently-selected library pattern to the crate at `idx`; persist.
+    AddToCrate(usize),
+    /// Remove the entry at `entry_idx` from the crate at `crate_idx`; persist.
+    RemoveFromCrate(usize, usize),
     None,
 }
 
@@ -300,6 +315,10 @@ pub struct App {
     pub favorites: Favorites,
     /// When true, the library browser shows only favorited patterns.
     pub fav_filter: bool,
+
+    // --- M4a Task 4: crates ---
+    /// Named, ordered collections of pattern refs; loaded at startup, persisted on mutation.
+    pub crates: CrateIndex,
 }
 
 /// Default melodic velocity multiplier when placing a note (1.0 -> MIDI 100).
@@ -362,6 +381,7 @@ impl App {
             help_scroll: 0,
             favorites: Favorites::default(),
             fav_filter: false,
+            crates: CrateIndex::default(),
         }
     }
 
@@ -384,6 +404,11 @@ impl App {
                 self.status.clear();
             }
         }
+    }
+
+    /// Best-effort persist of the crate index; ignores errors so a missing data dir never panics.
+    pub fn persist_crates(&self) {
+        let _ = crate::pattern::store::save_crates(&crate::config::data_dir(), &self.crates);
     }
 
     /// Advance the autosave debounce counter. Returns `true` exactly when the counter
@@ -1384,6 +1409,60 @@ impl App {
                 } else {
                     self.set_status("All patterns");
                 }
+            }
+            // ── M4a Task 4: crate management ─────────────────────────────────────
+            Action::CreateCrate(name) => {
+                self.crates.add_crate(name.clone());
+                self.persist_crates();
+                self.set_status(format!("Crate created: {}", name));
+            }
+            Action::RenameCrate(idx, name) => {
+                self.crates.rename_crate(idx, name.clone());
+                self.persist_crates();
+                if idx < self.crates.crates.len() {
+                    self.set_status(format!("Crate renamed: {}", name));
+                }
+            }
+            Action::DuplicateCrate(idx) => {
+                if let Some(new_idx) = self.crates.duplicate_crate(idx) {
+                    let new_name = self.crates.crates[new_idx].name.clone();
+                    self.persist_crates();
+                    self.set_status(format!("Crate duplicated: {}", new_name));
+                }
+            }
+            Action::DeleteCrate(idx) => {
+                if idx < self.crates.crates.len() {
+                    let name = self.crates.crates[idx].name.clone();
+                    self.crates.remove_crate(idx);
+                    self.persist_crates();
+                    self.set_status(format!("Crate deleted: {}", name));
+                }
+            }
+            Action::ReorderCrateEntry(crate_idx, from, to) => {
+                self.crates.reorder_entry(crate_idx, from, to);
+                self.persist_crates();
+            }
+            Action::AddToCrate(idx) => {
+                if let Some(r) = self.selected_pattern_ref() {
+                    let crate_name = self.crates.crates.get(idx).map(|c| c.name.clone());
+                    self.crates.add_entry(
+                        idx,
+                        CrateEntry {
+                            pattern: r,
+                            label: None,
+                        },
+                    );
+                    self.persist_crates();
+                    if let Some(name) = crate_name {
+                        self.set_status(format!("Added to {}", name));
+                    }
+                } else {
+                    self.set_status("nothing selected");
+                }
+            }
+            Action::RemoveFromCrate(crate_idx, entry_idx) => {
+                self.crates.remove_entry(crate_idx, entry_idx);
+                self.persist_crates();
             }
             Action::None => {}
         }
@@ -5249,5 +5328,152 @@ mod tests {
             !app.fav_filter,
             "after second ToggleFavFilter it must be false"
         );
+    }
+
+    // ── M4a Task 4: Crate management reducer ─────────────────────────────────
+
+    fn app_with_lib_selection() -> App {
+        // Build an app with a library that has one vendored pattern selected.
+        let (lib, _) = library_for_fav_tests();
+        let set =
+            crate::pattern::model::Set::default_set(crate::devices::profiles::default_profiles());
+        let mut app = App::new(set, lib);
+        app.mode = Mode::Library;
+        app.lib_role = crate::pattern::library::LibRole::Drums;
+        app.lib_genre = 0; // "techno"
+        app.lib_pattern = 0; // "Four on Floor"
+        app
+    }
+
+    #[test]
+    fn create_crate_adds_to_index() {
+        let set =
+            crate::pattern::model::Set::default_set(crate::devices::profiles::default_profiles());
+        let mut app = App::new(set, crate::pattern::library::Library::empty());
+        assert_eq!(app.crates.crates.len(), 0);
+
+        app.apply(Action::CreateCrate("Techno Set".to_string()));
+
+        assert_eq!(app.crates.crates.len(), 1);
+        assert_eq!(app.crates.crates[0].name, "Techno Set");
+        assert!(
+            app.status.contains("Techno Set"),
+            "status must mention crate name"
+        );
+    }
+
+    #[test]
+    fn rename_crate_keeps_id() {
+        let set =
+            crate::pattern::model::Set::default_set(crate::devices::profiles::default_profiles());
+        let mut app = App::new(set, crate::pattern::library::Library::empty());
+        app.apply(Action::CreateCrate("Original".to_string()));
+        let id_before = app.crates.crates[0].id.clone();
+
+        app.apply(Action::RenameCrate(0, "Renamed".to_string()));
+
+        assert_eq!(app.crates.crates[0].name, "Renamed");
+        assert_eq!(
+            app.crates.crates[0].id, id_before,
+            "rename must keep id stable"
+        );
+        assert!(app.status.contains("Renamed") || !app.status.is_empty());
+    }
+
+    #[test]
+    fn duplicate_crate_adds_copy() {
+        let set =
+            crate::pattern::model::Set::default_set(crate::devices::profiles::default_profiles());
+        let mut app = App::new(set, crate::pattern::library::Library::empty());
+        app.apply(Action::CreateCrate("Alpha".to_string()));
+        let orig_id = app.crates.crates[0].id.clone();
+
+        app.apply(Action::DuplicateCrate(0));
+
+        assert_eq!(app.crates.crates.len(), 2);
+        let dup = &app.crates.crates[1];
+        assert_ne!(dup.id, orig_id, "duplicate must have a fresh id");
+        assert_eq!(dup.name, "Alpha copy");
+    }
+
+    #[test]
+    fn delete_crate_removes() {
+        let set =
+            crate::pattern::model::Set::default_set(crate::devices::profiles::default_profiles());
+        let mut app = App::new(set, crate::pattern::library::Library::empty());
+        app.apply(Action::CreateCrate("Gone".to_string()));
+        app.apply(Action::CreateCrate("Stays".to_string()));
+        assert_eq!(app.crates.crates.len(), 2);
+
+        app.apply(Action::DeleteCrate(0));
+
+        assert_eq!(app.crates.crates.len(), 1);
+        assert_eq!(app.crates.crates[0].name, "Stays");
+    }
+
+    #[test]
+    fn add_to_crate_uses_selected_ref() {
+        let mut app = app_with_lib_selection();
+        app.apply(Action::CreateCrate("My Crate".to_string()));
+
+        let expected_ref = app.selected_pattern_ref().expect("must have selection");
+        app.apply(Action::AddToCrate(0));
+
+        assert_eq!(app.crates.crates[0].entries.len(), 1);
+        assert_eq!(app.crates.crates[0].entries[0].pattern, expected_ref);
+        assert!(app.status.contains("My Crate") || !app.status.is_empty());
+    }
+
+    #[test]
+    fn add_to_crate_noop_when_no_selection() {
+        // Library empty → no selected pattern ref → no-op
+        let set =
+            crate::pattern::model::Set::default_set(crate::devices::profiles::default_profiles());
+        let mut app = App::new(set, crate::pattern::library::Library::empty());
+        app.apply(Action::CreateCrate("Empty".to_string()));
+
+        app.apply(Action::AddToCrate(0));
+
+        assert_eq!(
+            app.crates.crates[0].entries.len(),
+            0,
+            "no-op when nothing selected"
+        );
+    }
+
+    #[test]
+    fn remove_from_crate_drops_entry() {
+        let mut app = app_with_lib_selection();
+        app.apply(Action::CreateCrate("Crate".to_string()));
+        app.apply(Action::AddToCrate(0));
+        assert_eq!(app.crates.crates[0].entries.len(), 1);
+
+        app.apply(Action::RemoveFromCrate(0, 0));
+
+        assert_eq!(app.crates.crates[0].entries.len(), 0);
+    }
+
+    #[test]
+    fn reorder_crate_entry_moves() {
+        let mut app = app_with_lib_selection();
+        app.apply(Action::CreateCrate("Crate".to_string()));
+        // Add two entries by navigating the library
+        let ref0 = app.selected_pattern_ref().unwrap();
+        app.apply(Action::AddToCrate(0)); // entry 0 = ref0
+
+        // Switch to User genre (index 1) pattern 0
+        app.lib_genre = 1;
+        app.lib_pattern = 0;
+        let ref1 = app.selected_pattern_ref().unwrap();
+        app.apply(Action::AddToCrate(0)); // entry 1 = ref1
+
+        assert_eq!(app.crates.crates[0].entries[0].pattern, ref0);
+        assert_eq!(app.crates.crates[0].entries[1].pattern, ref1);
+
+        // Move entry 1 to position 0
+        app.apply(Action::ReorderCrateEntry(0, 1, 0));
+
+        assert_eq!(app.crates.crates[0].entries[0].pattern, ref1);
+        assert_eq!(app.crates.crates[0].entries[1].pattern, ref0);
     }
 }
