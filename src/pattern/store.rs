@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::devices::profiles::profile_by_id;
 use crate::pattern::model::{Lane, LaneRoute, Pattern, Set};
+use crate::pattern::refs::PatternRef;
 use crate::persist;
 
 /// User preferences persisted across sessions (session pref, not part of the Set).
@@ -472,6 +473,59 @@ pub fn list_sets(dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
     }
     out.sort();
     Ok(out)
+}
+
+/// The current on-disk schema version for favorites. Increment when format changes.
+pub const CURRENT_FAVORITES_VERSION: u32 = 1;
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct Favorites {
+    #[serde(default)]
+    pub version: u32,
+    #[serde(default)]
+    pub refs: Vec<PatternRef>,
+}
+
+impl Favorites {
+    /// Toggle: if ref present, remove and return false; else push and return true.
+    pub fn toggle(&mut self, r: PatternRef) -> bool {
+        if let Some(pos) = self.refs.iter().position(|x| x == &r) {
+            self.refs.remove(pos);
+            false
+        } else {
+            self.refs.push(r);
+            true
+        }
+    }
+
+    pub fn contains(&self, r: &PatternRef) -> bool {
+        self.refs.contains(r)
+    }
+}
+
+pub fn favorites_path(dir: &Path) -> PathBuf {
+    dir.join("favorites.json")
+}
+
+pub fn load_favorites(dir: &Path) -> Favorites {
+    let path = favorites_path(dir);
+    let Ok(json) = std::fs::read_to_string(&path) else {
+        return Favorites::default();
+    };
+    serde_json::from_str(&json).unwrap_or_default()
+}
+
+pub fn save_favorites(dir: &Path, favs: &Favorites) -> anyhow::Result<()> {
+    let path = favorites_path(dir);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).context("creating favorites dir")?;
+    }
+    let mut stamped = favs.clone();
+    stamped.version = CURRENT_FAVORITES_VERSION;
+    let json = serde_json::to_string_pretty(&stamped).context("serializing favorites")?;
+    persist::write_atomic(&path, json.as_bytes())
+        .with_context(|| format!("writing favorites {}", path.display()))?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1290,5 +1344,50 @@ mod tests {
             "clean pattern must return no repair notes"
         );
         assert_eq!(p, original, "clean pattern must be unchanged");
+    }
+
+    fn vendored_ref(role: &str) -> PatternRef {
+        PatternRef::Vendored {
+            role: role.to_string(),
+            genre: "techno".to_string(),
+            name: "Four on Floor".to_string(),
+        }
+    }
+
+    #[test]
+    fn favorites_toggle_add_remove() {
+        let mut favs = Favorites::default();
+        let r = vendored_ref("drums");
+        let added = favs.toggle(r.clone());
+        assert!(added, "first toggle should add");
+        assert!(favs.contains(&r));
+        let removed = favs.toggle(r.clone());
+        assert!(!removed, "second toggle should remove");
+        assert!(!favs.contains(&r));
+    }
+
+    #[test]
+    fn favorites_dedup() {
+        let mut favs = Favorites::default();
+        let r = vendored_ref("drums");
+        favs.toggle(r.clone());
+        favs.toggle(r.clone());
+        assert!(favs.refs.is_empty(), "toggling same ref twice nets empty");
+        assert_eq!(favs.refs.iter().filter(|x| *x == &r).count(), 0);
+    }
+
+    #[test]
+    fn favorites_store_roundtrip() {
+        let dir = unique_dir("favorites-roundtrip");
+        let mut favs = Favorites::default();
+        favs.toggle(vendored_ref("drums"));
+        favs.toggle(vendored_ref("bass"));
+        save_favorites(&dir, &favs).unwrap();
+        let loaded = load_favorites(&dir);
+        assert_eq!(loaded.version, CURRENT_FAVORITES_VERSION);
+        assert_eq!(loaded.refs.len(), 2);
+        assert!(loaded.contains(&vendored_ref("drums")));
+        assert!(loaded.contains(&vendored_ref("bass")));
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
