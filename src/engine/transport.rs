@@ -8,6 +8,11 @@ pub enum TempoSource {
     /// Follow the Ableton Link session tempo (falls back to `manual_bpm` when
     /// no peers or Link is disabled).
     Link,
+    /// Derive tempo from an incoming MIDI clock signal on `Set.clock_in_port`.
+    /// The actual clock-tracking thread is wired in M10 T4; until then (and
+    /// whenever no clock signal is present), `effective_bpm` falls back to
+    /// `manual_bpm`.
+    ClockIn,
 }
 
 /// Top-level transport state owned by the engine reducer.
@@ -37,6 +42,9 @@ impl Transport {
         match self.source {
             TempoSource::Link => link_tempo.unwrap_or(self.manual_bpm),
             TempoSource::Manual(_) => self.manual_bpm,
+            // Clock-in tempo tracking is wired in M10 T4. Until then (or when
+            // no MIDI clock is arriving), fall back to manual_bpm.
+            TempoSource::ClockIn => self.manual_bpm,
         }
     }
 
@@ -112,6 +120,19 @@ mod tests {
         t.tap(1_000_000);
         t.tap(1_500_000);
         assert!((t.manual_bpm - 120.0).abs() < 1.0, "got {}", t.manual_bpm);
+    }
+
+    #[test]
+    fn clock_in_variant_exists_and_effective_bpm_falls_back_to_manual() {
+        let mut t = Transport::new();
+        t.source = TempoSource::ClockIn;
+        t.manual_bpm = 130.0;
+        // When no external clock-in tempo is known, falls back to manual_bpm.
+        assert_eq!(
+            t.effective_bpm(None),
+            130.0,
+            "ClockIn with no tempo must fall back to manual_bpm"
+        );
     }
 
     #[test]

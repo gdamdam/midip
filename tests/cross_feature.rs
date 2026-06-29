@@ -99,6 +99,7 @@ fn three_lane_set() -> Set {
         id: midip::persist::Id::nil(),
         scenes: Vec::new(),
         chains: Vec::new(),
+        clock_in_port: None,
     }
 }
 
@@ -533,6 +534,7 @@ fn setset_releases_held_notes_and_adopts_new_bpm() {
         id: midip::persist::Id::nil(),
         scenes: Vec::new(),
         chains: Vec::new(),
+        clock_in_port: None,
     };
 
     // Second set: a different BPM and a note on every step so timing is observable.
@@ -545,6 +547,7 @@ fn setset_releases_held_notes_and_adopts_new_bpm() {
         id: midip::persist::Id::nil(),
         scenes: Vec::new(),
         chains: Vec::new(),
+        clock_in_port: None,
     };
 
     let mut link = FakeLink::new();
@@ -986,6 +989,7 @@ fn chord_survives_save_load_and_plays_with_clean_release() {
         id: midip::persist::Id::nil(),
         scenes: Vec::new(),
         chains: Vec::new(),
+        clock_in_port: None,
     };
 
     // ── 2. Save → load round-trip ──
@@ -1143,6 +1147,7 @@ fn generative_preview_commit_undo_roundtrip() {
         id: midip::persist::Id::nil(),
         scenes: Vec::new(),
         chains: Vec::new(),
+        clock_in_port: None,
     };
 
     let mut app = App::new(set, test_library());
@@ -1308,6 +1313,7 @@ fn generative_vary_identity_and_mutation() {
             id: midip::persist::Id::nil(),
             scenes: Vec::new(),
             chains: Vec::new(),
+            clock_in_port: None,
         };
         let mut a = App::new(set, test_library());
         a.apply(Action::FocusLane(0));
@@ -1415,6 +1421,7 @@ fn scene_capture_save_load_recall_roundtrip() {
         id: persist::mint_id(),
         scenes: Vec::new(),
         chains: Vec::new(),
+        clock_in_port: None,
     };
 
     // Give each lane a DISTINCT non-default performance state.
@@ -1653,6 +1660,7 @@ fn chain_roundtrip_create_save_load_play_advance() {
         id: midip::persist::Id::nil(),
         scenes: Vec::new(),
         chains: Vec::new(),
+        clock_in_port: None,
     };
     set.ensure_id();
 
@@ -1990,6 +1998,7 @@ fn m8_per_step_cc_microtiming_cond_clock_div_roundtrip() {
         id: midip::persist::Id::nil(),
         scenes: Vec::new(),
         chains: Vec::new(),
+        clock_in_port: None,
     };
 
     // ── (a) Persistence: save → load; assert M8 fields survive and version=3 ──

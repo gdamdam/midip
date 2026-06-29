@@ -1496,6 +1496,7 @@ mod sequencer_tests {
             id: crate::persist::Id::nil(),
             scenes: Vec::new(),
             chains: Vec::new(),
+            clock_in_port: None,
         }
     }
 
@@ -5321,6 +5322,7 @@ mod sequencer_tests {
             id: crate::persist::Id::nil(),
             scenes: Vec::new(),
             chains: Vec::new(),
+            clock_in_port: None,
         };
         let mut seq = Sequencer::new(set);
         let mut sink = RecordingSink::new();

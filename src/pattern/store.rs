@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::devices::profiles::profile_by_id;
 #[cfg(test)]
 use crate::pattern::model::TrigCond;
-use crate::pattern::model::{Chain, Lane, LaneRoute, Pattern, Scene, Set};
+use crate::pattern::model::{Chain, Lane, LaneRoute, Pattern, PortRef, Scene, Set};
 use crate::pattern::refs::PatternRef;
 use crate::persist;
 
@@ -44,7 +44,7 @@ pub fn save_prefs(dir: &Path, prefs: &Prefs) -> anyhow::Result<()> {
 }
 
 /// The current on-disk schema version. Increment when the format changes.
-pub const CURRENT_SET_VERSION: u32 = 3;
+pub const CURRENT_SET_VERSION: u32 = 4;
 
 /// On-disk lane: stores the profile *id* (not the static profile), rehydrated on load.
 #[derive(Serialize, Deserialize)]
@@ -91,6 +91,9 @@ struct SetDto {
     /// Song-mode chains (M7). Absent in old files → serde default `[]`.
     #[serde(default)]
     chains: Vec<Chain>,
+    /// MIDI clock-in port (M10). Absent in old files (pre-v4) → serde default `None`.
+    #[serde(default)]
+    clock_in_port: Option<PortRef>,
 }
 
 impl From<&Lane> for LaneDto {
@@ -123,6 +126,7 @@ impl From<&Set> for SetDto {
             lanes: set.lanes.iter().map(LaneDto::from).collect(),
             scenes: set.scenes.clone(),
             chains: set.chains.clone(),
+            clock_in_port: set.clock_in_port.clone(),
         }
     }
 }
@@ -185,6 +189,12 @@ fn migrate_v2_to_v3(v: &mut serde_json::Value) {
     v["version"] = serde_json::json!(3u32);
 }
 
+/// Migration: v3 → v4 (M10 adds `clock_in_port`; serde default supplies `null`/`None`,
+/// no rewrite needed).
+fn migrate_v3_to_v4(v: &mut serde_json::Value) {
+    v["version"] = serde_json::json!(4u32);
+}
+
 /// Run the migration ladder on a `serde_json::Value` before typed parse.
 /// Rejects files saved by a newer midip; upgrades older files in-place.
 pub fn migrate_set_value(v: &mut serde_json::Value) -> anyhow::Result<()> {
@@ -201,6 +211,7 @@ pub fn migrate_set_value(v: &mut serde_json::Value) -> anyhow::Result<()> {
             0 => migrate_v0_to_v1(v),
             1 => migrate_v1_to_v2(v),
             2 => migrate_v2_to_v3(v),
+            3 => migrate_v3_to_v4(v),
             _ => break,
         }
         cur += 1;
@@ -264,6 +275,7 @@ pub fn load_set_with_report(path: &Path) -> anyhow::Result<(Set, Vec<String>)> {
         id: dto.id,
         scenes: dto.scenes,
         chains: dto.chains,
+        clock_in_port: dto.clock_in_port,
     };
     let notes = validate_and_repair(&mut set);
     Ok((set, notes))
@@ -2138,7 +2150,7 @@ mod tests {
     fn v1_set_without_chains_loads_with_empty_chains() {
         let mut v: serde_json::Value = serde_json::from_str(MINIMAL_V1_SET_JSON).unwrap();
         migrate_set_value(&mut v).unwrap();
-        assert_eq!(v["version"], 3, "v1 must migrate to version 3");
+        assert_eq!(v["version"], 4, "v1 must migrate to version 4");
         // Deserialize into SetDto — missing `chains` key must default to [].
         let dto: SetDto = serde_json::from_value(v).unwrap();
         assert!(
@@ -2183,7 +2195,7 @@ mod tests {
     fn v2_set_without_m8_fields_loads_with_defaults() {
         let mut v: serde_json::Value = serde_json::from_str(MINIMAL_V2_SET_JSON).unwrap();
         migrate_set_value(&mut v).unwrap();
-        assert_eq!(v["version"], 3, "v2 must migrate to version 3");
+        assert_eq!(v["version"], 4, "v2 must migrate to version 4");
         // Deserialize into SetDto — missing M8 keys must default cleanly.
         let dto: SetDto = serde_json::from_value(v).unwrap();
         assert!(
@@ -2273,6 +2285,72 @@ mod tests {
 
     #[test]
     fn set_version_is_3() {
-        assert_eq!(CURRENT_SET_VERSION, 3);
+        // Version was 3; kept for history. The live assertion is set_version_is_4.
+        // This test is intentionally removed — see set_version_is_4.
+    }
+
+    // ── M10 Task 1: v3→v4 migration + clock_in_port persistence ─────────────
+
+    /// Minimal v3 Set JSON (no `clock_in_port`) — simulates a file saved before M10.
+    const MINIMAL_V3_SET_JSON: &str = r#"{
+        "version": 3,
+        "id": "abcdef0123456789",
+        "name": "pre-m10",
+        "bpm": 120.0,
+        "swing": 0.5,
+        "lanes": []
+    }"#;
+
+    #[test]
+    fn set_version_is_4() {
+        assert_eq!(CURRENT_SET_VERSION, 4);
+    }
+
+    #[test]
+    fn v3_set_without_clock_in_port_loads_with_none() {
+        let mut v: serde_json::Value = serde_json::from_str(MINIMAL_V3_SET_JSON).unwrap();
+        migrate_set_value(&mut v).unwrap();
+        assert_eq!(v["version"], 4, "v3 must migrate to version 4");
+        let dto: SetDto = serde_json::from_value(v).unwrap();
+        assert!(
+            dto.clock_in_port.is_none(),
+            "missing clock_in_port must default to None"
+        );
+    }
+
+    #[test]
+    fn set_with_clock_in_port_roundtrips() {
+        use crate::pattern::model::PortRef;
+        let dir = unique_dir("clock-in-roundtrip");
+        let mut set = Set::default_set(default_profiles());
+        set.clock_in_port = Some(PortRef {
+            stable_key: "hw:1,0".to_string(),
+            name: "Keystep".to_string(),
+        });
+        let path = save_set(&dir, &mut set).unwrap();
+        let loaded = load_set(&path).unwrap();
+        assert_eq!(
+            loaded.clock_in_port,
+            Some(PortRef {
+                stable_key: "hw:1,0".to_string(),
+                name: "Keystep".to_string(),
+            }),
+            "clock_in_port must survive save/load"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn set_without_clock_in_port_roundtrips_as_none() {
+        let dir = unique_dir("clock-in-none-roundtrip");
+        let mut set = Set::default_set(default_profiles());
+        assert!(set.clock_in_port.is_none());
+        let path = save_set(&dir, &mut set).unwrap();
+        let loaded = load_set(&path).unwrap();
+        assert!(
+            loaded.clock_in_port.is_none(),
+            "absent clock_in_port must load as None"
+        );
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

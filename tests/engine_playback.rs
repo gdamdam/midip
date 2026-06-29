@@ -138,6 +138,7 @@ fn three_lane_set() -> Set {
         id: midip::persist::Id::nil(),
         scenes: Vec::new(),
         chains: Vec::new(),
+        clock_in_port: None,
     }
 }
 

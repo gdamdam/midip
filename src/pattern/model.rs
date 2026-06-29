@@ -513,6 +513,9 @@ pub struct Set {
     pub scenes: Vec<Scene>,
     /// Song-mode chains (M7). Defaults to empty so old set files load unchanged.
     pub chains: Vec<Chain>,
+    /// MIDI input port to receive clock from (M10). `None` = no clock-in selected.
+    /// Defaults to `None` so old set files (pre-v4) load unchanged.
+    pub clock_in_port: Option<PortRef>,
 }
 
 impl Set {
@@ -557,6 +560,7 @@ impl Set {
             id: persist::Id::nil(),
             scenes: Vec::new(),
             chains: Vec::new(),
+            clock_in_port: None,
         }
     }
 
