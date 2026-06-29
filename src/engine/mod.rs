@@ -147,8 +147,9 @@ struct EngineState {
     /// port_sinks/watcher, so it flags here and the loop reacts. Ignored headless.
     route_dirty: bool,
     /// Whether the virtual "midip" output mirror is active. Default off.
-    /// When on, `TeeSink` forwards every message to the virtual port IN ADDITION TO the
-    /// hardware fanout — purely additive; hardware path is byte-identical either way.
+    /// When on, the fan-out ALSO delivers every message (notes/CC + Clock) to the virtual
+    /// port IN ADDITION TO the hardware fanout — purely additive; hardware path is
+    /// byte-identical either way (a lane explicitly routed to "midip" is not double-sent).
     mirror_on: bool,
 }
 
