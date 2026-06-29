@@ -5,9 +5,9 @@
 **A terminal MIDI sequencer & live groovebox for the Roland AIRA Compact T‑8 and S‑1**
 
 [![License](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.8.0-success.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.9.0-success.svg)](CHANGELOG.md)
 [![Rust](https://img.shields.io/badge/rust-2021%20edition-orange.svg)](https://www.rust-lang.org)
-[![Tests](https://img.shields.io/badge/tests-662%20passing-brightgreen.svg)](docs/HARDWARE-ACCEPTANCE.md)
+[![Tests](https://img.shields.io/badge/tests-684%20passing-brightgreen.svg)](docs/HARDWARE-ACCEPTANCE.md)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg)](#build--run)
 [![Built with ratatui](https://img.shields.io/badge/TUI-ratatui-blueviolet.svg)](https://ratatui.rs)
 
@@ -80,6 +80,10 @@ gear is the sound. (It never triggers a device's own internal pattern — see
 - **Scale-aware melodic editing** — choose a root + scale per melodic lane (`n`/`N` scale,
   `h`/`H` root); `↑`/`↓` moves by scale degree; `X` conforms existing notes to the scale;
   `I` opens a QWERTY piano note-input sub-mode.
+- **Chords & polyphony** — the S‑1 synth lane is polyphonic: a step can hold several notes.
+  Stack notes by key in the note-input sub-mode, build a scale-aware triad with `j`, or strip
+  a note with `J`. The T‑8 bass stays monophonic (single note + slide). Backward-compatible:
+  every existing pattern loads and plays exactly as before.
 - **Tempo** — type an exact BPM, nudge it, **tap tempo**, or sync to **Ableton Link**
   (embedded — no separate bridge app). Link bar‑locks playback start so no notes fire before
   the bar boundary. midip is the clock master (24 PPQN).
@@ -110,7 +114,7 @@ Other commands:
 
 ```sh
 cargo build --release        # just build the binary (target/release/midip)
-cargo test                   # run the test suite (662 tests, no hardware needed)
+cargo test                   # run the test suite (684 tests, no hardware needed)
 ```
 
 > Run it in a real terminal (not piped) — it takes over the screen while running and restores
@@ -207,6 +211,8 @@ Press **`?`** in‑app for the full scrollable two-column list. `space` and `!` 
 | `h` / `H` | Root note down / up (semitone) |
 | `X` | Conform all existing notes to current scale (with undo) |
 | `I` | Note-input sub-mode (QWERTY piano; Esc to exit) |
+| `j` | Build a scale-aware triad on the step (poly lanes) |
+| `J` | Remove the last note of a chord |
 | `i` | Quantized lane restart |
 
 ### Library (`l` to open)
@@ -379,6 +385,22 @@ Available on melodic lanes (v0.8.0+):
 Changing the scale never silently rewrites existing notes — only `X` or `I` do that, with
 explicit intent.
 
+### Chords (poly lanes)
+
+The S‑1 synth lane is **polyphonic** — a step can hold more than one note (the T‑8 bass lane
+stays mono: a new note replaces the old, keeping slide). On a poly lane:
+
+- In the note-input sub-mode, each key **stacks** its pitch onto the current step (press the
+  same pitch again to remove it) rather than advancing — so you can play a chord, then move
+  on with `←`/`→`.
+- `j` builds a **scale-aware triad** from the step's root note: a major triad in a major
+  scale, minor in a minor scale, and so on (in Chromatic, `j` stacks whole-tone intervals —
+  pick a scale for tertian triads).
+- `J` removes the last note of a chord (down to a single note, then to a rest).
+
+Chords are saved compatibly: a mono pattern still writes the legacy on-disk shape and loads
+in earlier builds; only patterns that actually contain a chord become this-version-only.
+
 ## Configuration
 
 Environment variables (all optional):
@@ -416,12 +438,12 @@ cargo test
 The engine writes through a `MidiSink` trait, so playback, scheduling, slides, probability,
 ratcheting, polymeter, quantized launch, favorites, crates, scale-aware editing, and the
 reducer are all tested with a recording sink — **no hardware needed**. UI views are checked
-with ratatui's `TestBackend`. 662 tests, 0 failures. (Live MIDI and Ableton Link are hardware
+with ratatui's `TestBackend`. 684 tests, 0 failures. (Live MIDI and Ableton Link are hardware
 paths — see [`docs/HARDWARE-ACCEPTANCE.md`](docs/HARDWARE-ACCEPTANCE.md).)
 
 ## Status
 
-v0.8.0 — feature‑complete and green. See [`docs/KNOWN-ISSUES.md`](docs/KNOWN-ISSUES.md) for
+v0.9.0 — feature‑complete and green. See [`docs/KNOWN-ISSUES.md`](docs/KNOWN-ISSUES.md) for
 open items, and [`CHANGELOG.md`](CHANGELOG.md) for the full history.
 
 ## License

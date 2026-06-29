@@ -7,8 +7,27 @@ feature milestone is a minor bump).
 
 ## [Unreleased]
 
+## [0.9.0] — 2026-06-29 — Chords & polyphony
+
 ### Added
-- GitHub Actions CI (fmt + clippy + tests on Linux/macOS).
+- **Chords on synth lanes** — a melodic step can now hold multiple notes. The S‑1 synth
+  lane is polyphonic; the T‑8 bass lane stays monophonic (single note + slide), enforced
+  at the edit layer. Chords play as simultaneous notes and every note has a guaranteed
+  release path, so stop/panic/mute never leave a hung note.
+- **Chord entry** — in the note-input sub-mode on a poly lane, each key **stacks** a note
+  onto the current step (pressing the same pitch again removes it) instead of advancing;
+  mono lanes still replace-and-advance. `j` builds a **scale-aware triad** from the step's
+  root note (a major triad in a major scale, minor in a minor scale, etc.); `J` removes the
+  last note of a chord.
+- **Chord display** — multi-note steps render with a chord indicator and the detail line
+  lists the chord's note names and scale degrees; single-note steps are unchanged.
+- **GitHub Actions CI** — fmt + `clippy -D warnings` + the full test suite on Linux and macOS.
+
+### Changed
+- The melodic step data model migrated from a single optional note to a list of notes.
+  This is **fully backward-compatible**: every existing set, user pattern, and the vendored
+  library loads unchanged, and a mono pattern saved by this version still loads in earlier
+  builds (rests serialize as `null`, single notes as objects, only true chords as arrays).
 
 ## [0.8.0] — 2026-06-29 — Scale-aware melodic editing + note input
 
