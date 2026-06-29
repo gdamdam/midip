@@ -615,6 +615,22 @@ impl App {
         }
     }
 
+    /// Selectable destination ports for the route editor, as `PortRef`s. The synthetic
+    /// virtual "midip" entry comes FIRST (so a lane can always be pointed at midip's own
+    /// engine-managed virtual source — it never appears in `list_output_ports()`), followed
+    /// by the real hardware ports enumerated when the editor opened.
+    pub fn route_port_choices(&self) -> Vec<PortRef> {
+        let mut choices = Vec::with_capacity(self.route_editor_ports.len() + 1);
+        choices.push(PortRef::virtual_midip());
+        for name in &self.route_editor_ports {
+            choices.push(PortRef {
+                stable_key: name.clone(),
+                name: name.clone(),
+            });
+        }
+        choices
+    }
+
     /// Apply an action; mutate state and return engine commands to forward.
     pub fn apply(&mut self, action: Action) -> Vec<UiCommand> {
         // Any action other than Quit disarms the double-q quit gesture.
@@ -1134,27 +1150,29 @@ impl App {
                 if lane >= self.set.lanes.len() {
                     return cmds;
                 }
-                // Build the port cycle list: "(default)" + all available ports.
-                // "(default)" → route = None; named port → route = Some(LaneRoute{...})
-                let n_ports = self.route_editor_ports.len();
-                // Current selection index: 0 = default, 1..=n = port[i-1]
+                // Build the port cycle list: "(default)" + the selectable ports. The
+                // selectable ports include the synthetic virtual "midip" entry FIRST, then
+                // the hardware ports (see `route_port_choices`). "(default)" → route = None;
+                // any named choice → route = Some(LaneRoute{...}).
+                let choices = self.route_port_choices();
+                // Current selection index: 0 = default, 1..=n = choices[i-1] (match by key).
                 let current_idx = match &self.set.lanes[lane].route {
                     None => 0usize,
-                    Some(r) => self
-                        .route_editor_ports
+                    Some(r) => choices
                         .iter()
-                        .position(|p| p == &r.port.name)
+                        .position(|p| p.stable_key == r.port.stable_key)
                         .map(|i| i + 1)
                         .unwrap_or(0),
                 };
-                let total = n_ports + 1; // 0=default, 1..=n_ports
+                let total = choices.len() + 1; // 0=default, 1..=choices.len()
                 let next_idx = ((current_idx as i32 + d).rem_euclid(total as i32)) as usize;
                 self.snapshot();
                 if next_idx == 0 {
                     self.set.lanes[lane].route = None;
                     self.set_status(format!("Lane {lane}: route → (default)"));
                 } else {
-                    let port_name = self.route_editor_ports[next_idx - 1].clone();
+                    let port = choices[next_idx - 1].clone();
+                    let port_name = port.name.clone();
                     // Preserve existing channel/clock_out when switching ports.
                     let existing = self.set.lanes[lane].route.as_ref();
                     let channel = existing
@@ -1162,10 +1180,7 @@ impl App {
                         .unwrap_or_else(|| self.set.lanes[lane].profile.channel);
                     let clock_out = existing.map(|r| r.clock_out).unwrap_or(true);
                     self.set.lanes[lane].route = Some(LaneRoute {
-                        port: PortRef {
-                            stable_key: port_name.clone(),
-                            name: port_name.clone(),
-                        },
+                        port,
                         channel,
                         clock_out,
                     });
@@ -4366,6 +4381,65 @@ mod tests {
             )),
             "expected SetRoute{{lane:0, route:None}}, got: {:?}",
             cmds
+        );
+    }
+
+    /// The route editor's selectable ports must include a synthetic "midip" virtual entry
+    /// (alongside the hardware ports from `list_output_ports`) so a lane can be pointed at
+    /// midip's own engine-managed virtual source.
+    #[test]
+    fn route_editor_lists_midip_virtual_port() {
+        use crate::pattern::model::{VIRTUAL_PORT_KEY, VIRTUAL_PORT_NAME};
+        let mut app = new_app();
+        app.apply(Action::OpenRouteEditor);
+        // Even with NO real hardware ports, the virtual "midip" entry must be offered.
+        app.route_editor_ports = Vec::new();
+        let choices = app.route_port_choices();
+        assert!(
+            choices
+                .iter()
+                .any(|p| p.stable_key == VIRTUAL_PORT_KEY && p.name == VIRTUAL_PORT_NAME),
+            "route port choices must include the virtual 'midip' entry; got: {choices:?}"
+        );
+    }
+
+    /// Cycling a lane's port lands on the virtual "midip" port and emits a SetRoute whose
+    /// route key == VIRTUAL_PORT_KEY (so the engine maps it to the virtual destination).
+    #[test]
+    fn route_cycle_port_can_select_virtual_midip() {
+        use crate::pattern::model::VIRTUAL_PORT_KEY;
+        let mut app = new_app();
+        app.apply(Action::OpenRouteEditor);
+        app.route_editor_ports = Vec::new(); // no hardware → choices are [midip]
+                                             // Cycle forward until a lane route targets the virtual key (bounded loop).
+        let mut found = false;
+        for _ in 0..app.route_port_choices().len() + 2 {
+            let cmds = app.apply(Action::RouteCyclePort(1));
+            if app
+                .set
+                .lanes
+                .get(app.route_editor_lane)
+                .and_then(|l| l.route.as_ref())
+                .map(|r| r.port.stable_key == VIRTUAL_PORT_KEY)
+                .unwrap_or(false)
+            {
+                assert!(
+                    cmds.iter().any(|c| matches!(
+                        c,
+                        UiCommand::SetRoute {
+                            route: Some(r),
+                            ..
+                        } if r.port.stable_key == VIRTUAL_PORT_KEY
+                    )),
+                    "selecting midip must emit SetRoute with the virtual key; got: {cmds:?}"
+                );
+                found = true;
+                break;
+            }
+        }
+        assert!(
+            found,
+            "cycling must be able to select the virtual 'midip' port"
         );
     }
 

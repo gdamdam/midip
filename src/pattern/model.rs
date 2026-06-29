@@ -60,12 +60,36 @@ pub enum LaneKind {
     Melodic,
 }
 
+/// Reserved `stable_key` denoting midip's own engine-managed virtual MIDI source.
+/// A lane whose route targets this key delivers to the virtual "midip" port instead of a
+/// watcher-connected hardware port. The leading `@` cannot collide with a real device name
+/// (CoreMIDI/midir port names never begin with it in practice) so the dedup-by-key logic
+/// treats it as a distinct, always-present destination.
+pub const VIRTUAL_PORT_KEY: &str = "@midip";
+/// Human-readable display name of the virtual port (what other apps see as the MIDI source).
+pub const VIRTUAL_PORT_NAME: &str = "midip";
+
 /// A stable reference to a MIDI output port, by key and human-readable name.
 /// Matching at runtime uses `stable_key` first, falls back to `name`.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PortRef {
     pub stable_key: String,
     pub name: String,
+}
+
+impl PortRef {
+    /// The synthetic `PortRef` for midip's own virtual "midip" source.
+    pub fn virtual_midip() -> PortRef {
+        PortRef {
+            stable_key: VIRTUAL_PORT_KEY.to_string(),
+            name: VIRTUAL_PORT_NAME.to_string(),
+        }
+    }
+
+    /// True when this `PortRef` denotes the engine-managed virtual "midip" port.
+    pub fn is_virtual(&self) -> bool {
+        self.stable_key == VIRTUAL_PORT_KEY
+    }
 }
 
 /// Per-lane MIDI routing: which port, channel, and whether to send MIDI Clock.
@@ -432,6 +456,23 @@ mod tests {
         });
         assert_eq!(lane2.route_channel(), 5);
         assert_ne!(lane2.route_channel(), profiles[0].channel);
+    }
+
+    #[test]
+    fn virtual_midip_port_ref_uses_reserved_key_and_name() {
+        let p = PortRef::virtual_midip();
+        assert_eq!(p.stable_key, VIRTUAL_PORT_KEY);
+        assert_eq!(p.name, VIRTUAL_PORT_NAME);
+        assert!(
+            p.is_virtual(),
+            "virtual_midip() must be recognized as virtual"
+        );
+        // A real hardware port ref is NOT virtual.
+        let hw = PortRef {
+            stable_key: "Roland T-8".into(),
+            name: "Roland T-8".into(),
+        };
+        assert!(!hw.is_virtual());
     }
 
     #[test]
