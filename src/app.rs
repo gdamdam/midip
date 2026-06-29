@@ -767,6 +767,14 @@ impl App {
     /// and counted in a warning status. Recalling is a live performance action: it neither
     /// snapshots for undo nor marks the set dirty (matching the M3 pattern-launch precedent).
     pub fn recall_scene(&mut self, index: usize) -> Vec<UiCommand> {
+        let quant = self.launch_quant;
+        self.recall_scene_quant(index, quant)
+    }
+
+    /// Like `recall_scene` but forces a specific `quant` instead of using `self.launch_quant`.
+    /// The chain recall path calls this with `Quant::NextBar` so scene swaps always land on
+    /// a bar boundary — which is where `chain_decision` anchors its dwell measurements.
+    fn recall_scene_quant(&mut self, index: usize, quant: Quant) -> Vec<UiCommand> {
         let Some(scene) = self.set.scenes.get(index).cloned() else {
             self.set_status("No such scene");
             return vec![];
@@ -780,10 +788,9 @@ impl App {
         let mut cmds = Vec::new();
 
         if self.engine_playing {
-            // Build ONE QueueScene carrying every resolvable lane at the SAME launch_quant,
+            // Build ONE QueueScene carrying every resolvable lane at the SAME quant,
             // so the engine queues them all onto a single boundary (`apply_due_launches`
             // fires every lane whose `is_boundary(step, quant)` matches the same step).
-            let quant = self.launch_quant;
             let mut launch_lanes: Vec<(usize, Pattern, LaunchState)> = Vec::new();
             for (lane, res) in resolved.iter().enumerate() {
                 if lane >= n {
@@ -893,7 +900,9 @@ impl App {
             return vec![];
         };
         match self.scene_index_by_id(&scene_id) {
-            Some(scene_idx) => self.recall_scene(scene_idx),
+            // Chain dwell is bar-anchored, so always land on a bar boundary regardless of
+            // the user's current `launch_quant` setting (which may be NextBeat).
+            Some(scene_idx) => self.recall_scene_quant(scene_idx, Quant::NextBar),
             None => {
                 self.set_status(format!("[MISSING] chain entry {} scene", entry_idx + 1));
                 vec![]
@@ -9998,4 +10007,74 @@ mod tests {
     // `chain_recall_transitions_leave_no_hung_notes` — it drives the exact command
     // sequence the App emits (QueueScene recalls at bar boundaries + terminal Stop)
     // against a note-bearing set and asserts net NoteOn == NoteOff (no hung notes).
+
+    /// When the user has set `launch_quant = NextBeat`, chain arm/advance/jump must still
+    /// use `Quant::NextBar` — the chain's dwell measurements (`chain_decision`) are anchored
+    /// to bar boundaries via `next_bar_boundary`, so a beat-quantized recall would desync
+    /// the scene swap from the grid the dwell measures against.
+    #[test]
+    fn chain_recall_forces_next_bar_regardless_of_launch_quant() {
+        // Arrange: two-entry chain, launch_quant overridden to NextBeat.
+        let (mut app, c) = app_with_chain(&[(0, 1, 1), (1, 1, 1)], false);
+        app.launch_quant = Quant::NextBeat;
+
+        // PlayChain arms entry 0.
+        let cmds = app.apply(Action::PlayChain(c));
+        let queue = cmds
+            .iter()
+            .find(|cmd| matches!(cmd, UiCommand::QueueScene { .. }))
+            .expect("PlayChain must emit a QueueScene");
+        if let UiCommand::QueueScene { quant, .. } = queue {
+            assert_eq!(
+                *quant,
+                Quant::NextBar,
+                "PlayChain: chain recall must use NextBar even when launch_quant=NextBeat"
+            );
+        }
+
+        // Auto-advance to entry 1 at the bar boundary.
+        let anchor0 = app.chain_playback.as_ref().unwrap().entry_start_step;
+        let advance_step = anchor0 + 16;
+        let cmds2 = playhead_event(&mut app, advance_step as usize);
+        let queue2 = cmds2
+            .iter()
+            .find(|cmd| matches!(cmd, UiCommand::QueueScene { .. }))
+            .expect("auto-advance must emit a QueueScene");
+        if let UiCommand::QueueScene { quant, .. } = queue2 {
+            assert_eq!(
+                *quant,
+                Quant::NextBar,
+                "auto-advance: chain recall must use NextBar even when launch_quant=NextBeat"
+            );
+        }
+
+        // JumpChainEntry also forces NextBar.
+        app.launch_quant = Quant::NextBeat; // re-assert (tick_chain does not change it)
+        let cmds3 = app.apply(Action::JumpChainEntry(0));
+        let queue3 = cmds3
+            .iter()
+            .find(|cmd| matches!(cmd, UiCommand::QueueScene { .. }))
+            .expect("JumpChainEntry must emit a QueueScene");
+        if let UiCommand::QueueScene { quant, .. } = queue3 {
+            assert_eq!(
+                *quant,
+                Quant::NextBar,
+                "JumpChainEntry: chain recall must use NextBar even when launch_quant=NextBeat"
+            );
+        }
+
+        // Manual RecallScene still honours launch_quant (NextBeat untouched).
+        let cmds4 = app.apply(Action::RecallScene(0));
+        let queue4 = cmds4
+            .iter()
+            .find(|cmd| matches!(cmd, UiCommand::QueueScene { .. }))
+            .expect("RecallScene must emit a QueueScene");
+        if let UiCommand::QueueScene { quant, .. } = queue4 {
+            assert_eq!(
+                *quant,
+                Quant::NextBeat,
+                "manual RecallScene must still honour launch_quant (NextBeat)"
+            );
+        }
+    }
 }
