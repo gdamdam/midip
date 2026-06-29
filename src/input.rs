@@ -4,7 +4,8 @@
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::app::{Action, Mode};
+use crate::app::{Action, GenField, Mode};
+use crate::pattern::generate::GenMode;
 use crate::pattern::model::LaneKind;
 
 /// Map a raw key event to an [`Action`], given the current app mode and focused lane kind.
@@ -224,10 +225,41 @@ pub fn key_to_action(key: KeyEvent, mode: Mode, kind: LaneKind) -> Action {
             };
         }
         Mode::Edit => {}
-        // Generative panel keybindings are wired in Task 6; Esc cancels for safety.
+        // Generative panel keybindings.
         Mode::Generative => {
             return match key.code {
                 KeyCode::Esc => Action::GenCancel,
+                KeyCode::Enter => Action::GenCommit,
+                KeyCode::Tab => Action::GenSetMode(GenMode::Vary),
+                KeyCode::BackTab => Action::GenSetMode(GenMode::Generate),
+                KeyCode::Char('z') => Action::GenReroll,
+                // density −/+
+                KeyCode::Char('d') => Action::GenAdjust {
+                    field: GenField::Density,
+                    delta: -5,
+                },
+                KeyCode::Char('D') => Action::GenAdjust {
+                    field: GenField::Density,
+                    delta: 5,
+                },
+                // range −/+
+                KeyCode::Char('r') => Action::GenAdjust {
+                    field: GenField::Range,
+                    delta: -1,
+                },
+                KeyCode::Char('R') => Action::GenAdjust {
+                    field: GenField::Range,
+                    delta: 1,
+                },
+                // mutate −/+
+                KeyCode::Char('m') => Action::GenAdjust {
+                    field: GenField::Mutate,
+                    delta: -5,
+                },
+                KeyCode::Char('M') => Action::GenAdjust {
+                    field: GenField::Mutate,
+                    delta: 5,
+                },
                 _ => Action::None,
             };
         }
@@ -308,6 +340,9 @@ pub fn key_to_action(key: KeyEvent, mode: Mode, kind: LaneKind) -> Action {
                     'G' => return Action::OpenScenes,
                     // 'K' (Shift+k) opens the chain manager. Lowercase 'k' is ToggleLink.
                     'K' => return Action::OpenChains,
+                    // 'D' (Shift+d) was unbound in Edit; chosen for "Draft" — opens the
+                    // generative tool panel to generate or vary the focused lane pattern.
+                    'D' => return Action::OpenGenerative,
                     // 'i' was unbound; chosen for "in-sync" — re-sync the focused lane's
                     // phase at the next bar/beat without changing its pattern.
                     'i' => return Action::RestartLane,
@@ -1937,6 +1972,124 @@ mod tests {
             key_to_action(k(KeyCode::Char('j')), Mode::Chains, LaneKind::Drums),
             Action::JumpSelectedChainEntry,
             "'j' in Chains must dispatch JumpSelectedChainEntry"
+        );
+    }
+
+    // ── Mode::Generative key routing (Task 6) ────────────────────────────────
+
+    #[test]
+    fn shift_d_in_edit_opens_generative() {
+        for kind in [LaneKind::Drums, LaneKind::Melodic] {
+            assert_eq!(
+                key_to_action(k(KeyCode::Char('D')), Mode::Edit, kind),
+                Action::OpenGenerative,
+                "'D' in Edit/{kind:?} must dispatch OpenGenerative"
+            );
+        }
+    }
+
+    #[test]
+    fn generative_esc_cancels() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Esc), Mode::Generative, LaneKind::Drums),
+            Action::GenCancel,
+            "Esc in Generative must dispatch GenCancel"
+        );
+    }
+
+    #[test]
+    fn generative_enter_commits() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Enter), Mode::Generative, LaneKind::Drums),
+            Action::GenCommit,
+            "Enter in Generative must dispatch GenCommit"
+        );
+    }
+
+    #[test]
+    fn generative_tab_sets_vary_mode() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Tab), Mode::Generative, LaneKind::Drums),
+            Action::GenSetMode(GenMode::Vary),
+            "Tab in Generative must dispatch GenSetMode(Vary)"
+        );
+    }
+
+    #[test]
+    fn generative_backtab_sets_generate_mode() {
+        assert_eq!(
+            key_to_action(k(KeyCode::BackTab), Mode::Generative, LaneKind::Drums),
+            Action::GenSetMode(GenMode::Generate),
+            "BackTab in Generative must dispatch GenSetMode(Generate)"
+        );
+    }
+
+    #[test]
+    fn generative_z_rerolls() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('z')), Mode::Generative, LaneKind::Drums),
+            Action::GenReroll,
+            "'z' in Generative must dispatch GenReroll"
+        );
+    }
+
+    #[test]
+    fn generative_density_keys() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('d')), Mode::Generative, LaneKind::Drums),
+            Action::GenAdjust {
+                field: GenField::Density,
+                delta: -5,
+            },
+            "'d' in Generative must decrease density"
+        );
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('D')), Mode::Generative, LaneKind::Drums),
+            Action::GenAdjust {
+                field: GenField::Density,
+                delta: 5,
+            },
+            "'D' in Generative must increase density"
+        );
+    }
+
+    #[test]
+    fn generative_range_keys() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('r')), Mode::Generative, LaneKind::Drums),
+            Action::GenAdjust {
+                field: GenField::Range,
+                delta: -1,
+            },
+            "'r' in Generative must decrease range"
+        );
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('R')), Mode::Generative, LaneKind::Drums),
+            Action::GenAdjust {
+                field: GenField::Range,
+                delta: 1,
+            },
+            "'R' in Generative must increase range"
+        );
+    }
+
+    #[test]
+    fn generative_mutate_keys() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('m')), Mode::Generative, LaneKind::Drums),
+            Action::GenAdjust {
+                field: GenField::Mutate,
+                delta: -5,
+            },
+            "'m' in Generative must decrease mutate"
+        );
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('M')), Mode::Generative, LaneKind::Drums),
+            Action::GenAdjust {
+                field: GenField::Mutate,
+                delta: 5,
+            },
+            "'M' in Generative must increase mutate"
         );
     }
 }

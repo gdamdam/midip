@@ -2,6 +2,7 @@ pub mod chain_view;
 pub mod crate_view;
 pub mod editor_drums;
 pub mod editor_melodic;
+pub mod generative_view;
 pub mod help;
 pub mod lanes;
 pub mod library;
@@ -48,8 +49,9 @@ fn context_footer(app: &App) -> Line<'static> {
         }
         Mode::Chains => "[↑↓]chain [enter]play [c]create [r]rename [d]dup [x]del [m]loop [a]add [X]rm [[/]]bars [{/}]rpts [K/esc]close",
         Mode::NoteInput => "[a-k]white [w/e/t/y/u]black [z]oct- [x]oct+ [bksp]del [esc]exit",
-        // Generative panel keybindings rendered in Task 6.
-        Mode::Generative => "[esc]cancel  [enter]commit  (keybindings: Task 6)",
+        Mode::Generative => {
+            "[tab]mode  [d/D]density  [r/R]range  [m/M]mutate  [z]reroll  [enter]commit  [esc]cancel"
+        }
     };
     let label_style = Style::default()
         .fg(Color::Black)
@@ -138,8 +140,10 @@ pub fn render(f: &mut Frame, app: &App) {
         Mode::Scenes => scene_view::render_scene_view(f, centered(area, 70, 70), app),
         Mode::Chains => chain_view::render_chain_view(f, centered(area, 70, 80), app),
         Mode::NoteInput => mgmt::render_note_input(f, centered(area, 60, 20), app),
-        // Generative panel rendered in Task 6; for now fall through to base editor.
-        Mode::Generative | Mode::Edit | Mode::TempoEntry => {}
+        Mode::Generative => {
+            generative_view::render_generative_panel(f, centered(area, 70, 70), app)
+        }
+        Mode::Edit | Mode::TempoEntry => {}
     }
 }
 

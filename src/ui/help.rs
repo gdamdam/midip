@@ -163,6 +163,13 @@ fn right_column_lines() -> Vec<Line<'static>> {
         header("Favorites  (Library mode)"),
         row("[f]  toggle favorite on selected pattern"),
         row("[F]  toggle favorites-only filter"),
+        blank(),
+        // ── Generative  [D] ───────────────────────────────────────────
+        header("Generative  [D] to open"),
+        row("[tab]  toggle mode: Generate / Vary"),
+        row("[d / D]  density −/+   [r / R]  range −/+"),
+        row("[m / M]  mutate −/+    [z]  reroll seed"),
+        row("[enter]  commit (undoable)   [esc]  cancel"),
     ]
 }
 
