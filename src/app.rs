@@ -61,6 +61,12 @@ pub enum Mode {
     /// Live crate browser: browse crate entries and launch patterns without
     /// committing to the active Set until Enter is pressed.
     CrateView,
+    /// QWERTY piano note-input sub-mode (melodic lanes only).
+    ///
+    /// Entered from melodic Edit via `'I'` (Shift+i — was unbound before M5a-T5).
+    /// Snapshot is taken ONCE on entry so the whole input session is a single undo unit.
+    /// `Esc` returns to Edit without an additional snapshot.
+    NoteInput,
 }
 
 /// Which field is focused in the route editor (cycles Left/Right).
@@ -283,6 +289,19 @@ pub enum Action {
     /// Fold every note in the focused melodic lane to the lane's current scale.
     /// Snapshots for undo. Chromatic / drum lanes are silent no-ops.
     ConformToScale,
+    // ── M5a Task 5: QWERTY note-input sub-mode ───────────────────────────────
+    /// Enter `Mode::NoteInput` from melodic Edit (key `'I'`, Shift+i — was unbound).
+    /// On a drum lane this is a no-op with a status message.
+    OpenNoteInput,
+    /// Exit `Mode::NoteInput` back to Edit.
+    CloseNoteInput,
+    /// Place a note with the given semitone offset (relative to root, pre-folded by input.rs).
+    /// The raw offset from the QWERTY map; `apply` folds it to the lane's scale and places it.
+    NoteInputPlace(i8),
+    /// Shift the note-input octave by ±1 (clamped to −3..=3).
+    NoteInputOctave(i8),
+    /// Clear the cursor step and step back one (Backspace/Delete in NoteInput).
+    NoteInputBackspace,
     None,
 }
 
@@ -408,6 +427,10 @@ pub struct App {
     /// but `snapshot()` is deferred to `CommitTransform` — so it is non-destructive
     /// until the performer chooses to keep it.
     pub temp_transform: Option<TempTransform>,
+    // ── M5a Task 5: QWERTY note-input sub-mode ───────────────────────────────
+    /// Octave offset applied on top of the QWERTY semitone map while in `Mode::NoteInput`.
+    /// Range −3..=3 (clamped). Reset to 0 each time `Mode::NoteInput` is entered.
+    pub note_input_octave: i8,
 }
 
 /// Default melodic velocity multiplier when placing a note (1.0 -> MIDI 100).
@@ -475,6 +498,7 @@ impl App {
             crate_entry_sel: 0,
             crate_issues: Vec::new(),
             temp_transform: None,
+            note_input_octave: 0,
         }
     }
 
@@ -2023,6 +2047,72 @@ impl App {
                     self.set_status(format!("{} issue(s) found", n));
                 }
             }
+            // ── M5a Task 5: QWERTY note-input sub-mode ───────────────────────────────
+            Action::OpenNoteInput => {
+                if self.focused_kind() == LaneKind::Drums {
+                    self.set_status("Note input is melodic-only");
+                } else {
+                    // Snapshot ONCE on entry — the whole session is one undo unit.
+                    self.snapshot();
+                    self.note_input_octave = 0;
+                    self.mode = Mode::NoteInput;
+                    self.set_status(
+                        "NOTE INPUT  [a-k]notes [w/e/t/y/u]black [z/x]octave [bksp]del [esc]exit",
+                    );
+                }
+            }
+            Action::CloseNoteInput => {
+                if self.mode == Mode::NoteInput {
+                    self.mode = Mode::Edit;
+                }
+            }
+            Action::NoteInputPlace(offset) => {
+                if self.mode == Mode::NoteInput {
+                    let semi_raw = offset as i32 + self.note_input_octave as i32 * 12;
+                    let lane_scale = self.set.lanes[self.focus].scale;
+                    let semi_folded = fold_to_scale(semi_raw, lane_scale).clamp(-128, 127) as i8;
+                    let col = self.cur_col;
+                    let lane = &mut self.set.lanes[self.focus];
+                    if let PatternData::Melodic(steps) = &mut lane.pattern.data {
+                        if let Some(slot) = steps.get_mut(col) {
+                            let gate = lane.profile.gate_fraction;
+                            *slot = Some(MelodicNote {
+                                semi: semi_folded,
+                                vel: MEL_DEFAULT_VEL,
+                                slide: false,
+                                len: gate,
+                                prob: 1.0,
+                                ratchet: 1,
+                            });
+                        }
+                    }
+                    // Advance cursor one step, wrapping within the pattern length.
+                    let pat_len = self.set.lanes[self.focus].pattern.length;
+                    self.cur_col = (self.cur_col + 1) % pat_len.max(1);
+                    self.step_scroll = (self.cur_col / VISIBLE_STEPS) * VISIBLE_STEPS;
+                    self.dirty = true;
+                    cmds.push(self.load_focused());
+                }
+            }
+            Action::NoteInputOctave(d) => {
+                if self.mode == Mode::NoteInput {
+                    self.note_input_octave = (self.note_input_octave + d).clamp(-3, 3);
+                    self.set_status(format!("Octave offset: {:+}", self.note_input_octave));
+                }
+            }
+            Action::NoteInputBackspace => {
+                if self.mode == Mode::NoteInput {
+                    // Clear the current step.
+                    self.clear_step();
+                    // Step back one, wrapping.
+                    let pat_len = self.set.lanes[self.focus].pattern.length;
+                    let col = self.cur_col as isize - 1;
+                    self.cur_col = col.rem_euclid(pat_len.max(1) as isize) as usize;
+                    self.step_scroll = (self.cur_col / VISIBLE_STEPS) * VISIBLE_STEPS;
+                    self.dirty = true;
+                    cmds.push(self.load_focused());
+                }
+            }
             Action::None => {}
         }
         cmds
@@ -2176,6 +2266,7 @@ impl App {
             Mode::NameEntry(_) => "NAME",
             Mode::Confirm(_) => "CONFIRM",
             Mode::CrateView => "CRATE VIEW",
+            Mode::NoteInput => "NOTE INPUT",
         }
     }
 
@@ -7674,5 +7765,261 @@ mod tests {
             "status must say 'already in scale', got: {:?}",
             app.status
         );
+    }
+
+    // ── M5a Task 5: QWERTY note-input sub-mode ────────────────────────────────
+
+    /// Enter NoteInput from melodic Edit, then exit with CloseNoteInput.
+    #[test]
+    fn open_note_input_enters_mode_on_melodic_lane() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(1)); // melodic
+
+        app.apply(Action::OpenNoteInput);
+
+        assert_eq!(
+            app.mode,
+            Mode::NoteInput,
+            "OpenNoteInput on melodic lane must enter Mode::NoteInput"
+        );
+        assert_eq!(
+            app.note_input_octave, 0,
+            "octave offset must reset to 0 on entry"
+        );
+    }
+
+    /// OpenNoteInput on a drum lane must be a no-op with a status message.
+    #[test]
+    fn open_note_input_noop_on_drum_lane() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(0)); // drums
+
+        app.apply(Action::OpenNoteInput);
+
+        assert_eq!(
+            app.mode,
+            Mode::Edit,
+            "OpenNoteInput on drum lane must not change mode"
+        );
+        assert!(
+            app.status.contains("melodic"),
+            "status must mention melodic, got: {:?}",
+            app.status
+        );
+    }
+
+    /// CloseNoteInput returns to Edit.
+    #[test]
+    fn close_note_input_returns_to_edit() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(1));
+        app.apply(Action::OpenNoteInput);
+        assert_eq!(app.mode, Mode::NoteInput);
+
+        app.apply(Action::CloseNoteInput);
+
+        assert_eq!(app.mode, Mode::Edit, "CloseNoteInput must return to Edit");
+    }
+
+    /// NoteInputPlace(0) places a note with semi=0 at the cursor step and advances the cursor.
+    #[test]
+    fn note_input_place_writes_note_at_cursor_and_advances() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(1));
+        app.cur_col = 0;
+        app.apply(Action::OpenNoteInput);
+        app.undo.clear(); // clear the entry snapshot so we can count separately
+
+        app.apply(Action::NoteInputPlace(0)); // C = offset 0
+
+        if let PatternData::Melodic(steps) = &app.set.lanes[app.focus].pattern.data {
+            let note = steps[0].as_ref().expect("note must be placed at col 0");
+            assert_eq!(
+                note.semi, 0,
+                "semi must be 0 (C) for offset 0, chromatic lane"
+            );
+            assert_eq!(note.vel, 1.0, "vel must match MEL_DEFAULT_VEL");
+        } else {
+            panic!("expected melodic");
+        }
+        assert_eq!(
+            app.cur_col, 1,
+            "cursor must advance one step after placement"
+        );
+        assert!(app.dirty, "dirty must be set after placement");
+    }
+
+    /// NoteInputPlace with a black-key offset (1 = C#).
+    #[test]
+    fn note_input_place_black_key_offset() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(1));
+        app.cur_col = 2;
+        app.apply(Action::OpenNoteInput);
+
+        app.apply(Action::NoteInputPlace(1)); // C# = offset 1
+
+        if let PatternData::Melodic(steps) = &app.set.lanes[app.focus].pattern.data {
+            let note = steps[2].as_ref().expect("note must be placed at col 2");
+            assert_eq!(
+                note.semi, 1,
+                "semi must be 1 (C#) for offset 1, chromatic lane"
+            );
+        } else {
+            panic!("expected melodic");
+        }
+        assert_eq!(app.cur_col, 3, "cursor must advance to col 3");
+    }
+
+    /// Placement folds to the lane's scale when scale is non-Chromatic.
+    #[test]
+    fn note_input_place_folds_to_scale() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(1));
+        // Set Major scale — semi=1 (C#) is not in Major, should fold to 0 or 2.
+        app.set.lanes[app.focus].scale = Scale::Major;
+        app.cur_col = 0;
+        app.apply(Action::OpenNoteInput);
+
+        app.apply(Action::NoteInputPlace(1)); // offset 1 = C#, out of Major
+
+        if let PatternData::Melodic(steps) = &app.set.lanes[app.focus].pattern.data {
+            let note = steps[0].as_ref().expect("note placed");
+            let major_degrees: &[i8] = &[0, 2, 4, 5, 7, 9, 11];
+            let semi_mod = ((note.semi % 12) + 12) as u8 % 12;
+            assert!(
+                major_degrees.contains(&(semi_mod as i8)),
+                "folded semi {} must be in Major scale degrees {:?}",
+                note.semi,
+                major_degrees
+            );
+        } else {
+            panic!("expected melodic");
+        }
+    }
+
+    /// Octave shift adjusts note_input_octave and is clamped to -3..=3.
+    #[test]
+    fn note_input_octave_shift_clamps() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(1));
+        app.apply(Action::OpenNoteInput);
+
+        app.apply(Action::NoteInputOctave(1));
+        assert_eq!(app.note_input_octave, 1);
+
+        app.apply(Action::NoteInputOctave(-1));
+        assert_eq!(app.note_input_octave, 0);
+
+        // Clamp at ceiling.
+        for _ in 0..10 {
+            app.apply(Action::NoteInputOctave(1));
+        }
+        assert_eq!(app.note_input_octave, 3, "octave offset must clamp at +3");
+
+        // Clamp at floor.
+        for _ in 0..10 {
+            app.apply(Action::NoteInputOctave(-1));
+        }
+        assert_eq!(app.note_input_octave, -3, "octave offset must clamp at -3");
+    }
+
+    /// Octave offset shifts the placed note's semi by 12 per octave.
+    #[test]
+    fn note_input_octave_shifts_placed_semi() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(1));
+        app.apply(Action::OpenNoteInput);
+        app.apply(Action::NoteInputOctave(1)); // oct +1
+        app.cur_col = 0;
+
+        app.apply(Action::NoteInputPlace(0)); // C in oct+1 = semi 12
+
+        if let PatternData::Melodic(steps) = &app.set.lanes[app.focus].pattern.data {
+            let note = steps[0].as_ref().expect("note placed");
+            assert_eq!(note.semi, 12, "oct+1 offset 0 → semi 12");
+        } else {
+            panic!("expected melodic");
+        }
+    }
+
+    /// Backspace clears the cursor step and steps back.
+    #[test]
+    fn note_input_backspace_clears_and_steps_back() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(1));
+        app.cur_col = 2;
+        app.apply(Action::OpenNoteInput);
+        // Place a note at col 2, cursor now at 3.
+        app.apply(Action::NoteInputPlace(0));
+        assert_eq!(app.cur_col, 3);
+
+        app.apply(Action::NoteInputBackspace);
+
+        // Cursor stepped back to 2, and col 2 is now cleared.
+        // Note: backspace clears cur_col FIRST (which is 3 after advance), then steps back to 2.
+        // col 3 is cleared, col 2 still has the note from placement.
+        assert_eq!(app.cur_col, 2, "cursor must step back to 2");
+        if let PatternData::Melodic(steps) = &app.set.lanes[app.focus].pattern.data {
+            assert!(
+                steps[3].is_none(),
+                "col 3 must be cleared by backspace (was empty but backspace sets it None)"
+            );
+        } else {
+            panic!("expected melodic");
+        }
+        assert!(app.dirty, "dirty must remain set after backspace");
+    }
+
+    /// Entering NoteInput takes ONE snapshot; undoing after a full session restores pre-session state.
+    #[test]
+    fn note_input_session_is_single_undo_unit() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(1));
+        app.cur_col = 0;
+        app.undo.clear();
+        let undo_depth_before = app.undo.len();
+
+        // Enter mode (takes snapshot).
+        app.apply(Action::OpenNoteInput);
+        assert_eq!(
+            app.undo.len(),
+            undo_depth_before + 1,
+            "entering NoteInput must add exactly one snapshot"
+        );
+
+        // Place several notes — must NOT add more snapshots.
+        app.apply(Action::NoteInputPlace(0));
+        app.apply(Action::NoteInputPlace(2));
+        app.apply(Action::NoteInputPlace(4));
+        assert_eq!(
+            app.undo.len(),
+            undo_depth_before + 1,
+            "note placements must not add more snapshots"
+        );
+
+        // Exit.
+        app.apply(Action::CloseNoteInput);
+
+        // One Undo restores the pre-session state (all three placements gone).
+        app.apply(Action::Undo);
+        if let PatternData::Melodic(steps) = &app.set.lanes[app.focus].pattern.data {
+            let placed: Vec<_> = steps.iter().take(3).filter(|s| s.is_some()).collect();
+            assert!(
+                placed.is_empty(),
+                "Undo after NoteInput session must restore pre-session state (no placed notes)"
+            );
+        } else {
+            panic!("expected melodic");
+        }
+    }
+
+    /// context_label returns "NOTE INPUT" in NoteInput mode.
+    #[test]
+    fn context_label_note_input() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(1));
+        app.apply(Action::OpenNoteInput);
+        assert_eq!(app.context_label(), "NOTE INPUT");
     }
 }
