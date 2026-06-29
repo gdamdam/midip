@@ -1062,6 +1062,8 @@ mod sequencer_tests {
             octave: 0,
             route: None,
             muted_voices: Vec::new(),
+            scale: crate::music::scale::Scale::Chromatic,
+            root: None,
         }
     }
 
@@ -1082,6 +1084,8 @@ mod sequencer_tests {
             octave: 0,
             route: None,
             muted_voices: Vec::new(),
+            scale: crate::music::scale::Scale::Chromatic,
+            root: None,
         }
     }
 
@@ -1398,6 +1402,8 @@ mod sequencer_tests {
             octave: 0,
             route: None,
             muted_voices: Vec::new(),
+            scale: crate::music::scale::Scale::Chromatic,
+            root: None,
         }
     }
 
@@ -1627,6 +1633,8 @@ mod sequencer_tests {
             octave: 0,
             route: None,
             muted_voices: Vec::new(),
+            scale: crate::music::scale::Scale::Chromatic,
+            root: None,
         }
     }
 
@@ -1692,6 +1700,8 @@ mod sequencer_tests {
             octave: 0,
             route: None,
             muted_voices: Vec::new(),
+            scale: crate::music::scale::Scale::Chromatic,
+            root: None,
         };
         let run_once = |seed: u64| -> Vec<u64> {
             let mut seq = Sequencer::new(set_with(vec![lane.clone()]));
@@ -1883,6 +1893,8 @@ mod sequencer_tests {
             octave: 0,
             route: None,
             muted_voices: Vec::new(),
+            scale: crate::music::scale::Scale::Chromatic,
+            root: None,
         }
     }
 
@@ -2072,6 +2084,8 @@ mod sequencer_tests {
             octave: 0,
             route: None,
             muted_voices: Vec::new(),
+            scale: crate::music::scale::Scale::Chromatic,
+            root: None,
         }
     }
 
@@ -2218,6 +2232,8 @@ mod sequencer_tests {
             octave: 0,
             route: None,
             muted_voices: Vec::new(),
+            scale: crate::music::scale::Scale::Chromatic,
+            root: None,
         }
     }
 
@@ -2570,6 +2586,8 @@ mod sequencer_tests {
             octave: 0,
             route: None,
             muted_voices: Vec::new(),
+            scale: crate::music::scale::Scale::Chromatic,
+            root: None,
         }
     }
 
@@ -2923,6 +2941,8 @@ mod sequencer_tests {
             octave: 0,
             route: None,
             muted_voices: Vec::new(),
+            scale: crate::music::scale::Scale::Chromatic,
+            root: None,
         }
     }
 
