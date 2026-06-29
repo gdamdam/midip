@@ -3442,4 +3442,204 @@ mod sequencer_tests {
             "lane 0 chord notes must be cleared from the registry"
         );
     }
+
+    // --- M5b hardening: mono-slide → chord-onset release -------------------
+
+    /// When a slide-held mono note is followed by a chord step, the held note
+    /// must receive a NoteOff exactly at the chord's onset (it is NOT carried
+    /// into the chord), and all 3 chord NoteOns must fire at that same time.
+    #[test]
+    fn mono_slide_note_released_at_chord_onset() {
+        let dur = step_dur_micros(120.0);
+        // S1: channel 0, root_note 45.
+        // step 0: single note, semi 0, slide=true  → held into next step.
+        // step 1: 3-note chord, semis 0/4/7        → onset at `dur`.
+        let slid = MelodicNote {
+            semi: 0,
+            vel: 1.0,
+            slide: true,
+            len: 1.0,
+            prob: 1.0,
+            ratchet: 1,
+        };
+        let chord = vec![plain_note(0), plain_note(4), plain_note(7)];
+        let lane = poly_lane_from_steps(vec![vec![slid], chord, Vec::new(), Vec::new()]);
+        let root = lane.profile.root_note; // 45
+        let ch = lane.profile.channel; // 0
+        let slid_pitch = root; // semi 0 → note 45
+        let chord_pitches: Vec<u8> = [0i8, 4, 7]
+            .iter()
+            .map(|&s| (root as i8 + s) as u8)
+            .collect();
+
+        let mut seq = Sequencer::new(set_with(vec![lane]));
+        let mut sink = RecordingSink::new();
+        seq.play(0);
+        // Run through step 0 and step 1 (stop before step 2 = 2*dur).
+        run(&mut seq, &mut sink, 2 * dur - 1, 1_000);
+
+        // The slid note's NoteOff must appear at exactly the chord's onset (dur).
+        let slid_off_times: Vec<u64> = sink
+            .events
+            .iter()
+            .filter(|(_, m)| {
+                *m == MidiMessage::NoteOff {
+                    channel: ch,
+                    note: slid_pitch,
+                }
+            })
+            .map(|(t, _)| *t)
+            .collect();
+        assert!(
+            slid_off_times.contains(&dur),
+            "slid mono note must be released at chord onset (t={}); NoteOffs at {:?}",
+            dur,
+            slid_off_times
+        );
+
+        // All 3 chord NoteOns must fire at the chord's onset (dur).
+        for &note in &chord_pitches {
+            assert!(
+                sink.events.iter().any(|(t, m)| *t == dur
+                    && *m
+                        == MidiMessage::NoteOn {
+                            channel: ch,
+                            note,
+                            vel: 100
+                        }),
+                "chord note {} must have NoteOn at t={}; events={:?}",
+                note,
+                dur,
+                sink.events
+            );
+        }
+    }
+
+    // --- M5b hardening: chord + ratchet ------------------------------------
+
+    /// A chord step where one note carries ratchet=2 must retrigger that note
+    /// twice within the step while the non-ratcheted companion fires once.
+    /// Counts: ratcheted note → 2 NoteOns + 2 NoteOffs; plain note → 1+1.
+    #[test]
+    fn chord_step_honors_per_note_ratchet() {
+        let dur = step_dur_micros(120.0);
+        // S1: channel 0, root_note 45.
+        // note A: semi 0, ratchet 2, len 0.5  → 2 retriggers within the step.
+        //   len=0.5 keeps ratchet_gate = 0.5 * sub well inside the step window
+        //   so both NoteOffs flush before dur (avoids the boundary at dur exactly).
+        // note B: semi 4, ratchet 1  → 1 hit (baseline).
+        let note_a = MelodicNote {
+            semi: 0,
+            vel: 1.0,
+            slide: false,
+            len: 0.5,
+            prob: 1.0,
+            ratchet: 2,
+        };
+        let note_b = MelodicNote {
+            semi: 4,
+            vel: 1.0,
+            slide: false,
+            len: 1.0,
+            prob: 1.0,
+            ratchet: 1,
+        };
+        let lane = poly_lane_from_steps(vec![
+            vec![note_a, note_b],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        ]);
+        let root = lane.profile.root_note; // 45
+        let ch = lane.profile.channel; // 0
+        let pitch_a = root; // semi 0 → 45
+        let pitch_b = (root as i8 + 4) as u8; // semi 4 → 49
+
+        let mut seq = Sequencer::new(set_with(vec![lane]));
+        let mut sink = RecordingSink::new();
+        seq.play(0);
+        // Run through step 0 and into step 1 (which is a rest) so that all
+        // NoteOffs scheduled at or before `dur` are flushed. Step 1 emits
+        // nothing for pitch_a or pitch_b, so the counts remain exact.
+        run(&mut seq, &mut sink, dur + 1_000, 1_000);
+
+        // note A (ratchet 2): exactly 2 NoteOns and 2 NoteOffs.
+        let a_ons: Vec<u64> = sink
+            .events
+            .iter()
+            .filter(|(_, m)| {
+                *m == MidiMessage::NoteOn {
+                    channel: ch,
+                    note: pitch_a,
+                    vel: 100,
+                }
+            })
+            .map(|(t, _)| *t)
+            .collect();
+        let a_offs: Vec<u64> = sink
+            .events
+            .iter()
+            .filter(|(_, m)| {
+                *m == MidiMessage::NoteOff {
+                    channel: ch,
+                    note: pitch_a,
+                }
+            })
+            .map(|(t, _)| *t)
+            .collect();
+        assert_eq!(
+            a_ons.len(),
+            2,
+            "ratchet-2 note must fire 2 NoteOns; got {:?}",
+            a_ons
+        );
+        assert_eq!(
+            a_offs.len(),
+            2,
+            "ratchet-2 note must fire 2 NoteOffs; got {:?}",
+            a_offs
+        );
+
+        // The two ratchet hits are evenly spaced: sub = dur / 2.
+        let sub = dur / 2;
+        assert_eq!(
+            a_ons,
+            vec![0, sub],
+            "ratchet NoteOns must be at t=0 and t=sub"
+        );
+
+        // Each ratchet NoteOff follows its NoteOn by gate = note.len.min(1.0) * sub.
+        // note_a.len = 0.5, so gate = 0.5 * sub = 31_250 µs.
+        let ratchet_gate = note_len_micros(0.5_f32.min(1.0), sub);
+        assert_eq!(
+            a_offs,
+            vec![ratchet_gate, sub + ratchet_gate],
+            "ratchet NoteOffs must follow each NoteOn by one ratchet gate"
+        );
+
+        // note B (ratchet 1): exactly 1 NoteOn + 1 NoteOff.
+        let b_ons = sink
+            .events
+            .iter()
+            .filter(|(_, m)| {
+                *m == MidiMessage::NoteOn {
+                    channel: ch,
+                    note: pitch_b,
+                    vel: 100,
+                }
+            })
+            .count();
+        let b_offs = sink
+            .events
+            .iter()
+            .filter(|(_, m)| {
+                *m == MidiMessage::NoteOff {
+                    channel: ch,
+                    note: pitch_b,
+                }
+            })
+            .count();
+        assert_eq!(b_ons, 1, "plain chord note must fire exactly 1 NoteOn");
+        assert_eq!(b_offs, 1, "plain chord note must fire exactly 1 NoteOff");
+    }
 }
