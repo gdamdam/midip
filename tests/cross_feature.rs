@@ -105,6 +105,8 @@ fn lane(profile: profiles::DeviceProfile, pattern: Pattern) -> Lane {
         octave: 0,
         route: None,
         muted_voices: Vec::new(),
+        scale: midip::music::scale::Scale::Chromatic,
+        root: None,
     }
 }
 
