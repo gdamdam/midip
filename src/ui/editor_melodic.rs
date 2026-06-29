@@ -9,7 +9,7 @@ use ratatui::Frame;
 use crate::app::App;
 use crate::devices::profiles::{melodic_velocity, resolve_melodic_pitch};
 use crate::music::scale::{degree_label, note_name as scale_note_name};
-use crate::pattern::model::{MelodicNote, PatternData};
+use crate::pattern::model::{MelodicStep, PatternData};
 use crate::ui::theme::{cursor_style, lane_color, note_name, playhead_style, vel_bar, vel_color};
 
 /// Combined style when cursor and playhead coincide: keep playhead bg, add cursor modifiers.
@@ -35,7 +35,7 @@ pub fn render_melodic_editor(f: &mut Frame, area: Rect, app: &App) {
     let local_playhead = if len == 0 { 0 } else { app.playhead % len };
     let accent = lane_color(lane.profile.id);
 
-    let steps: &[Option<MelodicNote>] = match &pattern.data {
+    let steps: &[MelodicStep] = match &pattern.data {
         PatternData::Melodic(s) => s,
         PatternData::Drums(_) => &[],
     };
@@ -106,7 +106,9 @@ pub fn render_melodic_editor(f: &mut Frame, area: Rect, app: &App) {
 
         step_spans.push(Span::raw(format!("{:<4}", col + 1)));
 
-        match steps.get(col).and_then(|s| s.as_ref()) {
+        // Mono render (M5b Task 1): show the step's FIRST/primary note. A chord display
+        // (multiple notes per step) is Task 4.
+        match steps.get(col).and_then(|s| s.first()) {
             Some(note) => {
                 let pitch = resolve_melodic_pitch(root, note.semi, lane.transpose, lane.octave);
                 // Feature #6: a slide note draws a glide tie. When the previous step also
@@ -168,8 +170,8 @@ pub fn render_melodic_editor(f: &mut Frame, area: Rect, app: &App) {
         }
     }
 
-    // Feature #4: cursor detail line with exact format.
-    let detail = match steps.get(app.cur_col).and_then(|s| s.as_ref()) {
+    // Feature #4: cursor detail line with exact format. Mono: show the primary note.
+    let detail = match steps.get(app.cur_col).and_then(|s| s.first()) {
         Some(note) => {
             let pitch = resolve_melodic_pitch(root, note.semi, lane.transpose, lane.octave);
             let slide_indicator = if note.slide { " · ~slide" } else { "" };
@@ -230,15 +232,15 @@ mod tests {
     fn melodic_editor_shows_note_at_step_20_after_scrolling() {
         use crate::app::Action;
         let mut set = Set::default_set(default_profiles());
-        let mut steps: Vec<Option<MelodicNote>> = vec![None; 32];
-        steps[20] = Some(MelodicNote {
+        let mut steps: Vec<MelodicStep> = vec![MelodicStep::default(); 32];
+        steps[20] = MelodicStep::from(vec![MelodicNote {
             semi: 5,
             vel: 1.0,
             slide: false,
             len: 1.0,
             prob: 1.0,
             ratchet: 1,
-        });
+        }]);
         set.lanes[1].pattern = Pattern {
             name: "test32".to_string(),
             desc: String::new(),
@@ -277,23 +279,23 @@ mod tests {
     #[test]
     fn melodic_editor_shows_note_name_and_slide_marker() {
         let mut set = Set::default_set(default_profiles());
-        let mut steps: Vec<Option<MelodicNote>> = vec![None; 16];
-        steps[0] = Some(MelodicNote {
+        let mut steps: Vec<MelodicStep> = vec![MelodicStep::default(); 16];
+        steps[0] = MelodicStep::from(vec![MelodicNote {
             semi: 0,
             vel: 1.0,
             slide: false,
             len: 1.0,
             prob: 1.0,
             ratchet: 1,
-        });
-        steps[4] = Some(MelodicNote {
+        }]);
+        steps[4] = MelodicStep::from(vec![MelodicNote {
             semi: 7,
             vel: 1.0,
             slide: true,
             len: 1.0,
             prob: 1.0,
             ratchet: 1,
-        });
+        }]);
         set.lanes[1].pattern = Pattern {
             name: "test".to_string(),
             desc: String::new(),
@@ -339,15 +341,15 @@ mod tests {
     fn melodic_header_shows_steps_cursor_playhead() {
         use crate::app::Action;
         let mut set = Set::default_set(default_profiles());
-        let mut steps: Vec<Option<MelodicNote>> = vec![None; 32];
-        steps[20] = Some(MelodicNote {
+        let mut steps: Vec<MelodicStep> = vec![MelodicStep::default(); 32];
+        steps[20] = MelodicStep::from(vec![MelodicNote {
             semi: 0,
             vel: 1.0,
             slide: false,
             len: 1.0,
             prob: 1.0,
             ratchet: 1,
-        });
+        }]);
         set.lanes[1].pattern = Pattern {
             name: "hdr".to_string(),
             desc: String::new(),
@@ -380,15 +382,15 @@ mod tests {
     fn melodic_coincident_cursor_and_playhead_both_visible() {
         use crate::ui::theme::playhead_style;
         let mut set = Set::default_set(default_profiles());
-        let mut steps: Vec<Option<MelodicNote>> = vec![None; 16];
-        steps[3] = Some(MelodicNote {
+        let mut steps: Vec<MelodicStep> = vec![MelodicStep::default(); 16];
+        steps[3] = MelodicStep::from(vec![MelodicNote {
             semi: 0,
             vel: 1.0,
             slide: false,
             len: 1.0,
             prob: 1.0,
             ratchet: 1,
-        });
+        }]);
         set.lanes[1].pattern = Pattern {
             name: "co".to_string(),
             desc: String::new(),
@@ -418,15 +420,15 @@ mod tests {
     #[test]
     fn melodic_length_non_lossy() {
         let mut set1 = Set::default_set(default_profiles());
-        let mut steps1: Vec<Option<MelodicNote>> = vec![None; 16];
-        steps1[0] = Some(MelodicNote {
+        let mut steps1: Vec<MelodicStep> = vec![MelodicStep::default(); 16];
+        steps1[0] = MelodicStep::from(vec![MelodicNote {
             semi: 0,
             vel: 1.0,
             slide: false,
             len: 1.0,
             prob: 1.0,
             ratchet: 1,
-        });
+        }]);
         set1.lanes[1].pattern = Pattern {
             name: "short".to_string(),
             desc: String::new(),
@@ -450,15 +452,15 @@ mod tests {
             .collect();
 
         let mut set2 = Set::default_set(default_profiles());
-        let mut steps2: Vec<Option<MelodicNote>> = vec![None; 16];
-        steps2[0] = Some(MelodicNote {
+        let mut steps2: Vec<MelodicStep> = vec![MelodicStep::default(); 16];
+        steps2[0] = MelodicStep::from(vec![MelodicNote {
             semi: 0,
             vel: 1.0,
             slide: false,
             len: 8.0,
             prob: 1.0,
             ratchet: 1,
-        });
+        }]);
         set2.lanes[1].pattern = Pattern {
             name: "long".to_string(),
             desc: String::new(),
@@ -490,23 +492,23 @@ mod tests {
         // them — a glide tie reaching from the left note into the slide note — not just
         // a lone `~` marker on the slide cell.
         let mut set = Set::default_set(default_profiles());
-        let mut steps: Vec<Option<MelodicNote>> = vec![None; 16];
-        steps[0] = Some(MelodicNote {
+        let mut steps: Vec<MelodicStep> = vec![MelodicStep::default(); 16];
+        steps[0] = MelodicStep::from(vec![MelodicNote {
             semi: 0,
             vel: 1.0,
             slide: false,
             len: 1.0,
             prob: 1.0,
             ratchet: 1,
-        });
-        steps[1] = Some(MelodicNote {
+        }]);
+        steps[1] = MelodicStep::from(vec![MelodicNote {
             semi: 2,
             vel: 1.0,
             slide: true,
             len: 1.0,
             prob: 1.0,
             ratchet: 1,
-        });
+        }]);
         set.lanes[1].pattern = Pattern {
             name: "sl".to_string(),
             desc: String::new(),
@@ -544,15 +546,15 @@ mod tests {
         // A slide note with NO preceding note still gets the `~` slide marker (no left
         // neighbour to connect to).
         let mut set = Set::default_set(default_profiles());
-        let mut steps: Vec<Option<MelodicNote>> = vec![None; 16];
-        steps[2] = Some(MelodicNote {
+        let mut steps: Vec<MelodicStep> = vec![MelodicStep::default(); 16];
+        steps[2] = MelodicStep::from(vec![MelodicNote {
             semi: 2,
             vel: 1.0,
             slide: true,
             len: 1.0,
             prob: 1.0,
             ratchet: 1,
-        });
+        }]);
         set.lanes[1].pattern = Pattern {
             name: "lone".to_string(),
             desc: String::new(),
@@ -587,7 +589,7 @@ mod tests {
             name: "pitch".to_string(),
             desc: String::new(),
             length: 16,
-            data: PatternData::Melodic(vec![None; 16]),
+            data: PatternData::Melodic(vec![MelodicStep::default(); 16]),
             id: crate::persist::Id::nil(),
         };
         // Set non-zero octave and transpose so the signed display is unambiguous.
@@ -627,15 +629,15 @@ mod tests {
     #[test]
     fn melodic_detail_contains_prob_and_ratchet() {
         let mut set = Set::default_set(default_profiles());
-        let mut steps: Vec<Option<MelodicNote>> = vec![None; 16];
-        steps[0] = Some(MelodicNote {
+        let mut steps: Vec<MelodicStep> = vec![MelodicStep::default(); 16];
+        steps[0] = MelodicStep::from(vec![MelodicNote {
             semi: 5,
             vel: 0.8,
             slide: false,
             len: 2.0,
             prob: 0.5,
             ratchet: 3,
-        });
+        }]);
         set.lanes[1].pattern = Pattern {
             name: "det".to_string(),
             desc: String::new(),
@@ -705,16 +707,16 @@ mod tests {
         set.lanes[1].root = Some(60); // C4 root
         set.lanes[1].octave = 0;
         set.lanes[1].transpose = 0;
-        let mut steps: Vec<Option<MelodicNote>> = vec![None; 16];
+        let mut steps: Vec<MelodicStep> = vec![MelodicStep::default(); 16];
         // semi=0 with root=60 → pitch=60 (C4). In C Major, degree 1.
-        steps[0] = Some(MelodicNote {
+        steps[0] = MelodicStep::from(vec![MelodicNote {
             semi: 0,
             vel: 1.0,
             slide: false,
             len: 1.0,
             prob: 1.0,
             ratchet: 1,
-        });
+        }]);
         set.lanes[1].pattern = Pattern {
             name: "scale-test".to_string(),
             desc: String::new(),

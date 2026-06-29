@@ -756,8 +756,10 @@ impl Sequencer {
         let transpose = lane.transpose;
         let octave = lane.octave;
 
+        // Mono behavior (M5b Task 1): a step is now a Vec; play its FIRST note. Multi-note
+        // (poly) playback is Task 3 — here we preserve today's single-note emission exactly.
         let note = match &lane.pattern.data {
-            PatternData::Melodic(steps) => steps.get(local).cloned().flatten(),
+            PatternData::Melodic(steps) => steps.get(local).and_then(|s| s.first()).cloned(),
             PatternData::Drums(_) => None,
         };
         let note = match note {
@@ -907,7 +909,9 @@ impl Sequencer {
         if let PatternData::Melodic(steps) = &self.set.lanes[lane_idx].pattern.data {
             for offset in 1..=count {
                 let local = (base + offset) % count;
-                if let Some(Some(n)) = steps.get(local) {
+                // Mono lookahead: read the step's FIRST note's slide flag (a non-empty
+                // step is a played note; an empty step is a rest, so skip it).
+                if let Some(n) = steps.get(local).and_then(|s| s.first()) {
                     return n.slide;
                 }
             }
@@ -1032,7 +1036,9 @@ mod sequencer_tests {
     use crate::devices::profiles::{S1, T8_BASS, T8_DRUMS};
     use crate::midi::ports::RecordingSink;
     use crate::midi::MidiMessage;
-    use crate::pattern::model::{DrumHit, Lane, MelodicNote, Pattern, PatternData, Set};
+    use crate::pattern::model::{
+        DrumHit, Lane, MelodicNote, MelodicStep, Pattern, PatternData, Set,
+    };
 
     // --- helpers ---------------------------------------------------------
 
@@ -1067,15 +1073,22 @@ mod sequencer_tests {
         }
     }
 
+    // Accepts the legacy `Option<MelodicNote>` per-step shape (None = rest, Some = mono
+    // note) and maps it to the new `MelodicStep` Vec form, so the existing literal call
+    // sites stay unchanged and assert the SAME mono behavior.
     fn melodic_lane(notes: Vec<Option<MelodicNote>>, profile_bass: bool) -> Lane {
         let len = notes.len();
+        let steps: Vec<MelodicStep> = notes
+            .into_iter()
+            .map(|n| MelodicStep::from(n.into_iter().collect::<Vec<_>>()))
+            .collect();
         Lane {
             profile: if profile_bass { T8_BASS } else { S1 },
             pattern: Pattern {
                 name: "mel".to_string(),
                 desc: String::new(),
                 length: len,
-                data: PatternData::Melodic(notes),
+                data: PatternData::Melodic(steps),
                 id: crate::persist::Id::nil(),
             },
             mute: false,
@@ -2069,13 +2082,17 @@ mod sequencer_tests {
             None,
             None,
         ];
+        let steps: Vec<MelodicStep> = notes
+            .into_iter()
+            .map(|n| MelodicStep::from(n.into_iter().collect::<Vec<_>>()))
+            .collect();
         Lane {
             profile: T8_BASS,
             pattern: Pattern {
                 name: "slide".to_string(),
                 desc: String::new(),
                 length: 4,
-                data: PatternData::Melodic(notes),
+                data: PatternData::Melodic(steps),
                 id: crate::persist::Id::nil(),
             },
             mute: false,

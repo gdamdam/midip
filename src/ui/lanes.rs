@@ -42,7 +42,7 @@ fn activity_strip(lane: &Lane) -> String {
         PatternData::Melodic(steps) => {
             for c in 0..CELLS {
                 let i = c * length / CELLS;
-                let filled = steps.get(i).map(|s| s.is_some()).unwrap_or(false);
+                let filled = steps.get(i).map(|s| !s.is_empty()).unwrap_or(false);
                 s.push(if filled { '●' } else { '·' });
             }
         }

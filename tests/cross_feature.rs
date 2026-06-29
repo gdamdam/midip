@@ -112,16 +112,16 @@ fn lane(profile: profiles::DeviceProfile, pattern: Pattern) -> Lane {
 
 /// Build a melodic pattern from `(step, semi, len)` tuples.
 fn melodic_pattern(name: &str, notes: &[(usize, i8, f32)]) -> Pattern {
-    let mut steps: Vec<MelodicStep> = vec![None; 16];
+    let mut steps: Vec<MelodicStep> = vec![MelodicStep::default(); 16];
     for &(step, semi, len) in notes {
-        steps[step] = Some(MelodicNote {
+        steps[step] = MelodicStep::from(vec![MelodicNote {
             semi,
             vel: 1.0,
             slide: false,
             len,
             prob: 1.0,
             ratchet: 1,
-        });
+        }]);
     }
     Pattern {
         name: name.into(),
@@ -135,16 +135,16 @@ fn melodic_pattern(name: &str, notes: &[(usize, i8, f32)]) -> Pattern {
 /// A melodic pattern with a note on EVERY step (semi 5) so a launch / playback is
 /// immediately observable on the next step.
 fn distinct_melodic(name: &str) -> Pattern {
-    let mut steps: Vec<MelodicStep> = vec![None; 16];
+    let mut steps: Vec<MelodicStep> = vec![MelodicStep::default(); 16];
     for s in steps.iter_mut() {
-        *s = Some(MelodicNote {
+        *s = MelodicStep::from(vec![MelodicNote {
             semi: 5,
             vel: 1.0,
             slide: false,
             len: 0.5,
             prob: 1.0,
             ratchet: 1,
-        });
+        }]);
     }
     Pattern {
         name: name.into(),

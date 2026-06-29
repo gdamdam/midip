@@ -33,23 +33,23 @@ fn three_lane_set() -> Set {
         id: midip::persist::Id::nil(),
     };
 
-    let mut bass_steps: Vec<MelodicStep> = vec![None; 16];
-    bass_steps[0] = Some(MelodicNote {
+    let mut bass_steps: Vec<MelodicStep> = vec![MelodicStep::default(); 16];
+    bass_steps[0] = MelodicStep::from(vec![MelodicNote {
         semi: 0,
         vel: 1.0,
         slide: false,
         len: 0.5,
         prob: 1.0,
         ratchet: 1,
-    });
-    bass_steps[8] = Some(MelodicNote {
+    }]);
+    bass_steps[8] = MelodicStep::from(vec![MelodicNote {
         semi: 0,
         vel: 1.0,
         slide: false,
         len: 0.5,
         prob: 1.0,
         ratchet: 1,
-    });
+    }]);
     let bass = Pattern {
         name: "bass".into(),
         desc: String::new(),
@@ -58,15 +58,15 @@ fn three_lane_set() -> Set {
         id: midip::persist::Id::nil(),
     };
 
-    let mut synth_steps: Vec<MelodicStep> = vec![None; 16];
-    synth_steps[4] = Some(MelodicNote {
+    let mut synth_steps: Vec<MelodicStep> = vec![MelodicStep::default(); 16];
+    synth_steps[4] = MelodicStep::from(vec![MelodicNote {
         semi: 12,
         vel: 1.0,
         slide: false,
         len: 0.9,
         prob: 1.0,
         ratchet: 1,
-    });
+    }]);
     let synth = Pattern {
         name: "synth".into(),
         desc: String::new(),
@@ -375,14 +375,14 @@ fn undo_synclanes_updates_engine_pattern_without_resetting_playhead() {
     let mut set = three_lane_set();
     // Modify lane 1 in the "edited" state: add an extra note at step 4.
     if let PatternData::Melodic(ref mut steps) = set.lanes[1].pattern.data {
-        steps[4] = Some(MelodicNote {
+        steps[4] = MelodicStep::from(vec![MelodicNote {
             semi: 0,
             vel: 1.0,
             slide: false,
             len: 0.5,
             prob: 1.0,
             ratchet: 1,
-        });
+        }]);
     }
 
     // The "undone" lanes have note only at steps 0 and 8 (original three_lane_set).

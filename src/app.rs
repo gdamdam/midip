@@ -1074,7 +1074,7 @@ impl App {
                 let new_len = (lane.pattern.length as i32 + d as i32).clamp(1, 64) as usize;
                 match &mut lane.pattern.data {
                     PatternData::Drums(steps) => steps.resize(new_len, Vec::new()),
-                    PatternData::Melodic(steps) => steps.resize(new_len, Option::None),
+                    PatternData::Melodic(steps) => steps.resize(new_len, MelodicStep::default()),
                 }
                 lane.pattern.length = new_len;
                 self.clamp_cursor();
@@ -1096,7 +1096,7 @@ impl App {
                             }
                         }
                         PatternData::Melodic(steps) => {
-                            steps.resize(new_len, Option::None);
+                            steps.resize(new_len, MelodicStep::default());
                             for i in len..new_len {
                                 steps[i] = steps[i % len].clone();
                             }
@@ -1791,7 +1791,7 @@ impl App {
                         PatternData::Melodic(steps) => steps
                             .iter()
                             .filter(|s| {
-                                if let Some(note) = s {
+                                if let Some(note) = s.first() {
                                     fold_to_scale(note.semi as i32, lane.scale) != note.semi as i32
                                 } else {
                                     false
@@ -1818,7 +1818,7 @@ impl App {
                     let lane = &mut self.set.lanes[self.focus];
                     let mut count = 0usize;
                     if let PatternData::Melodic(steps) = &mut lane.pattern.data {
-                        for note in steps.iter_mut().flatten() {
+                        for note in steps.iter_mut().flat_map(|s| s.iter_mut()) {
                             let folded =
                                 fold_to_scale(note.semi as i32, scale).clamp(-128, 127) as i8;
                             if folded != note.semi {
@@ -2076,14 +2076,16 @@ impl App {
                     if let PatternData::Melodic(steps) = &mut lane.pattern.data {
                         if let Some(slot) = steps.get_mut(col) {
                             let gate = lane.profile.gate_fraction;
-                            *slot = Some(MelodicNote {
+                            // Mono (M5b Task 1): note input replaces the step with a single
+                            // note. Chord stacking on poly lanes is Task 4.
+                            *slot = MelodicStep::from(vec![MelodicNote {
                                 semi: semi_folded,
                                 vel: MEL_DEFAULT_VEL,
                                 slide: false,
                                 len: gate,
                                 prob: 1.0,
                                 ratchet: 1,
-                            });
+                            }]);
                         }
                     }
                     // Advance cursor one step, wrapping within the pattern length.
@@ -2383,22 +2385,24 @@ impl App {
             }
             PatternData::Melodic(steps) => {
                 if let Some(slot) = steps.get_mut(col) {
-                    if slot.is_some() {
-                        *slot = Option::None;
+                    // Mono (M5b Task 1): a non-empty step toggles off to a rest; an empty
+                    // step toggles on to a single default note. Chords are Tasks 3–4.
+                    if !slot.is_empty() {
+                        *slot = MelodicStep::default();
                     } else {
                         let gate = lane.profile.gate_fraction;
                         // Fold the default semi=0 to the nearest in-scale degree when
                         // the lane has a non-Chromatic scale. Existing notes are never
                         // rewritten — folding only applies at placement time.
                         let semi = fold_to_scale(0, lane_scale) as i8;
-                        *slot = Some(MelodicNote {
+                        *slot = MelodicStep::from(vec![MelodicNote {
                             semi,
                             vel: MEL_DEFAULT_VEL,
                             slide: false,
                             len: gate,
                             prob: 1.0,
                             ratchet: 1,
-                        });
+                        }]);
                     }
                 }
             }
@@ -2428,7 +2432,7 @@ impl App {
                 }
             }
             PatternData::Melodic(steps) => {
-                if let Some(Some(n)) = steps.get_mut(col) {
+                if let Some(n) = steps.get_mut(col).and_then(|s| s.first_mut()) {
                     n.prob = (n.prob + d as f32 * 0.1).clamp(0.0, 1.0);
                 }
             }
@@ -2457,7 +2461,7 @@ impl App {
                 }
             }
             PatternData::Melodic(steps) => {
-                if let Some(Some(n)) = steps.get_mut(col) {
+                if let Some(n) = steps.get_mut(col).and_then(|s| s.first_mut()) {
                     n.ratchet = (n.ratchet as i16 + d as i16).clamp(1, 8) as u8;
                 }
             }
@@ -2478,9 +2482,7 @@ impl App {
                     .map(|s| s.iter().any(|h| h.note == note))
                     .unwrap_or(false)
             }
-            PatternData::Melodic(steps) => {
-                matches!(steps.get(col), Some(Some(_)))
-            }
+            PatternData::Melodic(steps) => steps.get(col).map(|s| !s.is_empty()).unwrap_or(false),
         }
     }
 
@@ -2498,7 +2500,7 @@ impl App {
             }
             PatternData::Melodic(steps) => steps
                 .get(col)
-                .and_then(|s| s.as_ref())
+                .and_then(|s| s.first())
                 .map(|n| (n.vel.clamp(0.0, 1.3) * 97.0) as u8),
         }
     }
@@ -2517,7 +2519,7 @@ impl App {
             }
             PatternData::Melodic(steps) => steps
                 .get(col)
-                .and_then(|s| s.as_ref())
+                .and_then(|s| s.first())
                 .map(|n| (n.prob * 100.0).round() as u32),
         }
     }
@@ -2535,7 +2537,7 @@ impl App {
                     .map(|h| h.ratchet)
             }
             PatternData::Melodic(steps) => {
-                steps.get(col).and_then(|s| s.as_ref()).map(|n| n.ratchet)
+                steps.get(col).and_then(|s| s.first()).map(|n| n.ratchet)
             }
         }
     }
@@ -2608,7 +2610,7 @@ impl App {
                 }
             }
             PatternData::Melodic(steps) => {
-                if let Some(Some(n)) = steps.get_mut(col) {
+                if let Some(n) = steps.get_mut(col).and_then(|s| s.first_mut()) {
                     n.vel = (b as f32 / 9.0) * 1.3;
                 }
             }
@@ -2630,7 +2632,7 @@ impl App {
                 }
             }
             PatternData::Melodic(steps) => {
-                if let Some(Some(n)) = steps.get_mut(col) {
+                if let Some(n) = steps.get_mut(col).and_then(|s| s.first_mut()) {
                     n.vel = (n.vel + d as f32 * 0.05).clamp(0.0, 1.3);
                 }
             }
@@ -2643,7 +2645,7 @@ impl App {
         let col = self.cur_col;
         let scale = self.set.lanes[self.focus].scale;
         if let PatternData::Melodic(steps) = &mut self.set.lanes[self.focus].pattern.data {
-            if let Some(Some(n)) = steps.get_mut(col) {
+            if let Some(n) = steps.get_mut(col).and_then(|s| s.first_mut()) {
                 let new_semi = step_by_degree(n.semi as i32, dir, scale);
                 n.semi = new_semi.clamp(-48, 48) as i8;
             }
@@ -2654,7 +2656,7 @@ impl App {
         let col = self.cur_col;
         let lane = &mut self.set.lanes[self.focus];
         if let PatternData::Melodic(steps) = &mut lane.pattern.data {
-            if let Some(Some(n)) = steps.get_mut(col) {
+            if let Some(n) = steps.get_mut(col).and_then(|s| s.first_mut()) {
                 n.len = (n.len + d as f32 * 0.25).clamp(0.25, 64.0);
             }
         }
@@ -2664,7 +2666,7 @@ impl App {
         let col = self.cur_col;
         let lane = &mut self.set.lanes[self.focus];
         if let PatternData::Melodic(steps) = &mut lane.pattern.data {
-            if let Some(Some(n)) = steps.get_mut(col) {
+            if let Some(n) = steps.get_mut(col).and_then(|s| s.first_mut()) {
                 n.slide = !n.slide;
             }
         }
@@ -2681,7 +2683,7 @@ impl App {
             }
             PatternData::Melodic(steps) => {
                 if let Some(slot) = steps.get_mut(col) {
-                    *slot = Option::None;
+                    *slot = MelodicStep::default();
                 }
             }
         }
@@ -2696,7 +2698,7 @@ impl App {
                 PatternData::Drums(vec![s])
             }
             PatternData::Melodic(steps) => {
-                let s: MelodicStep = steps.get(col).cloned().unwrap_or(Option::None);
+                let s: MelodicStep = steps.get(col).cloned().unwrap_or_default();
                 PatternData::Melodic(vec![s])
             }
         };
@@ -2754,7 +2756,7 @@ impl App {
         let lane = &self.set.lanes[self.focus];
         match &lane.pattern.data {
             PatternData::Drums(steps) => steps.iter().any(|s| !s.is_empty()),
-            PatternData::Melodic(steps) => steps.iter().any(|s| s.is_some()),
+            PatternData::Melodic(steps) => steps.iter().any(|s| !s.is_empty()),
         }
     }
 
@@ -2937,7 +2939,11 @@ pub fn apply_fill(p: &mut Pattern) {
             }
         }
         PatternData::Melodic(steps) => {
-            for note in steps.iter_mut().skip(last_beat_start).flatten() {
+            for note in steps
+                .iter_mut()
+                .skip(last_beat_start)
+                .flat_map(|s| s.iter_mut())
+            {
                 note.ratchet = (note.ratchet * 2).min(8);
             }
         }
@@ -2988,15 +2994,15 @@ mod tests {
         );
 
         let mut bass: GenreMap = GenreMap::new();
-        let mut bsteps = vec![None; 16];
-        bsteps[0] = Some(MelodicNote {
+        let mut bsteps = vec![MelodicStep::default(); 16];
+        bsteps[0] = MelodicStep::from(vec![MelodicNote {
             semi: 3,
             vel: 1.0,
             slide: false,
             len: 0.5,
             prob: 1.0,
             ratchet: 1,
-        });
+        }]);
         bass.insert(
             "acid".into(),
             vec![Pattern {
@@ -3015,7 +3021,7 @@ mod tests {
                 name: "lib-synth".into(),
                 desc: String::new(),
                 length: 16,
-                data: PatternData::Melodic(vec![None; 16]),
+                data: PatternData::Melodic(vec![MelodicStep::default(); 16]),
                 id: crate::persist::Id::nil(),
             }],
         );
@@ -3097,7 +3103,7 @@ mod tests {
         app.apply(Action::MoveCursor(0, 5));
         app.apply(Action::ToggleStep);
         if let PatternData::Melodic(steps) = &app.focused_lane().pattern.data {
-            let n = steps[5].as_ref().expect("note placed");
+            let n = steps[5].first().expect("note placed");
             assert_eq!(n.semi, 0);
             assert_eq!(n.vel, 1.0);
         } else {
@@ -3105,7 +3111,7 @@ mod tests {
         }
         app.apply(Action::ToggleStep); // remove
         if let PatternData::Melodic(steps) = &app.focused_lane().pattern.data {
-            assert!(steps[5].is_none());
+            assert!(steps[5].is_empty());
         } else {
             panic!("expected melodic");
         }
@@ -6454,7 +6460,7 @@ mod tests {
             name: "bass line".to_string(),
             desc: String::new(),
             length: 16,
-            data: PatternData::Melodic(vec![None; 16]),
+            data: PatternData::Melodic(vec![MelodicStep::default(); 16]),
             id: crate::persist::Id::nil(),
         };
         bass.insert("techno".to_string(), vec![pat]);
@@ -6505,7 +6511,7 @@ mod tests {
             name: "synth line".to_string(),
             desc: String::new(),
             length: 16,
-            data: PatternData::Melodic(vec![None; 16]),
+            data: PatternData::Melodic(vec![MelodicStep::default(); 16]),
             id: crate::persist::Id::nil(),
         };
         synth.insert("techno".to_string(), vec![pat]);
@@ -7011,16 +7017,16 @@ mod tests {
 
     /// Helper: a melodic pattern with a note in the last beat so ratchet doubling fires.
     fn melodic_pattern_with_note() -> Pattern {
-        let mut steps: Vec<Option<MelodicNote>> = vec![None; 16];
+        let mut steps: Vec<MelodicStep> = vec![MelodicStep::default(); 16];
         // Put a note at step 13 (last beat = steps 12-15 for a 16-step pattern).
-        steps[13] = Some(MelodicNote {
+        steps[13] = MelodicStep::from(vec![MelodicNote {
             semi: 0,
             vel: 1.0,
             slide: false,
             len: 0.5,
             prob: 1.0,
             ratchet: 1,
-        });
+        }]);
         Pattern {
             name: "bass-note".into(),
             desc: String::new(),
@@ -7155,7 +7161,7 @@ mod tests {
         let mut p = melodic_pattern_with_note();
         crate::app::apply_fill(&mut p);
         if let PatternData::Melodic(steps) = &p.data {
-            let note = steps[13].as_ref().expect("step 13 must have a note");
+            let note = steps[13].first().expect("step 13 must have a note");
             assert_eq!(
                 note.ratchet, 2,
                 "ratchet must be doubled (1 → 2) on last-beat note"
@@ -7402,7 +7408,7 @@ mod tests {
         app.apply(Action::ToggleStep);
         // Directly set the semi to the desired value for test setup.
         if let PatternData::Melodic(steps) = &mut app.set.lanes[app.focus].pattern.data {
-            if let Some(Some(n)) = steps.get_mut(0) {
+            if let Some(n) = steps.get_mut(0).and_then(|s| s.first_mut()) {
                 n.semi = semi;
             }
         }
@@ -7419,7 +7425,7 @@ mod tests {
         app.apply(Action::NoteUp);
         if let PatternData::Melodic(steps) = &app.focused_lane().pattern.data {
             assert_eq!(
-                steps[0].as_ref().unwrap().semi,
+                steps[0].first().unwrap().semi,
                 1,
                 "Chromatic: NoteUp should add 1 semitone"
             );
@@ -7431,7 +7437,7 @@ mod tests {
         app2.apply(Action::NoteUp);
         if let PatternData::Melodic(steps) = &app2.focused_lane().pattern.data {
             assert_eq!(
-                steps[0].as_ref().unwrap().semi,
+                steps[0].first().unwrap().semi,
                 2,
                 "Major: NoteUp at 0 should reach 2"
             );
@@ -7447,7 +7453,7 @@ mod tests {
         app.apply(Action::NoteDown);
         if let PatternData::Melodic(steps) = &app.focused_lane().pattern.data {
             assert_eq!(
-                steps[0].as_ref().unwrap().semi,
+                steps[0].first().unwrap().semi,
                 1,
                 "Chromatic: NoteDown should subtract 1"
             );
@@ -7459,7 +7465,7 @@ mod tests {
         app2.apply(Action::NoteDown);
         if let PatternData::Melodic(steps) = &app2.focused_lane().pattern.data {
             assert_eq!(
-                steps[0].as_ref().unwrap().semi,
+                steps[0].first().unwrap().semi,
                 0,
                 "Major: NoteDown at 2 should reach 0"
             );
@@ -7478,7 +7484,7 @@ mod tests {
         app.set.lanes[app.focus].scale = Scale::Major;
         app.apply(Action::ToggleStep);
         if let PatternData::Melodic(steps) = &app.focused_lane().pattern.data {
-            let note = steps[0].as_ref().expect("note should be placed");
+            let note = steps[0].first().expect("note should be placed");
             let expected = fold_to_scale(0, Scale::Major) as i8;
             assert_eq!(
                 note.semi, expected,
@@ -7518,7 +7524,7 @@ mod tests {
         // Existing note semi must be unchanged.
         if let PatternData::Melodic(steps) = &app.focused_lane().pattern.data {
             assert_eq!(
-                steps[0].as_ref().unwrap().semi,
+                steps[0].first().unwrap().semi,
                 5,
                 "CycleScale must not rewrite existing note semis"
             );
@@ -7592,7 +7598,7 @@ mod tests {
             app.cur_col = col;
             app.apply(Action::ToggleStep);
             if let PatternData::Melodic(steps) = &mut app.set.lanes[app.focus].pattern.data {
-                if let Some(Some(n)) = steps.get_mut(col) {
+                if let Some(n) = steps.get_mut(col).and_then(|s| s.first_mut()) {
                     n.semi = semi;
                 }
             }
@@ -7617,7 +7623,7 @@ mod tests {
             let semis: Vec<i8> = steps
                 .iter()
                 .take(4)
-                .filter_map(|s| s.as_ref().map(|n| n.semi))
+                .filter_map(|s| s.first().map(|n| n.semi))
                 .collect();
             // Every semi must be in the Major scale degrees (mod 12).
             for &s in &semis {
@@ -7647,7 +7653,7 @@ mod tests {
                 steps
                     .iter()
                     .take(2)
-                    .filter_map(|s| s.as_ref().map(|n| n.semi))
+                    .filter_map(|s| s.first().map(|n| n.semi))
                     .collect()
             } else {
                 panic!("expected Melodic");
@@ -7661,7 +7667,7 @@ mod tests {
                 steps
                     .iter()
                     .take(2)
-                    .filter_map(|s| s.as_ref().map(|n| n.semi))
+                    .filter_map(|s| s.first().map(|n| n.semi))
                     .collect()
             } else {
                 panic!("expected Melodic");
@@ -7675,7 +7681,7 @@ mod tests {
                 steps
                     .iter()
                     .take(2)
-                    .filter_map(|s| s.as_ref().map(|n| n.semi))
+                    .filter_map(|s| s.first().map(|n| n.semi))
                     .collect()
             } else {
                 panic!("expected Melodic");
@@ -7695,7 +7701,7 @@ mod tests {
                 steps
                     .iter()
                     .take(3)
-                    .filter_map(|s| s.as_ref().map(|n| n.semi))
+                    .filter_map(|s| s.first().map(|n| n.semi))
                     .collect()
             } else {
                 panic!("expected Melodic");
@@ -7721,7 +7727,7 @@ mod tests {
                 steps
                     .iter()
                     .take(3)
-                    .filter_map(|s| s.as_ref().map(|n| n.semi))
+                    .filter_map(|s| s.first().map(|n| n.semi))
                     .collect()
             } else {
                 panic!("expected Melodic");
@@ -7833,7 +7839,7 @@ mod tests {
         app.apply(Action::NoteInputPlace(0)); // C = offset 0
 
         if let PatternData::Melodic(steps) = &app.set.lanes[app.focus].pattern.data {
-            let note = steps[0].as_ref().expect("note must be placed at col 0");
+            let note = steps[0].first().expect("note must be placed at col 0");
             assert_eq!(
                 note.semi, 0,
                 "semi must be 0 (C) for offset 0, chromatic lane"
@@ -7860,7 +7866,7 @@ mod tests {
         app.apply(Action::NoteInputPlace(1)); // C# = offset 1
 
         if let PatternData::Melodic(steps) = &app.set.lanes[app.focus].pattern.data {
-            let note = steps[2].as_ref().expect("note must be placed at col 2");
+            let note = steps[2].first().expect("note must be placed at col 2");
             assert_eq!(
                 note.semi, 1,
                 "semi must be 1 (C#) for offset 1, chromatic lane"
@@ -7884,7 +7890,7 @@ mod tests {
         app.apply(Action::NoteInputPlace(1)); // offset 1 = C#, out of Major
 
         if let PatternData::Melodic(steps) = &app.set.lanes[app.focus].pattern.data {
-            let note = steps[0].as_ref().expect("note placed");
+            let note = steps[0].first().expect("note placed");
             let major_degrees: &[i8] = &[0, 2, 4, 5, 7, 9, 11];
             let semi_mod = ((note.semi % 12) + 12) as u8 % 12;
             assert!(
@@ -7936,7 +7942,7 @@ mod tests {
         app.apply(Action::NoteInputPlace(0)); // C in oct+1 = semi 12
 
         if let PatternData::Melodic(steps) = &app.set.lanes[app.focus].pattern.data {
-            let note = steps[0].as_ref().expect("note placed");
+            let note = steps[0].first().expect("note placed");
             assert_eq!(note.semi, 12, "oct+1 offset 0 → semi 12");
         } else {
             panic!("expected melodic");
@@ -7962,7 +7968,7 @@ mod tests {
         assert_eq!(app.cur_col, 2, "cursor must step back to 2");
         if let PatternData::Melodic(steps) = &app.set.lanes[app.focus].pattern.data {
             assert!(
-                steps[3].is_none(),
+                steps[3].is_empty(),
                 "col 3 must be cleared by backspace (was empty but backspace sets it None)"
             );
         } else {
@@ -8004,7 +8010,7 @@ mod tests {
         // One Undo restores the pre-session state (all three placements gone).
         app.apply(Action::Undo);
         if let PatternData::Melodic(steps) = &app.set.lanes[app.focus].pattern.data {
-            let placed: Vec<_> = steps.iter().take(3).filter(|s| s.is_some()).collect();
+            let placed: Vec<_> = steps.iter().take(3).filter(|s| !s.is_empty()).collect();
             assert!(
                 placed.is_empty(),
                 "Undo after NoteInput session must restore pre-session state (no placed notes)"
