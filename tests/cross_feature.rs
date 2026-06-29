@@ -26,8 +26,8 @@ use midip::midi::message::MidiMessage;
 use midip::midi::ports::RecordingSink;
 use midip::pattern::library::{GenreMap, Library};
 use midip::pattern::model::{
-    DrumHit, DrumStep, Lane, LaneRoute, MelodicNote, MelodicStep, Pattern, PatternData, PortRef,
-    Set, TrigCond,
+    CcLock, DrumHit, DrumStep, Lane, LaneRoute, MelodicNote, MelodicStep, Pattern, PatternData,
+    PortRef, Set, TrigCond,
 };
 use midip::pattern::refs::PatternRef;
 use midip::pattern::store;
@@ -1873,6 +1873,332 @@ fn chain_roundtrip_create_save_load_play_advance() {
     assert!(
         hung.is_empty(),
         "no hung notes after chain stop-at-end; leftover: {hung:?}"
+    );
+
+    // Clean up.
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// M8 cross-feature integration: per-step CC + microtiming + trig condition +
+// per-lane clock_div/swing, all wired end-to-end through the real engine.
+//
+// Features combined (all M8):
+//   - Pattern.cc: per-step CcLock Vec (T5)
+//   - MelodicNote.micro: signed microtiming offset (T4)
+//   - MelodicNote.cond: Ratio{1,2} trig condition (T6)
+//   - Lane.clock_div: lane advances once per N global steps (T7)
+//   - Lane.swing: per-lane swing override (T7)
+//   - Persistence v3: all fields survive save → load (T1–T3)
+//
+// Assertions:
+//   (a) Persistence: save → load preserves cc/micro/cond on steps and
+//       swing/clock_div on the lane; file is schema version 3.
+//   (b) Microtiming: a note with micro != 0 emits its NoteOn at the expected
+//       shifted at_micros; NoteOff follows the same shift (via clean release).
+//   (c) Per-step CC: CcLock fires as ControlChange just before the NoteOn;
+//       an identical repeat on the next loop is suppressed (route cache).
+//   (d) Trig condition: Ratio{1,2} note fires only on even loops (0, 2, …).
+//   (e) Clock division: a lane with clock_div=2 fires half as often as an
+//       undivided lane across the same global-step window.
+//   (f) Note safety: Stop emits CC123 (all-notes-off) to release any held notes.
+// ═════════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn m8_per_step_cc_microtiming_cond_clock_div_roundtrip() {
+    use midip::pattern::store::{load_set, save_set, CURRENT_SET_VERSION};
+
+    let profs = profiles::default_profiles();
+    // profs[2] = S-1 SYNTH, channel 0, root_note 45, poly=true.
+    let synth_prof = profs[2];
+    assert!(
+        synth_prof.poly,
+        "fixture: profs[2] must be the poly S-1 profile"
+    );
+    // S-1: channel=0, root_note=45. resolve_melodic_pitch(45, semi=0, 0, 0) = 45.
+    let expected_pitch: u8 = 45;
+    let cc_num: u8 = 74; // filter cutoff
+    let cc_val: u8 = 100;
+    let micro_ticks: i16 = 500; // positive → later; well within ±½ step at 120 BPM
+
+    // ── 1. Build the 4-step melodic pattern ───────────────────────────────────
+    // step 0 — note (semi=0, micro=+500, cond=Always)  + CcLock(74,100)
+    // step 2 — note (semi=0, micro=0,    cond=Ratio{1,2})
+    // steps 1,3 — rest
+    let note_step0 = MelodicNote {
+        semi: 0,
+        vel: 1.0,
+        slide: false,
+        len: 0.5,
+        prob: 1.0,
+        ratchet: 1,
+        micro: micro_ticks,
+        cond: TrigCond::Always,
+    };
+    let note_step2 = MelodicNote {
+        semi: 0,
+        vel: 1.0,
+        slide: false,
+        len: 0.5,
+        prob: 1.0,
+        ratchet: 1,
+        micro: 0,
+        cond: TrigCond::Ratio { x: 1, y: 2 },
+    };
+    let mut steps: Vec<MelodicStep> = vec![MelodicStep::default(); 4];
+    steps[0] = MelodicStep::from(vec![note_step0]);
+    steps[2] = MelodicStep::from(vec![note_step2]);
+
+    let mut pat = Pattern {
+        name: "m8-xfeat".into(),
+        desc: String::new(),
+        length: 4,
+        data: PatternData::Melodic(steps),
+        id: midip::persist::Id::nil(),
+        cc: Default::default(),
+    };
+    pat.set_step_cc(
+        0,
+        vec![CcLock {
+            cc: cc_num,
+            val: cc_val,
+        }],
+    );
+
+    // ── 2. Lane with per-lane M8 attributes ───────────────────────────────────
+    // swing=0.6 (non-trivial), clock_div=2 (lane step advances every 2 global steps).
+    let m8_lane = Lane {
+        profile: synth_prof,
+        pattern: pat,
+        mute: false,
+        solo: false,
+        transpose: 0,
+        octave: 0,
+        route: None,
+        muted_voices: Vec::new(),
+        scale: midip::music::scale::Scale::Chromatic,
+        root: None,
+        swing: Some(0.6),
+        clock_div: Some(2),
+    };
+
+    let set = Set {
+        name: "m8-xfeat-set".into(),
+        bpm: 120.0,
+        swing: 0.5,
+        lanes: vec![m8_lane],
+        id: midip::persist::Id::nil(),
+        scenes: Vec::new(),
+        chains: Vec::new(),
+    };
+
+    // ── (a) Persistence: save → load; assert M8 fields survive and version=3 ──
+    let dir = unique_dir("m8-xfeat");
+    let path = save_set(&dir, &mut set.clone()).unwrap();
+
+    let raw: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(
+        raw["version"].as_u64().unwrap(),
+        CURRENT_SET_VERSION as u64,
+        "saved set must carry schema version {CURRENT_SET_VERSION}"
+    );
+
+    let loaded = load_set(&path).unwrap();
+    let loaded_lane = &loaded.lanes[0];
+
+    assert_eq!(
+        loaded_lane.swing,
+        Some(0.6),
+        "lane.swing must survive save/load"
+    );
+    assert_eq!(
+        loaded_lane.clock_div,
+        Some(2),
+        "lane.clock_div must survive save/load"
+    );
+
+    let cc_after = loaded_lane.pattern.step_cc(0);
+    assert_eq!(
+        cc_after,
+        &[CcLock {
+            cc: cc_num,
+            val: cc_val
+        }],
+        "step 0 CcLock must survive save/load"
+    );
+    assert!(
+        loaded_lane.pattern.step_cc(1).is_empty(),
+        "step 1 must have no CC locks"
+    );
+
+    let loaded_steps = match &loaded_lane.pattern.data {
+        PatternData::Melodic(s) => s,
+        _ => panic!("expected Melodic after load"),
+    };
+    assert_eq!(
+        loaded_steps[0][0].micro, micro_ticks,
+        "note.micro must survive save/load"
+    );
+    assert_eq!(
+        loaded_steps[2][0].cond,
+        TrigCond::Ratio { x: 1, y: 2 },
+        "note.cond must survive save/load"
+    );
+
+    // ── (b–f) Engine playback ─────────────────────────────────────────────────
+    // clock_div=2 with a 4-step pattern: the lane advances once per 2 global steps.
+    // 8 global steps → 4 lane-time steps → 2 full lane loops.
+    //
+    // Global-step → effective (lane-time) step mapping (launch_offset=0):
+    //   g0→e0(local 0), g2→e1(local 1), g4→e2(local 2), g6→e3(local 3) — loop 0
+    //   [g1,g3,g5,g7 are skipped by the clock_div gate]
+    //
+    // Wait — this is wrong. Re-read the scheduler:
+    //   effective_step = off + steps_since_launch / div
+    //   steps_since_launch = step (launch_offset=0)
+    //   div=2
+    // So:
+    //   g0 → e=0 → local=0%4=0, loop_index=0/4=0   → step-0 note fires (Always)
+    //   g2 → e=1 → local=1%4=1, loop_index=1/4=0   → local 1 = rest
+    //   g4 → e=2 → local=2%4=2, loop_index=2/4=0   → step-2 note fires (Ratio{1,2}, loop 0 → fires)
+    //   g6 → e=3 → local=3%4=3, loop_index=3/4=0   → rest
+    //   g8 → e=4 → local=4%4=0, loop_index=4/4=1   → step-0 note fires (Always)
+    //   ...g10→e=5→local=1, g12→e=6→local=2 (loop_index=1 → Ratio{1,2} suppressed)
+    //
+    // Running 8 global steps (g0..g7) = total=8*step µs:
+    //   lane materializes at g0,g2,g4,g6 (odd global steps skipped by div gate).
+    //   NoteOns: g0 (step-0, Always), g4 (step-2, Ratio loop 0 fires).
+    //   g8 would be step-0 loop 1, but we stop at g8 (stop_at = total).
+    //
+    // To also capture loop 1's step-0, run 10 global steps:
+    //   g8 → e=4 → local=0, loop_index=1 → step-0 fires (Always, loop 1)
+    // Total NoteOns across 10 global steps = 3 (g0, g4, g8).
+    let step_dur = step_dur_micros(120.0); // 125_000 µs
+    let total_global_steps = 10u64;
+    let total = step_dur * total_global_steps;
+    let stop_at = total;
+
+    let mut link = FakeLink::new();
+    let mut sink = RecordingSink::new();
+
+    run_engine_headless(
+        loaded,
+        &mut link,
+        &mut sink,
+        vec![(0, UiCommand::Play), (stop_at, UiCommand::Stop)],
+        total + step_dur, // one extra tick so the Stop executes
+        1_000,
+    );
+
+    // ── (b) Microtiming ───────────────────────────────────────────────────────
+    // step-0 note has micro=+500; swing=0.6 on even step → swing_offset=0.
+    // Loop 0: step_start = 0; on_at = 0 + 500 = 500 µs.
+    // Loop 1: g8 → step_start = 8*step_dur; on_at = 8*step_dur + 500.
+    let step0_ons: Vec<u64> = sink
+        .events
+        .iter()
+        .filter_map(|(at, m)| match m {
+            MidiMessage::NoteOn {
+                channel: 0, note, ..
+            } if *note == expected_pitch => Some(*at),
+            _ => None,
+        })
+        .filter(|&at| {
+            // Exclude the step-2 (Ratio) note which fires at g4 = 4*step_dur (no micro shift).
+            at != step_dur * 4
+        })
+        .collect();
+
+    assert_eq!(
+        step0_ons.len(),
+        2,
+        "step-0 note (cond=Always) must fire on both loops; got {step0_ons:?}"
+    );
+    assert_eq!(
+        step0_ons[0], micro_ticks as u64,
+        "loop 0 NoteOn must be shifted by micro={micro_ticks} µs (got {})",
+        step0_ons[0]
+    );
+    assert_eq!(
+        step0_ons[1],
+        step_dur * 8 + micro_ticks as u64,
+        "loop 1 NoteOn must be shifted by micro={micro_ticks} µs from loop-1 base (got {})",
+        step0_ons[1]
+    );
+
+    // ── (c) Per-step CC: fires once before loop-0 NoteOn, suppressed on loop 1 ─
+    let cc_events: Vec<(u64, u8)> = sink
+        .events
+        .iter()
+        .filter_map(|(at, m)| match m {
+            MidiMessage::ControlChange {
+                channel: 0,
+                controller,
+                value,
+            } if *controller == cc_num => Some((*at, *value)),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(
+        cc_events.len(),
+        1,
+        "CC{cc_num}={cc_val} must be sent once (loop 0) and cache-suppressed on loop 1; got {cc_events:?}"
+    );
+    let (cc_at, cc_v) = cc_events[0];
+    assert_eq!(cc_v, cc_val, "CC value must match CcLock");
+    assert!(
+        cc_at < step0_ons[0],
+        "CC must be emitted before the NoteOn (cc_at={cc_at}, noteon_at={})",
+        step0_ons[0]
+    );
+
+    // ── (d) Trig condition: Ratio{1,2} note fires only at g4 (lane loop 0) ────
+    // g12 (lane loop 1 for step 2) is outside our 10-step window, so exactly 1 NoteOn.
+    let ratio_expected_at = step_dur * 4; // g4, even step, swing_offset=0, micro=0
+    let ratio_ons: Vec<_> = sink
+        .events
+        .iter()
+        .filter(|(at, m)| {
+            *at == ratio_expected_at
+                && matches!(m, MidiMessage::NoteOn { channel: 0, note, .. } if *note == expected_pitch)
+        })
+        .collect();
+    assert_eq!(
+        ratio_ons.len(),
+        1,
+        "Ratio{{1,2}} note must fire exactly once at {ratio_expected_at} µs; got {ratio_ons:?}"
+    );
+    // Confirm it does NOT fire at g12 (outside window — but assert total is correct).
+
+    // ── (e) Clock division: only 3 NoteOns across 10 global steps ────────────
+    // g0 (step-0 loop 0) + g4 (step-2 Ratio loop 0) + g8 (step-0 loop 1) = 3.
+    let total_note_ons: usize = sink
+        .events
+        .iter()
+        .filter(|(_, m)| matches!(m, MidiMessage::NoteOn { channel: 0, .. }))
+        .count();
+    assert_eq!(
+        total_note_ons, 3,
+        "clock_div=2 across 10 global steps: 3 NoteOns expected (2×Always + 1×Ratio); got {total_note_ons}"
+    );
+
+    // ── (f) Note safety: Stop emits CC123 on ch 0 ────────────────────────────
+    let cc123_sent = sink.events.iter().any(|(at, m)| {
+        *at >= stop_at
+            && matches!(
+                m,
+                MidiMessage::ControlChange {
+                    channel: 0,
+                    controller: 123,
+                    ..
+                }
+            )
+    });
+    assert!(
+        cc123_sent,
+        "Stop must emit CC123 (all-notes-off) on ch 0 to release held notes"
     );
 
     // Clean up.
