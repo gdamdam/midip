@@ -761,8 +761,13 @@ impl Sequencer {
             let r = hit.ratchet.max(1) as u64;
             let sub = dur / r;
             let gate = note_len_micros(gate_fraction, sub);
+            // Microtiming: shift the whole group (all ratchet sub-events) by hit.micro,
+            // clamped to ±(dur/2) so a hit can never cross into a neighbouring step.
+            // Absolute time is also clamped to 0 (can't schedule before epoch).
+            let micro = (hit.micro as i64).clamp(-(dur as i64 / 2), dur as i64 / 2);
+            let base_on = (swung as i64 + micro).max(0) as u64;
             for i in 0..r {
-                let on_at = swung + i * sub;
+                let on_at = base_on + i * sub;
                 Self::enqueue(
                     &mut self.queue,
                     ScheduledEvent {
@@ -835,7 +840,10 @@ impl Sequencer {
 
         let pitch = resolve_melodic_pitch(root, note.semi, transpose, octave);
         let vel = melodic_velocity(note.vel);
-        let on_at = swung;
+        // Microtiming: shift NoteOn (and all NoteOffs/ratchets) by note.micro,
+        // clamped to ±(dur/2) so the note can't reorder into a neighbouring step.
+        let micro = (note.micro as i64).clamp(-(dur as i64 / 2), dur as i64 / 2);
+        let on_at = (swung as i64 + micro).max(0) as u64;
 
         // Ratchet: R evenly-spaced retriggers across the step. Slide governs legato into
         // the FIRST retrigger only; the remaining pairs are independent gated hits whose
@@ -1006,17 +1014,16 @@ impl Sequencer {
         let root = lane.profile.root_note;
         let transpose = lane.transpose;
         let octave = lane.octave;
-        let on_at = swung;
 
-        // Release any prior slide-held mono note on this lane on the chord's onset
-        // (legato into a chord resolves the held note), then drop the legato anchor:
-        // a chord is not a single sounding note, so it leaves no `active` to slide.
+        // Release any prior slide-held mono note on this lane at the chord's step
+        // onset (swung, not shifted) — the legato release belongs to the step boundary,
+        // not to any individual note's microtiming offset.
         if let Some(prev) = self.active[lane_idx].take() {
             if prev.off_at.is_none() {
                 Self::enqueue(
                     &mut self.queue,
                     ScheduledEvent {
-                        at_micros: on_at,
+                        at_micros: swung,
                         lane: lane_idx,
                         msg: MidiMessage::NoteOff {
                             channel: prev.channel,
@@ -1036,6 +1043,10 @@ impl Sequencer {
             }
             let pitch = resolve_melodic_pitch(root, note.semi, transpose, octave);
             let vel = melodic_velocity(note.vel);
+            // Per-note microtiming: each chord note shifts independently, clamped to
+            // ±(dur/2) so it can't reorder into a neighbouring step.
+            let micro = (note.micro as i64).clamp(-(dur as i64 / 2), dur as i64 / 2);
+            let on_at = (swung as i64 + micro).max(0) as u64;
             // Ratchet: R evenly-spaced gated retriggers across the step, per note.
             let r = note.ratchet.max(1) as u64;
             let sub = dur / r;
@@ -3916,5 +3927,487 @@ mod sequencer_tests {
             .count();
         assert_eq!(b_ons, 1, "plain chord note must fire exactly 1 NoteOn");
         assert_eq!(b_offs, 1, "plain chord note must fire exactly 1 NoteOff");
+    }
+
+    // ── M8 Task 4: signed microtiming ────────────────────────────────────────
+
+    /// Helper: a one-step drum lane with a single hit at step 0, with `micro` set.
+    fn drum_lane_micro(note: u8, micro: i16) -> Lane {
+        let mut steps: Vec<Vec<DrumHit>> = vec![Vec::new(); 1];
+        steps[0].push(DrumHit {
+            note,
+            vel: 100,
+            prob: 1.0,
+            ratchet: 1,
+            micro,
+            cond: TrigCond::Always,
+        });
+        Lane {
+            profile: T8_DRUMS,
+            pattern: Pattern {
+                name: "micro_drum".to_string(),
+                desc: String::new(),
+                length: 1,
+                data: PatternData::Drums(steps),
+                id: crate::persist::Id::nil(),
+                cc: Default::default(),
+            },
+            mute: false,
+            solo: false,
+            transpose: 0,
+            octave: 0,
+            route: None,
+            muted_voices: Vec::new(),
+            scale: crate::music::scale::Scale::Chromatic,
+            root: None,
+            swing: None,
+            clock_div: None,
+        }
+    }
+
+    /// Helper: a one-step drum lane with ratchet=R and `micro` set.
+    fn drum_lane_micro_ratchet(note: u8, micro: i16, ratchet: u8) -> Lane {
+        let mut steps: Vec<Vec<DrumHit>> = vec![Vec::new(); 1];
+        steps[0].push(DrumHit {
+            note,
+            vel: 100,
+            prob: 1.0,
+            ratchet,
+            micro,
+            cond: TrigCond::Always,
+        });
+        Lane {
+            profile: T8_DRUMS,
+            pattern: Pattern {
+                name: "micro_ratchet_drum".to_string(),
+                desc: String::new(),
+                length: 1,
+                data: PatternData::Drums(steps),
+                id: crate::persist::Id::nil(),
+                cc: Default::default(),
+            },
+            mute: false,
+            solo: false,
+            transpose: 0,
+            octave: 0,
+            route: None,
+            muted_voices: Vec::new(),
+            scale: crate::music::scale::Scale::Chromatic,
+            root: None,
+            swing: None,
+            clock_div: None,
+        }
+    }
+
+    /// Helper: a one-step melodic lane with `micro` set.
+    fn melodic_lane_micro(semi: i8, micro: i16) -> Lane {
+        let note = MelodicNote {
+            semi,
+            vel: 1.0,
+            prob: 1.0,
+            ratchet: 1,
+            len: 0.5,
+            slide: false,
+            micro,
+            cond: TrigCond::Always,
+        };
+        melodic_lane(vec![Some(note)], false)
+    }
+
+    /// Helper: a one-step melodic lane with ratchet and `micro`.
+    fn melodic_lane_micro_ratchet(semi: i8, micro: i16, ratchet: u8) -> Lane {
+        let note = MelodicNote {
+            semi,
+            vel: 1.0,
+            prob: 1.0,
+            ratchet,
+            len: 0.5,
+            slide: false,
+            micro,
+            cond: TrigCond::Always,
+        };
+        melodic_lane(vec![Some(note)], false)
+    }
+
+    // ── drum microtiming ────────────────────────────────────────────────────
+
+    #[test]
+    fn drum_micro_positive_shifts_noteon_and_noteoff() {
+        let dur = step_dur_micros(120.0); // 125_000
+        let micro_val: i16 = 1_000; // +1 ms
+        let mut seq = Sequencer::new(set_with(vec![drum_lane_micro(36, micro_val)]));
+        let mut sink = RecordingSink::new();
+        seq.play(0);
+        // Run just under 1 step so only step 0 fires (not its repeat at t=dur).
+        run(&mut seq, &mut sink, dur - 1, 500);
+
+        let on_times: Vec<u64> = sink
+            .events
+            .iter()
+            .filter(|(_, m)| matches!(m, MidiMessage::NoteOn { note: 36, .. }))
+            .map(|(t, _)| *t)
+            .collect();
+        assert_eq!(
+            on_times,
+            vec![micro_val as u64],
+            "NoteOn must shift by +micro"
+        );
+
+        let gate = note_len_micros(T8_DRUMS.drum_gate_fraction, dur);
+        let off_times: Vec<u64> = sink
+            .events
+            .iter()
+            .filter(|(_, m)| matches!(m, MidiMessage::NoteOff { note: 36, .. }))
+            .map(|(t, _)| *t)
+            .collect();
+        assert_eq!(
+            off_times,
+            vec![micro_val as u64 + gate],
+            "NoteOff must shift by the same +micro"
+        );
+    }
+
+    #[test]
+    fn drum_micro_negative_shifts_noteon_and_noteoff() {
+        let dur = step_dur_micros(120.0); // 125_000
+        let micro_val: i16 = -2_000; // -2 ms
+        let mut seq = Sequencer::new(set_with(vec![drum_lane_micro(36, micro_val)]));
+        let mut sink = RecordingSink::new();
+        seq.play(0);
+        // step 0 is at swung=0; with micro=-2000 the on_at would be negative → clamped to 0
+        // But step 0 is at absolute 0, so negative micro on step 0 clamps to 0.
+        // Use step 1 offset: run TWO steps and check step-1 timing.
+        // Actually the lane is 1 step long so step 0 repeats at t=dur, t=2*dur, …
+        // At repeat on_at = dur + micro_val (which is positive for small micro).
+        run(&mut seq, &mut sink, 2 * dur - 1, 500);
+
+        // Second firing (step repetition at t=dur) should be at dur + micro_val.
+        let on_times: Vec<u64> = sink
+            .events
+            .iter()
+            .filter(|(_, m)| matches!(m, MidiMessage::NoteOn { note: 36, .. }))
+            .map(|(t, _)| *t)
+            .collect();
+        // First hit at t=0: swung=0, micro=-2000 → clamped to 0 (can't go negative).
+        // Second hit at t=dur: swung=dur, micro=-2000 → dur - 2000.
+        assert_eq!(
+            on_times,
+            vec![0, dur - 2_000],
+            "second NoteOn must shift by -micro; first is clamped at 0"
+        );
+    }
+
+    #[test]
+    fn drum_micro_zero_is_unchanged() {
+        let dur = step_dur_micros(120.0);
+        let mut seq = Sequencer::new(set_with(vec![drum_lane_micro(36, 0)]));
+        let mut sink = RecordingSink::new();
+        seq.play(0);
+        run(&mut seq, &mut sink, dur - 1, 500);
+
+        let on_times: Vec<u64> = sink
+            .events
+            .iter()
+            .filter(|(_, m)| matches!(m, MidiMessage::NoteOn { note: 36, .. }))
+            .map(|(t, _)| *t)
+            .collect();
+        assert_eq!(on_times, vec![0], "micro=0 must not change timing");
+    }
+
+    #[test]
+    fn drum_micro_clamped_beyond_half_step() {
+        // At 600 BPM: dur = 25_000; half = 12_500. i16::MAX = 32_767 > 12_500 → clamped.
+        let bpm = 600.0_f64;
+        let fast_dur = step_dur_micros(bpm); // 25_000
+        let half = fast_dur / 2; // 12_500
+        let mut set = set_with(vec![drum_lane_micro(36, i16::MAX)]);
+        set.bpm = bpm;
+        let mut seq = Sequencer::new(set);
+        let mut sink = RecordingSink::new();
+        seq.play(0);
+        run(&mut seq, &mut sink, fast_dur + 1, 200);
+
+        let on_times: Vec<u64> = sink
+            .events
+            .iter()
+            .filter(|(_, m)| matches!(m, MidiMessage::NoteOn { note: 36, .. }))
+            .map(|(t, _)| *t)
+            .collect();
+        assert_eq!(
+            on_times,
+            vec![half],
+            "micro beyond +½ step must clamp to +½ step"
+        );
+    }
+
+    #[test]
+    fn drum_ratchet_all_sub_events_shift_by_micro() {
+        let dur = step_dur_micros(120.0); // 125_000
+        let micro_val: i16 = 5_000;
+        let ratchet = 2u8;
+        let sub = dur / ratchet as u64; // 62_500
+        let mut seq = Sequencer::new(set_with(vec![drum_lane_micro_ratchet(
+            36, micro_val, ratchet,
+        )]));
+        let mut sink = RecordingSink::new();
+        seq.play(0);
+        run(&mut seq, &mut sink, dur - 1, 500);
+
+        let on_times: Vec<u64> = sink
+            .events
+            .iter()
+            .filter(|(_, m)| matches!(m, MidiMessage::NoteOn { note: 36, .. }))
+            .map(|(t, _)| *t)
+            .collect();
+        let expected_on = vec![
+            micro_val as u64,       // sub-hit 0: 0 + micro
+            sub + micro_val as u64, // sub-hit 1: sub + micro
+        ];
+        assert_eq!(
+            on_times, expected_on,
+            "all ratchet NoteOns must shift by micro"
+        );
+
+        let gate = note_len_micros(T8_DRUMS.drum_gate_fraction, sub);
+        let off_times: Vec<u64> = sink
+            .events
+            .iter()
+            .filter(|(_, m)| matches!(m, MidiMessage::NoteOff { note: 36, .. }))
+            .map(|(t, _)| *t)
+            .collect();
+        let expected_off = vec![micro_val as u64 + gate, sub + micro_val as u64 + gate];
+        assert_eq!(
+            off_times, expected_off,
+            "all ratchet NoteOffs must shift by micro"
+        );
+    }
+
+    // ── melodic microtiming ─────────────────────────────────────────────────
+
+    #[test]
+    fn melodic_micro_positive_shifts_noteon_and_noteoff() {
+        let dur = step_dur_micros(120.0);
+        let micro_val: i16 = 3_000;
+        let mut seq = Sequencer::new(set_with(vec![melodic_lane_micro(0, micro_val)]));
+        let mut sink = RecordingSink::new();
+        seq.play(0);
+        run(&mut seq, &mut sink, dur - 1, 500);
+
+        let on_times: Vec<u64> = sink
+            .events
+            .iter()
+            .filter(|(_, m)| matches!(m, MidiMessage::NoteOn { .. }))
+            .map(|(t, _)| *t)
+            .collect();
+        assert_eq!(
+            on_times,
+            vec![micro_val as u64],
+            "melodic NoteOn must shift by +micro"
+        );
+
+        let off_times: Vec<u64> = sink
+            .events
+            .iter()
+            .filter(|(_, m)| matches!(m, MidiMessage::NoteOff { .. }))
+            .map(|(t, _)| *t)
+            .collect();
+        // len=0.5 → off = on_at + note_len_micros(0.5, dur)
+        let expected_off = micro_val as u64 + note_len_micros(0.5, dur);
+        assert_eq!(
+            off_times,
+            vec![expected_off],
+            "melodic NoteOff must shift by same +micro"
+        );
+    }
+
+    #[test]
+    fn melodic_micro_zero_is_unchanged() {
+        let dur = step_dur_micros(120.0);
+        let mut seq = Sequencer::new(set_with(vec![melodic_lane_micro(0, 0)]));
+        let mut sink = RecordingSink::new();
+        seq.play(0);
+        run(&mut seq, &mut sink, dur - 1, 500);
+
+        let on_times: Vec<u64> = sink
+            .events
+            .iter()
+            .filter(|(_, m)| matches!(m, MidiMessage::NoteOn { .. }))
+            .map(|(t, _)| *t)
+            .collect();
+        assert_eq!(on_times, vec![0], "micro=0 must not change melodic timing");
+    }
+
+    #[test]
+    fn melodic_micro_clamped_beyond_half_step() {
+        // At 600 BPM dur=25_000; half=12_500; i16::MAX=32_767 → clamped to 12_500.
+        let bpm = 600.0_f64;
+        let fast_dur = step_dur_micros(bpm);
+        let half = fast_dur / 2;
+        let mut set = set_with(vec![melodic_lane_micro(0, i16::MAX)]);
+        set.bpm = bpm;
+        let mut seq = Sequencer::new(set);
+        let mut sink = RecordingSink::new();
+        seq.play(0);
+        run(&mut seq, &mut sink, fast_dur + 1, 200);
+
+        let on_times: Vec<u64> = sink
+            .events
+            .iter()
+            .filter(|(_, m)| matches!(m, MidiMessage::NoteOn { .. }))
+            .map(|(t, _)| *t)
+            .collect();
+        assert_eq!(
+            on_times,
+            vec![half],
+            "melodic micro beyond +½ step must clamp"
+        );
+    }
+
+    #[test]
+    fn melodic_ratchet_all_sub_events_shift_by_micro() {
+        let dur = step_dur_micros(120.0);
+        let micro_val: i16 = 4_000;
+        let ratchet = 2u8;
+        let sub = dur / ratchet as u64;
+        let mut seq = Sequencer::new(set_with(vec![melodic_lane_micro_ratchet(
+            0, micro_val, ratchet,
+        )]));
+        let mut sink = RecordingSink::new();
+        seq.play(0);
+        run(&mut seq, &mut sink, dur - 1, 500);
+
+        let on_times: Vec<u64> = sink
+            .events
+            .iter()
+            .filter(|(_, m)| matches!(m, MidiMessage::NoteOn { .. }))
+            .map(|(t, _)| *t)
+            .collect();
+        let expected_on = vec![micro_val as u64, sub + micro_val as u64];
+        assert_eq!(
+            on_times, expected_on,
+            "all melodic ratchet NoteOns must shift by micro"
+        );
+    }
+
+    // ── chord microtiming ────────────────────────────────────────────────────
+
+    fn chord_lane_micro(micro_a: i16, micro_b: i16) -> Lane {
+        // Two-note chord: semis 0 and 4, each with their own micro.
+        let note_a = MelodicNote {
+            semi: 0,
+            vel: 1.0,
+            prob: 1.0,
+            ratchet: 1,
+            len: 0.5,
+            slide: false,
+            micro: micro_a,
+            cond: TrigCond::Always,
+        };
+        let note_b = MelodicNote {
+            semi: 4,
+            vel: 1.0,
+            prob: 1.0,
+            ratchet: 1,
+            len: 0.5,
+            slide: false,
+            micro: micro_b,
+            cond: TrigCond::Always,
+        };
+        let steps = vec![crate::pattern::model::MelodicStep::from(vec![
+            note_a, note_b,
+        ])];
+        Lane {
+            profile: S1,
+            pattern: Pattern {
+                name: "chord_micro".to_string(),
+                desc: String::new(),
+                length: 1,
+                data: PatternData::Melodic(steps),
+                id: crate::persist::Id::nil(),
+                cc: Default::default(),
+            },
+            mute: false,
+            solo: false,
+            transpose: 0,
+            octave: 0,
+            route: None,
+            muted_voices: Vec::new(),
+            scale: crate::music::scale::Scale::Chromatic,
+            root: None,
+            swing: None,
+            clock_div: None,
+        }
+    }
+
+    #[test]
+    fn chord_micro_per_note_shifts_independently() {
+        use crate::devices::profiles::resolve_melodic_pitch;
+        let dur = step_dur_micros(120.0);
+        let micro_a: i16 = 2_000;
+        let micro_b: i16 = -1_000;
+        let mut seq = Sequencer::new(set_with(vec![chord_lane_micro(micro_a, micro_b)]));
+        let mut sink = RecordingSink::new();
+        seq.play(0);
+        run(&mut seq, &mut sink, dur - 1, 500);
+
+        let root = S1.root_note;
+        let pitch_a = resolve_melodic_pitch(root, 0, 0, 0);
+        let pitch_b = resolve_melodic_pitch(root, 4, 0, 0);
+        let ch = S1.channel;
+
+        let on_a: Vec<u64> = sink
+            .events
+            .iter()
+            .filter(|(_, m)| {
+                *m == MidiMessage::NoteOn {
+                    channel: ch,
+                    note: pitch_a,
+                    vel: 100,
+                }
+            })
+            .map(|(t, _)| *t)
+            .collect();
+        let on_b: Vec<u64> = sink
+            .events
+            .iter()
+            .filter(|(_, m)| {
+                *m == MidiMessage::NoteOn {
+                    channel: ch,
+                    note: pitch_b,
+                    vel: 100,
+                }
+            })
+            .map(|(t, _)| *t)
+            .collect();
+
+        assert_eq!(
+            on_a,
+            vec![micro_a as u64],
+            "chord note A must shift by micro_a"
+        );
+        // micro_b = -1000; swung=0 → on_at = (0 - 1000).max(0) = 0 (clamped)
+        assert_eq!(
+            on_b,
+            vec![0],
+            "chord note B with negative micro at t=0 must clamp to 0"
+        );
+    }
+
+    #[test]
+    fn chord_micro_zero_unchanged() {
+        let dur = step_dur_micros(120.0);
+        let mut seq = Sequencer::new(set_with(vec![chord_lane_micro(0, 0)]));
+        let mut sink = RecordingSink::new();
+        seq.play(0);
+        run(&mut seq, &mut sink, dur - 1, 500);
+
+        let on_times: Vec<u64> = sink
+            .events
+            .iter()
+            .filter(|(_, m)| matches!(m, MidiMessage::NoteOn { .. }))
+            .map(|(t, _)| *t)
+            .collect();
+        // Both notes at t=0
+        assert_eq!(on_times, vec![0, 0], "chord micro=0 must not shift timing");
     }
 }
