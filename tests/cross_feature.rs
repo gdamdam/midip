@@ -900,3 +900,165 @@ fn link_step_mapping_is_the_shipped_one() {
     assert_eq!(step_from_beat(1.0), 4);
     assert_eq!(step_from_beat(4.0), 16);
 }
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 9. Chord survives save → load and plays with clean note release (M5b close-out).
+//    Features combined: poly S-1 chord entry (MelodicStep ≥ 2 notes) ×
+//    adaptive JSON serialization × store save_set/load_set round-trip ×
+//    engine playback asserting 3 NoteOns per chord step × CC123 clean release.
+// ═════════════════════════════════════════════════════════════════════════════
+
+/// Build a chord MelodicStep from a slice of `(semi, len)` pairs.
+fn chord_step(notes: &[(i8, f32)]) -> MelodicStep {
+    MelodicStep::from(
+        notes
+            .iter()
+            .map(|&(semi, len)| MelodicNote {
+                semi,
+                vel: 1.0,
+                slide: false,
+                len,
+                prob: 1.0,
+                ratchet: 1,
+            })
+            .collect::<Vec<_>>(),
+    )
+}
+
+#[test]
+fn chord_survives_save_load_and_plays_with_clean_release() {
+    // ── 1. Build a Set with a poly S-1 lane containing a chord, a rest and a mono step ──
+    let profs = profiles::default_profiles();
+    // profs[2] is S-1 SYNTH (poly == true, channel 0, root_note 45).
+    let s1_prof = profs[2];
+    assert!(
+        s1_prof.poly,
+        "fixture assumes profs[2] is the poly S-1 profile"
+    );
+
+    // Pattern layout (16 steps):
+    //   step  0 – C-major triad semis 0,4,7 (chord, 3 notes)
+    //   step  4 – mono note semi 12
+    //   step  8 – rest (MelodicStep::default(), 0 notes)
+    //   all others – rest
+    let mut steps: Vec<MelodicStep> = vec![MelodicStep::default(); 16];
+    // step 0: C-major triad; step 4: mono; step 8: rest (default)
+    steps[0] = chord_step(&[(0, 0.9), (4, 0.9), (7, 0.9)]);
+    steps[4] = chord_step(&[(12, 0.5)]);
+
+    let chord_pat = Pattern {
+        name: "chord-test".into(),
+        desc: String::new(),
+        length: 16,
+        data: PatternData::Melodic(steps),
+        id: midip::persist::Id::nil(),
+    };
+
+    let set = Set {
+        name: "chord-roundtrip".into(),
+        bpm: 120.0,
+        swing: 0.5,
+        lanes: vec![lane(s1_prof, chord_pat)],
+        id: midip::persist::Id::nil(),
+    };
+
+    // ── 2. Save → load round-trip ──
+    let dir = unique_dir("chord-roundtrip");
+    let path = store::save_set(&dir, &mut set.clone()).unwrap();
+    let loaded = store::load_set(&path).unwrap();
+
+    // ── 3. Assert model survived adaptive serialization ──
+    let loaded_steps = match &loaded.lanes[0].pattern.data {
+        PatternData::Melodic(s) => s,
+        _ => panic!("expected Melodic pattern after load"),
+    };
+
+    // Chord step: 3 notes with the original semis, in any order.
+    let chord = &loaded_steps[0];
+    assert_eq!(
+        chord.len(),
+        3,
+        "chord step must have exactly 3 notes after round-trip; got {:?}",
+        chord.iter().map(|n| n.semi).collect::<Vec<_>>()
+    );
+    let mut loaded_semis: Vec<i8> = chord.iter().map(|n| n.semi).collect();
+    loaded_semis.sort_unstable();
+    assert_eq!(
+        loaded_semis,
+        vec![0, 4, 7],
+        "chord semis must survive adaptive serialize round-trip"
+    );
+
+    // Mono step: exactly 1 note.
+    assert_eq!(
+        loaded_steps[4].len(),
+        1,
+        "mono step must still have 1 note after round-trip"
+    );
+    assert_eq!(loaded_steps[4][0].semi, 12);
+
+    // Rest step: 0 notes.
+    assert_eq!(
+        loaded_steps[8].len(),
+        0,
+        "rest step must remain empty after round-trip"
+    );
+
+    // ── 4. Play: drive the engine and assert 3 NoteOns for the chord + clean release ──
+    // S-1: channel 0, root_note 45, transpose 0, octave 0.
+    // resolve_melodic_pitch(45, semi, 0, 0) = 45 + semi.
+    // Chord note numbers: 45 (semi 0), 49 (semi 4), 52 (semi 7).
+    let expected_chord_notes: Vec<u8> = vec![45, 49, 52];
+
+    let mut link = FakeLink::new();
+    let mut sink = RecordingSink::new();
+    let step = step_dur_micros(120.0);
+    // Run one full bar (16 steps) + a small margin, then stop.
+    let total = step * 16;
+    let stop_at = total; // stop command issued at the bar boundary
+
+    run_engine_headless(
+        loaded,
+        &mut link,
+        &mut sink,
+        vec![(0, UiCommand::Play), (stop_at, UiCommand::Stop)],
+        total + step, // give one extra step so stop tick executes
+        1_000,
+    );
+
+    // Assert all 3 chord notes fired on channel 0.
+    let ons = note_ons(&sink);
+    for &expected_note in &expected_chord_notes {
+        let hits: Vec<_> = ons
+            .iter()
+            .filter(|(_, ch, n, _)| *ch == 0 && *n == expected_note)
+            .collect();
+        assert_eq!(
+            hits.len(),
+            1,
+            "expected exactly 1 NoteOn for chord note {expected_note} on ch 0, got {:?}",
+            hits
+        );
+    }
+
+    // Assert clean release: CC123 (All Notes Off) must have been emitted on
+    // channel 0 at or after stop, proving release_all ran and no chord note is hung.
+    let cc123_on_ch0 = sink.events.iter().any(|(at, m)| {
+        *at >= stop_at
+            && matches!(
+                m,
+                MidiMessage::ControlChange {
+                    channel: 0,
+                    controller: 123,
+                    ..
+                }
+            )
+    });
+    assert!(
+        cc123_on_ch0,
+        "expected CC123 (all-notes-off) on S-1 channel 0 at/after stop — chord notes must be released cleanly"
+    );
+
+    // Clean up.
+    let _ = std::fs::remove_dir_all(&dir);
+}
