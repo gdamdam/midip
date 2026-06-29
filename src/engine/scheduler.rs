@@ -5095,4 +5095,79 @@ mod sequencer_tests {
             "Melodic: Ratio 1:2 must fire every other loop"
         );
     }
+
+    /// Build a melodic lane whose step 0 is a *chord* (≥2 notes), so the
+    /// scheduler routes through `materialize_chord_step`.  Both notes carry
+    /// the supplied condition.
+    fn chord_lane_two_notes_cond(cond: TrigCond) -> Lane {
+        let make_note = |semi: i8| MelodicNote {
+            semi,
+            vel: 1.0,
+            len: 0.5,
+            slide: false,
+            ratchet: 1,
+            micro: 0,
+            prob: 1.0,
+            cond: cond.clone(),
+        };
+        // Two notes → len() >= 2 → materialize_chord_step path.
+        let steps: Vec<MelodicStep> = vec![
+            MelodicStep::from(vec![make_note(0), make_note(4)]),
+            MelodicStep::from(vec![]),
+            MelodicStep::from(vec![]),
+            MelodicStep::from(vec![]),
+        ];
+        Lane {
+            profile: S1,
+            pattern: Pattern {
+                name: "cond_chord".to_string(),
+                desc: String::new(),
+                length: 4,
+                data: PatternData::Melodic(steps),
+                id: crate::persist::Id::nil(),
+                cc: Default::default(),
+            },
+            mute: false,
+            solo: false,
+            transpose: 0,
+            octave: 0,
+            route: None,
+            muted_voices: Vec::new(),
+            scale: crate::music::scale::Scale::Chromatic,
+            root: None,
+            swing: None,
+            clock_div: None,
+        }
+    }
+
+    /// Chord path (`materialize_chord_step`) honours the trig-condition gate.
+    /// Step 0 has 2 notes with Ratio{1,2} → fires on loops 0 and 2 only.
+    /// Each firing loop emits 2 NoteOns (one per chord note), giving 4 total.
+    #[test]
+    fn trig_gate_chord_ratio_fires_every_other_loop() {
+        let lane = chord_lane_two_notes_cond(TrigCond::Ratio { x: 1, y: 2 });
+        let seq = Sequencer::new(set_with(vec![lane]));
+        let (_, sink) = run_loops(seq, 4);
+        // 2 notes × 2 firing loops (0, 2) = 4 NoteOns.
+        assert_eq!(
+            count_any_note_ons(&sink),
+            4,
+            "Chord path: Ratio 1:2 must fire on loops 0 and 2 only (2 notes × 2 loops = 4)"
+        );
+    }
+
+    /// `TrigCond::NotFirst` must suppress the step on loop 0 and allow it on
+    /// all subsequent loops.  Tested via the drum path for simplicity.
+    #[test]
+    fn trig_gate_not_first_skips_loop_0_fires_rest() {
+        let lane = drum_lane_single_hit_cond(TrigCond::NotFirst);
+        let seq = Sequencer::new(set_with(vec![lane]));
+        let (_, sink) = run_loops(seq, 4);
+        // Loops 1, 2, 3 fire; loop 0 is suppressed.
+        assert_eq!(
+            count_note_ons_for(&sink, 60),
+            3,
+            "NotFirst must suppress loop 0 and fire on loops 1-3"
+        );
+    }
 }
