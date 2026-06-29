@@ -716,8 +716,6 @@ impl Sequencer {
         // recomputed from origin + step * dur, so tempo changes don't shift
         // already-queued steps.
         let step_start = step_at;
-        let swung =
-            (step_start as i64 + swing_offset_micros(step, self.set.swing, dur)).max(0) as u64;
 
         let any_solo = self.set.lanes.iter().any(|l| l.solo);
 
@@ -725,12 +723,44 @@ impl Sequencer {
             if !self.lane_audible(lane_idx, any_solo) {
                 continue;
             }
+
+            // Per-lane clock division gate (M8 T7): a lane with clock_div=Some(N)
+            // where N >= 2 only materializes when (step - launch_offset) % N == 0,
+            // anchored to the lane's launch offset exactly as local_step_for is.
+            // clock_div=None or Some(1) passes through every step (unchanged behavior).
+            let div = self.set.lanes[lane_idx].clock_div.unwrap_or(1).max(1) as usize;
+            let off = self.launch_offset.get(lane_idx).copied().unwrap_or(0);
+            let steps_since_launch = step.wrapping_sub(off);
+            if div >= 2 && steps_since_launch % div != 0 {
+                continue;
+            }
+
+            // When clock_div=N, the lane's local step must advance once per N global
+            // steps.  We convert the global step into a "lane-time step" by dividing
+            // the elapsed steps by N before passing to the materializer.  This keeps
+            // local_step_for / loop_index_for correct without touching those helpers:
+            //   effective_step = off + steps_since_launch / div
+            // so that (effective_step - off) % count = (steps_since_launch / div) % count.
+            let effective_step = if div >= 2 {
+                off.wrapping_add(steps_since_launch / div)
+            } else {
+                step
+            };
+
+            // Per-lane swing override (M8 T7): use lane.swing if set, else global.
+            // Computed per-lane so two lanes in the same Set can swing differently.
+            let lane_swing = self.set.lanes[lane_idx].swing.unwrap_or(self.set.swing);
+            // Swing is keyed on the global step index so even/odd alternation stays
+            // consistent with the global grid regardless of division.
+            let swung =
+                (step_start as i64 + swing_offset_micros(step, lane_swing, dur)).max(0) as u64;
+
             let kind_is_drums =
                 matches!(self.set.lanes[lane_idx].pattern.data, PatternData::Drums(_));
             if kind_is_drums {
-                self.materialize_drum_step(lane_idx, step, swung, dur);
+                self.materialize_drum_step(lane_idx, effective_step, swung, dur);
             } else {
-                self.materialize_melodic_step(lane_idx, step, swung, dur);
+                self.materialize_melodic_step(lane_idx, effective_step, swung, dur);
             }
         }
     }
@@ -5168,6 +5198,504 @@ mod sequencer_tests {
             count_note_ons_for(&sink, 60),
             3,
             "NotFirst must suppress loop 0 and fire on loops 1-3"
+        );
+    }
+
+    // ── M8 Task 7: per-lane swing override + clock division ───────────────
+
+    /// Helper: 4-step drum lane with a hit on step 0.
+    fn drum_lane_single_hit_swing_div(swing: Option<f32>, clock_div: Option<u8>) -> Lane {
+        let mut steps: Vec<Vec<DrumHit>> = vec![Vec::new(); 4];
+        steps[0].push(DrumHit {
+            note: 60,
+            vel: 100,
+            prob: 1.0,
+            ratchet: 1,
+            micro: 0,
+            cond: TrigCond::Always,
+        });
+        Lane {
+            profile: T8_DRUMS,
+            pattern: Pattern {
+                name: "swing_div".to_string(),
+                desc: String::new(),
+                length: 4,
+                data: PatternData::Drums(steps),
+                id: crate::persist::Id::nil(),
+                cc: Default::default(),
+            },
+            mute: false,
+            solo: false,
+            transpose: 0,
+            octave: 0,
+            route: None,
+            muted_voices: Vec::new(),
+            scale: crate::music::scale::Scale::Chromatic,
+            root: None,
+            swing,
+            clock_div,
+        }
+    }
+
+    /// A lane with per-lane swing=0.7 produces a DIFFERENT odd-step offset than
+    /// the global swing=0.5.  We run two lanes in the same Set: lane 0 uses global
+    /// (swing=None), lane 1 overrides to 0.7.  Both have a hit only on step 1 (odd),
+    /// so we can compare their NoteOn times.
+    ///
+    /// Global swing 0.5 → offset = 0 µs on odd steps (straight).
+    /// Per-lane swing 0.7 → offset = (0.7-0.5)*125_000*2 = 50_000 µs on odd steps.
+    #[test]
+    fn per_lane_swing_override_changes_odd_step_timing() {
+        let dur = step_dur_micros(120.0); // 125_000 µs
+
+        // Lane 0: hit on step 1 only; uses global swing (0.5 → offset 0).
+        let mut steps0: Vec<Vec<DrumHit>> = vec![Vec::new(); 4];
+        steps0[1].push(DrumHit {
+            note: 61,
+            vel: 100,
+            prob: 1.0,
+            ratchet: 1,
+            micro: 0,
+            cond: TrigCond::Always,
+        });
+        let lane0 = Lane {
+            profile: T8_DRUMS,
+            pattern: Pattern {
+                name: "global_sw".to_string(),
+                desc: String::new(),
+                length: 4,
+                data: PatternData::Drums(steps0),
+                id: crate::persist::Id::nil(),
+                cc: Default::default(),
+            },
+            mute: false,
+            solo: false,
+            transpose: 0,
+            octave: 0,
+            route: None,
+            muted_voices: Vec::new(),
+            scale: crate::music::scale::Scale::Chromatic,
+            root: None,
+            swing: None, // use global 0.5 → straight
+            clock_div: None,
+        };
+
+        // Lane 1: same hit on step 1; per-lane swing 0.7 → 50_000 µs offset.
+        let mut steps1: Vec<Vec<DrumHit>> = vec![Vec::new(); 4];
+        steps1[1].push(DrumHit {
+            note: 62,
+            vel: 100,
+            prob: 1.0,
+            ratchet: 1,
+            micro: 0,
+            cond: TrigCond::Always,
+        });
+        let lane1 = Lane {
+            profile: T8_DRUMS,
+            pattern: Pattern {
+                name: "lane_sw".to_string(),
+                desc: String::new(),
+                length: 4,
+                data: PatternData::Drums(steps1),
+                id: crate::persist::Id::nil(),
+                cc: Default::default(),
+            },
+            mute: false,
+            solo: false,
+            transpose: 0,
+            octave: 0,
+            route: None,
+            muted_voices: Vec::new(),
+            scale: crate::music::scale::Scale::Chromatic,
+            root: None,
+            swing: Some(0.7), // per-lane override
+            clock_div: None,
+        };
+
+        // Global swing = 0.5 (straight).
+        let set = Set {
+            name: "test".to_string(),
+            bpm: 120.0,
+            swing: 0.5,
+            lanes: vec![lane0, lane1],
+            id: crate::persist::Id::nil(),
+            scenes: Vec::new(),
+            chains: Vec::new(),
+        };
+        let mut seq = Sequencer::new(set);
+        let mut sink = RecordingSink::new();
+        seq.play(0);
+        // Run for exactly one bar (4 steps) — stop just before step 4.
+        let total = 4 * dur - dur / 4;
+        let mut t = 0u64;
+        while t <= total {
+            seq.tick(t, &mut sink);
+            t += dur / 8;
+        }
+
+        // Collect NoteOn times per note.
+        let time_for = |note: u8| -> Option<u64> {
+            sink.events
+                .iter()
+                .find(|(_, m)| matches!(m, MidiMessage::NoteOn { note: n, .. } if *n == note))
+                .map(|(t, _)| *t)
+        };
+
+        let t_global = time_for(61).expect("lane0 (note 61) must have fired");
+        let t_per = time_for(62).expect("lane1 (note 62) must have fired");
+
+        // Global swing=0.5 on odd step 1: step_start=dur, offset=0 → fires at dur.
+        assert_eq!(
+            t_global, dur,
+            "global-swing lane must fire straight at step 1"
+        );
+        // Per-lane swing=0.7: offset = (0.7-0.5)*dur*2 = 50_000 µs.
+        let expected_offset = ((0.7_f64 - 0.5) * dur as f64 * 2.0).round() as u64;
+        assert_eq!(
+            t_per,
+            dur + expected_offset,
+            "per-lane swing=0.7 must delay odd step by {expected_offset} µs"
+        );
+        // The two lanes must fire at DIFFERENT times.
+        assert_ne!(
+            t_global, t_per,
+            "per-lane swing must differ from global swing"
+        );
+    }
+
+    /// A lane with clock_div=None or Some(1) fires every global step (unchanged behavior).
+    #[test]
+    fn clock_div_none_and_one_fire_every_step() {
+        // 4-step pattern, hit on step 0 — runs 4 loops → 4 fires.
+        let lane_none = drum_lane_single_hit_swing_div(None, None);
+        let seq = Sequencer::new(set_with(vec![lane_none]));
+        let (_, sink) = run_loops(seq, 4);
+        assert_eq!(
+            count_note_ons_for(&sink, 60),
+            4,
+            "clock_div=None must fire every loop"
+        );
+
+        let lane_one = drum_lane_single_hit_swing_div(None, Some(1));
+        let seq2 = Sequencer::new(set_with(vec![lane_one]));
+        let (_, sink2) = run_loops(seq2, 4);
+        assert_eq!(
+            count_note_ons_for(&sink2, 60),
+            4,
+            "clock_div=Some(1) must fire every loop"
+        );
+    }
+
+    /// A lane with clock_div=Some(2) fires its local step only on every other global
+    /// step.  Pattern has 2 steps: hit on local step 0, rest on local step 1.
+    /// Global steps: 0,1,2,3,4,5,6,7 (2 loops of a 4-step global tick = 8 global steps
+    /// if pattern=2 with div=2: local advances on even globals 0,2,4,6 → 4 advances,
+    /// each pair consumes one local cycle).
+    ///
+    /// Simpler: run 8 global steps with a 2-step pattern and clock_div=2.
+    /// Local fires at global 0,2,4,6 → local step 0 at globals 0,4; local step 1 at globals 2,6.
+    /// Hit is only on local step 0 → 2 NoteOns expected.
+    #[test]
+    fn clock_div_2_halves_lane_step_rate() {
+        let mut steps: Vec<Vec<DrumHit>> = vec![Vec::new(); 2];
+        steps[0].push(DrumHit {
+            note: 60,
+            vel: 100,
+            prob: 1.0,
+            ratchet: 1,
+            micro: 0,
+            cond: TrigCond::Always,
+        });
+        // steps[1] is empty (rest)
+        let lane = Lane {
+            profile: T8_DRUMS,
+            pattern: Pattern {
+                name: "div2".to_string(),
+                desc: String::new(),
+                length: 2,
+                data: PatternData::Drums(steps),
+                id: crate::persist::Id::nil(),
+                cc: Default::default(),
+            },
+            mute: false,
+            solo: false,
+            transpose: 0,
+            octave: 0,
+            route: None,
+            muted_voices: Vec::new(),
+            scale: crate::music::scale::Scale::Chromatic,
+            root: None,
+            swing: None,
+            clock_div: Some(2),
+        };
+
+        let dur = step_dur_micros(120.0); // 125_000 µs
+        let mut seq = Sequencer::new(set_with(vec![lane]));
+        let mut sink = RecordingSink::new();
+        seq.play(0);
+        // Run 8 global steps (just before step 8).
+        let total = 8 * dur - dur / 4;
+        let mut t = 0u64;
+        while t <= total {
+            seq.tick(t, &mut sink);
+            t += dur / 8;
+        }
+
+        // Local step 0 fires at global steps 0 and 4 → 2 NoteOns.
+        assert_eq!(
+            count_note_ons_for(&sink, 60),
+            2,
+            "clock_div=2 with 2-step pattern: local step 0 fires at globals 0,4 → 2 hits"
+        );
+
+        // Verify NoteOn times: global step 0 and global step 4.
+        let on_times: Vec<u64> = sink
+            .events
+            .iter()
+            .filter(|(_, m)| matches!(m, MidiMessage::NoteOn { note: 60, .. }))
+            .map(|(t, _)| *t)
+            .collect();
+        assert_eq!(
+            on_times,
+            vec![0, 4 * dur],
+            "NoteOns must be at global steps 0 and 4"
+        );
+    }
+
+    /// clock_div=4 advances the lane once every 4 global steps (quarter-time).
+    /// 4-step pattern, hit on step 0 only.  Run 16 global steps → local step 0
+    /// fires at global steps 0,4,8,12 → 4 NoteOns? No: div=4, 4-step pattern.
+    /// Local advances at globals 0,4,8,12 → local 0,1,2,3 → hit only at local 0
+    /// → 1 NoteOn at global 0.  Run 16 globals: local cycles at 0,4,8,12 (local
+    /// 0→3 one cycle), then 16 triggers local 0 again… but let's stay 16 steps.
+    /// Globals 0,4,8,12: local 0,1,2,3 → 1 hit on local 0 → 1 NoteOn.
+    #[test]
+    fn clock_div_4_quarter_time() {
+        let dur = step_dur_micros(120.0);
+
+        // 4-step pattern, hit on step 0 only.
+        let mut steps: Vec<Vec<DrumHit>> = vec![Vec::new(); 4];
+        steps[0].push(DrumHit {
+            note: 60,
+            vel: 100,
+            prob: 1.0,
+            ratchet: 1,
+            micro: 0,
+            cond: TrigCond::Always,
+        });
+        let lane = Lane {
+            profile: T8_DRUMS,
+            pattern: Pattern {
+                name: "div4".to_string(),
+                desc: String::new(),
+                length: 4,
+                data: PatternData::Drums(steps),
+                id: crate::persist::Id::nil(),
+                cc: Default::default(),
+            },
+            mute: false,
+            solo: false,
+            transpose: 0,
+            octave: 0,
+            route: None,
+            muted_voices: Vec::new(),
+            scale: crate::music::scale::Scale::Chromatic,
+            root: None,
+            swing: None,
+            clock_div: Some(4),
+        };
+
+        let mut seq = Sequencer::new(set_with(vec![lane]));
+        let mut sink = RecordingSink::new();
+        seq.play(0);
+        // Run 16 global steps (just before step 16).
+        let total = 16 * dur - dur / 4;
+        let mut t = 0u64;
+        while t <= total {
+            seq.tick(t, &mut sink);
+            t += dur / 8;
+        }
+
+        // div=4, 4-step pattern: local advances at globals 0,4,8,12.
+        // local 0→hit at global 0; local 1→no hit at global 4; etc. → 1 NoteOn.
+        assert_eq!(
+            count_note_ons_for(&sink, 60),
+            1,
+            "clock_div=4 with 4-step pattern: only local step 0 fires in 16 global steps"
+        );
+        let on_times: Vec<u64> = sink
+            .events
+            .iter()
+            .filter(|(_, m)| matches!(m, MidiMessage::NoteOn { note: 60, .. }))
+            .map(|(t, _)| *t)
+            .collect();
+        assert_eq!(
+            on_times,
+            vec![0],
+            "clock_div=4 first fire must be at global step 0"
+        );
+    }
+
+    /// Polymeter coexistence: a divided lane (clock_div=2, 2-step pattern) alongside
+    /// a normal lane (4-step).  The normal lane fires on every global step; the divided
+    /// lane fires half as often.  Neither should interfere with the other.
+    #[test]
+    fn clock_div_coexists_with_normal_lane_polymeter() {
+        let dur = step_dur_micros(120.0);
+
+        // Normal 4-step lane, hit on step 0 (note 61).
+        let mut normal_steps: Vec<Vec<DrumHit>> = vec![Vec::new(); 4];
+        normal_steps[0].push(DrumHit {
+            note: 61,
+            vel: 100,
+            prob: 1.0,
+            ratchet: 1,
+            micro: 0,
+            cond: TrigCond::Always,
+        });
+        let normal_lane = Lane {
+            profile: T8_DRUMS,
+            pattern: Pattern {
+                name: "normal".to_string(),
+                desc: String::new(),
+                length: 4,
+                data: PatternData::Drums(normal_steps),
+                id: crate::persist::Id::nil(),
+                cc: Default::default(),
+            },
+            mute: false,
+            solo: false,
+            transpose: 0,
+            octave: 0,
+            route: None,
+            muted_voices: Vec::new(),
+            scale: crate::music::scale::Scale::Chromatic,
+            root: None,
+            swing: None,
+            clock_div: None,
+        };
+
+        // Divided 2-step lane, hit on local step 0 (note 60), clock_div=2.
+        let mut div_steps: Vec<Vec<DrumHit>> = vec![Vec::new(); 2];
+        div_steps[0].push(DrumHit {
+            note: 60,
+            vel: 100,
+            prob: 1.0,
+            ratchet: 1,
+            micro: 0,
+            cond: TrigCond::Always,
+        });
+        let div_lane = Lane {
+            profile: T8_DRUMS,
+            pattern: Pattern {
+                name: "div".to_string(),
+                desc: String::new(),
+                length: 2,
+                data: PatternData::Drums(div_steps),
+                id: crate::persist::Id::nil(),
+                cc: Default::default(),
+            },
+            mute: false,
+            solo: false,
+            transpose: 0,
+            octave: 0,
+            route: None,
+            muted_voices: Vec::new(),
+            scale: crate::music::scale::Scale::Chromatic,
+            root: None,
+            swing: None,
+            clock_div: Some(2),
+        };
+
+        let mut seq = Sequencer::new(set_with(vec![normal_lane, div_lane]));
+        let mut sink = RecordingSink::new();
+        seq.play(0);
+        // Run 8 global steps.
+        let total = 8 * dur - dur / 4;
+        let mut t = 0u64;
+        while t <= total {
+            seq.tick(t, &mut sink);
+            t += dur / 8;
+        }
+
+        // Normal lane (note 61): hits at local step 0 → globals 0,4 → 2 NoteOns.
+        assert_eq!(
+            count_note_ons_for(&sink, 61),
+            2,
+            "normal lane must fire at globals 0,4 (step 0 of 4-step pattern)"
+        );
+        // Divided lane (note 60): local step 0 at globals 0,4 → 2 NoteOns.
+        assert_eq!(
+            count_note_ons_for(&sink, 60),
+            2,
+            "divided lane (div=2) local step 0 fires at globals 0,4 → 2 hits"
+        );
+    }
+
+    /// No hung notes: a clock_div=2 lane that skips odd global steps must not
+    /// leave dangling NoteOff events (each NoteOn has a matching NoteOff).
+    #[test]
+    fn clock_div_no_hung_notes() {
+        let dur = step_dur_micros(120.0);
+
+        // 2-step pattern, hit on step 0, clock_div=2.
+        let mut steps: Vec<Vec<DrumHit>> = vec![Vec::new(); 2];
+        steps[0].push(DrumHit {
+            note: 60,
+            vel: 100,
+            prob: 1.0,
+            ratchet: 1,
+            micro: 0,
+            cond: TrigCond::Always,
+        });
+        let lane = Lane {
+            profile: T8_DRUMS,
+            pattern: Pattern {
+                name: "hung".to_string(),
+                desc: String::new(),
+                length: 2,
+                data: PatternData::Drums(steps),
+                id: crate::persist::Id::nil(),
+                cc: Default::default(),
+            },
+            mute: false,
+            solo: false,
+            transpose: 0,
+            octave: 0,
+            route: None,
+            muted_voices: Vec::new(),
+            scale: crate::music::scale::Scale::Chromatic,
+            root: None,
+            swing: None,
+            clock_div: Some(2),
+        };
+
+        let mut seq = Sequencer::new(set_with(vec![lane]));
+        let mut sink = RecordingSink::new();
+        seq.play(0);
+        // Run 8 global steps + a little extra for NoteOffs to land.
+        let gate = note_len_micros(T8_DRUMS.drum_gate_fraction, dur);
+        let total = 8 * dur + gate + dur;
+        let mut t = 0u64;
+        while t <= total {
+            seq.tick(t, &mut sink);
+            t += dur / 8;
+        }
+
+        let n_ons = sink
+            .events
+            .iter()
+            .filter(|(_, m)| matches!(m, MidiMessage::NoteOn { note: 60, .. }))
+            .count();
+        let n_offs = sink
+            .events
+            .iter()
+            .filter(|(_, m)| matches!(m, MidiMessage::NoteOff { note: 60, .. }))
+            .count();
+        assert!(n_ons > 0, "must have some NoteOns");
+        assert_eq!(
+            n_ons, n_offs,
+            "every NoteOn must have a matching NoteOff (no hung notes)"
         );
     }
 }
