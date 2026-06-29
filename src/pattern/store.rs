@@ -56,6 +56,9 @@ struct LaneDto {
     /// Explicit routing override. Absent in old files → serde default `None`.
     #[serde(default)]
     route: Option<LaneRoute>,
+    /// Per-voice mute set. Absent in old files → serde default empty vec.
+    #[serde(default)]
+    muted_voices: Vec<u8>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -80,6 +83,7 @@ impl From<&Lane> for LaneDto {
             transpose: lane.transpose,
             octave: lane.octave,
             route: lane.route.clone(),
+            muted_voices: lane.muted_voices.clone(),
         }
     }
 }
@@ -206,6 +210,7 @@ pub fn load_set_with_report(path: &Path) -> anyhow::Result<(Set, Vec<String>)> {
             transpose: l.transpose,
             octave: l.octave,
             route: l.route,
+            muted_voices: l.muted_voices,
         });
     }
     let mut set = Set {
@@ -1177,6 +1182,46 @@ mod tests {
 
         // Loading should fail with an unknown profile id error
         assert!(load_set(&path).is_err());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// §2.6: muted_voices persists through save+load; old files (no field) load as empty.
+    #[test]
+    fn lane_muted_voices_serde_roundtrips() {
+        let dir = unique_dir("muted-voices-roundtrip");
+        let mut set = Set::default_set(default_profiles());
+        // Set muted_voices on lane 0 (drums).
+        set.lanes[0].muted_voices = vec![36, 42];
+
+        let path = save_set(&dir, &mut set).unwrap();
+        let loaded = load_set(&path).unwrap();
+
+        assert_eq!(
+            loaded.lanes[0].muted_voices,
+            vec![36, 42],
+            "muted_voices must survive save+load"
+        );
+        // Lanes without muted_voices set must come back as empty.
+        assert!(
+            loaded.lanes[1].muted_voices.is_empty(),
+            "lane without muted_voices must load as empty"
+        );
+
+        // Verify old JSON (no muted_voices field) loads with empty vec.
+        let json_str = std::fs::read_to_string(&path).unwrap();
+        let mut json: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+        json["lanes"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("muted_voices");
+        let tmp = dir.join("old-format.json");
+        std::fs::write(&tmp, json.to_string()).unwrap();
+        let old_loaded = load_set(&tmp).unwrap();
+        assert!(
+            old_loaded.lanes[0].muted_voices.is_empty(),
+            "old JSON without muted_voices must load as empty vec"
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }

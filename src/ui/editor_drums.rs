@@ -112,10 +112,20 @@ pub fn render_drum_editor(f: &mut Frame, area: Rect, app: &App) {
     for (ri, voice) in voices.iter().enumerate() {
         let focused_row = ri == app.cur_row;
         let marker = if focused_row { "▸" } else { " " };
-        let mut spans: Vec<Span> = vec![Span::raw(format!(
-            "{marker}{:<3} {:>2} │ ",
-            voice.label, voice.note
-        ))];
+        let voice_muted = lane.muted_voices.contains(&voice.note);
+        let mute_marker = if voice_muted { "M" } else { " " };
+        let label_style = if voice_muted {
+            Style::default().fg(ratatui::style::Color::DarkGray)
+        } else {
+            Style::default()
+        };
+        let mut spans: Vec<Span> = vec![Span::styled(
+            format!(
+                "{marker}{mute_marker}{:<3} {:>2} │ ",
+                voice.label, voice.note
+            ),
+            label_style,
+        )];
 
         for col in visible_cols.clone() {
             let vel = hit_vel(steps, col, voice.note);
@@ -439,5 +449,37 @@ mod tests {
             "detail must contain 'Probability'"
         );
         assert!(whole.contains("Ratchet"), "detail must contain 'Ratchet'");
+    }
+
+    /// §2.6: a muted voice row shows the 'M' marker in its label column.
+    #[test]
+    fn drum_editor_shows_muted_voice_marker() {
+        use crate::devices::profiles::DRUM_VOICES;
+
+        let set = Set::default_set(default_profiles());
+        let mut app = App::new(set, empty_library());
+        app.focus = 0;
+        app.cur_row = 0;
+        app.cur_col = 0;
+
+        // Mute the first voice (DRUM_VOICES[0]).
+        let muted_note = DRUM_VOICES[0].note;
+        app.set.lanes[0].muted_voices = vec![muted_note];
+
+        let backend = TestBackend::new(120, 16);
+        let mut term = Terminal::new(backend).unwrap();
+        let area = Rect::new(0, 0, 120, 16);
+        term.draw(|f| render_drum_editor(f, area, &app)).unwrap();
+        let whole: String = term
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(
+            whole.contains('M'),
+            "muted voice row must show 'M' marker; got: {whole:?}"
+        );
     }
 }

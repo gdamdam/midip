@@ -82,6 +82,17 @@ pub struct AuditionPreview {
     pub pattern: Pattern,
 }
 
+/// An active temporary transformation on a single lane. Holds the pre-fill original
+/// so it can be reverted. The `Set` IS mutated with the fill pattern (so the engine
+/// plays it live), but `snapshot()` is NOT called until `CommitTransform`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TempTransform {
+    /// The lane index the fill was applied to.
+    pub lane: usize,
+    /// The original pattern before the fill was applied.
+    pub original: Pattern,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Action {
     TogglePlay,
@@ -152,6 +163,10 @@ pub enum Action {
     ToggleLaunchQuant,
     /// Cancel any pending queued launch on the focused lane.
     CancelQueue,
+    /// Re-sync the focused lane's phase at the next bar/beat by re-queuing its CURRENT
+    /// pattern. The engine re-launches the same pattern at the boundary, resetting
+    /// `launch_offset` so the lane restarts at local step 0. No Set mutation, no snapshot.
+    RestartLane,
     /// Save a copy of the focused lane's pattern under a new name/id to the user-pattern store.
     /// Does NOT mutate the lane. Task 7 supplies the name from a dialog; here it is a param.
     SaveAsUserPattern(String),
@@ -240,6 +255,16 @@ pub enum Action {
     FavoriteCrateEntry,
     /// Run pre-performance validation on the current crate; stores results and shows summary.
     ValidateCrate,
+    /// Per-drum-voice mute (§2.6): toggle the mute on the voice row under the cursor.
+    /// Drums only — no-op with a status message on melodic lanes.
+    ToggleVoiceMute,
+    /// Toggle a temporary fill on the focused lane (non-destructive, latched).
+    /// If no temp is active: save the original pattern, apply a deterministic fill,
+    /// emit LoadPattern. If already active: revert to original. No snapshot.
+    ToggleFill,
+    /// Commit the active temporary fill: snapshot (makes it undoable), clear temp,
+    /// mark dirty. No-op with status if no temp is active.
+    CommitTransform,
     None,
 }
 
@@ -358,6 +383,13 @@ pub struct App {
     // --- M4a Task 6: pre-performance validation ---
     /// Issues found by the last `ValidateCrate` run. Empty until validation is run.
     pub crate_issues: Vec<CrateIssue>,
+
+    // --- M4b Task 3: temporary fill (non-destructive perf transform) ---
+    /// Active temporary transformation. `None` when no fill is applied.
+    /// The transformed pattern IS loaded into the lane (engine plays it live),
+    /// but `snapshot()` is deferred to `CommitTransform` — so it is non-destructive
+    /// until the performer chooses to keep it.
+    pub temp_transform: Option<TempTransform>,
 }
 
 /// Default melodic velocity multiplier when placing a note (1.0 -> MIDI 100).
@@ -424,6 +456,7 @@ impl App {
             crate_sel: 0,
             crate_entry_sel: 0,
             crate_issues: Vec::new(),
+            temp_transform: None,
         }
     }
 
@@ -612,6 +645,22 @@ impl App {
         }
     }
 
+    /// Selectable destination ports for the route editor, as `PortRef`s. The synthetic
+    /// virtual "midip" entry comes FIRST (so a lane can always be pointed at midip's own
+    /// engine-managed virtual source — it never appears in `list_output_ports()`), followed
+    /// by the real hardware ports enumerated when the editor opened.
+    pub fn route_port_choices(&self) -> Vec<PortRef> {
+        let mut choices = Vec::with_capacity(self.route_editor_ports.len() + 1);
+        choices.push(PortRef::virtual_midip());
+        for name in &self.route_editor_ports {
+            choices.push(PortRef {
+                stable_key: name.clone(),
+                name: name.clone(),
+            });
+        }
+        choices
+    }
+
     /// Apply an action; mutate state and return engine commands to forward.
     pub fn apply(&mut self, action: Action) -> Vec<UiCommand> {
         // Any action other than Quit disarms the double-q quit gesture.
@@ -638,6 +687,14 @@ impl App {
                     });
                     self.set_status("Audition cancelled");
                 }
+                // A temporary fill must not silently persist after lane change — revert.
+                if let Some(tt) = self.temp_transform.take() {
+                    self.set.lanes[tt.lane].pattern = tt.original;
+                    cmds.push(UiCommand::LoadPattern {
+                        lane: tt.lane,
+                        pattern: self.set.lanes[tt.lane].pattern.clone(),
+                    });
+                }
                 self.set_focus((self.focus + 1) % self.set.lanes.len());
             }
             Action::FocusPrev => {
@@ -648,6 +705,14 @@ impl App {
                         pattern: self.set.lanes[prev.lane].pattern.clone(),
                     });
                     self.set_status("Audition cancelled");
+                }
+                // A temporary fill must not silently persist after lane change — revert.
+                if let Some(tt) = self.temp_transform.take() {
+                    self.set.lanes[tt.lane].pattern = tt.original;
+                    cmds.push(UiCommand::LoadPattern {
+                        lane: tt.lane,
+                        pattern: self.set.lanes[tt.lane].pattern.clone(),
+                    });
                 }
                 let n = self.set.lanes.len();
                 self.set_focus((self.focus + n - 1) % n);
@@ -661,6 +726,14 @@ impl App {
                             pattern: self.set.lanes[prev.lane].pattern.clone(),
                         });
                         self.set_status("Audition cancelled");
+                    }
+                    // A temporary fill must not silently persist after lane change — revert.
+                    if let Some(tt) = self.temp_transform.take() {
+                        self.set.lanes[tt.lane].pattern = tt.original;
+                        cmds.push(UiCommand::LoadPattern {
+                            lane: tt.lane,
+                            pattern: self.set.lanes[tt.lane].pattern.clone(),
+                        });
                     }
                     self.set_focus(i);
                 }
@@ -774,6 +847,76 @@ impl App {
                     lane: self.focus,
                     on: self.set.lanes[self.focus].mute,
                 });
+            }
+            Action::ToggleVoiceMute => {
+                if self.focused_kind() != LaneKind::Drums {
+                    self.set_status("Voice mute is drums-only".to_string());
+                } else {
+                    let note = profiles::DRUM_VOICES[self.cur_row].note;
+                    self.snapshot();
+                    let lane = &mut self.set.lanes[self.focus];
+                    let already = lane.muted_voices.contains(&note);
+                    if already {
+                        lane.muted_voices.retain(|&n| n != note);
+                    } else {
+                        lane.muted_voices.push(note);
+                    }
+                    let on = !already;
+                    self.set_status(format!(
+                        "Voice {} {}",
+                        note,
+                        if on { "muted" } else { "unmuted" }
+                    ));
+                    cmds.push(UiCommand::MuteVoice {
+                        lane: self.focus,
+                        note,
+                        on,
+                    });
+                }
+            }
+            Action::ToggleFill => {
+                if self.temp_transform.is_none() {
+                    // No active fill: save original, apply fill, load into engine.
+                    let original = self.set.lanes[self.focus].pattern.clone();
+                    let lane = self.focus;
+                    apply_fill(&mut self.set.lanes[lane].pattern);
+                    self.temp_transform = Some(TempTransform { lane, original });
+                    self.set_status("Fill on");
+                    cmds.push(self.load_focused());
+                } else {
+                    // Active fill: revert to original.
+                    let tt = self.temp_transform.take().unwrap();
+                    let lane = tt.lane;
+                    self.set.lanes[lane].pattern = tt.original;
+                    self.set_status("Fill off");
+                    cmds.push(UiCommand::LoadPattern {
+                        lane,
+                        pattern: self.set.lanes[lane].pattern.clone(),
+                    });
+                }
+            }
+            Action::CommitTransform => {
+                if let Some(tt) = self.temp_transform.take() {
+                    // Make the transform permanent and undoable.
+                    // snapshot() before clearing so the pre-fill Set is saved.
+                    // At this point the lane already holds the filled pattern;
+                    // snapshot() clones the current Set (filled) and pushes it
+                    // as the undo target — we push BEFORE the lane is changed,
+                    // so we manually push the pre-fill version via the original.
+                    //
+                    // Correct sequence: push original Set to undo stack, keep filled lane.
+                    let mut pre_fill_set = self.set.clone();
+                    pre_fill_set.lanes[tt.lane].pattern = tt.original;
+                    self.undo.push(pre_fill_set);
+                    if self.undo.len() > Self::UNDO_LIMIT {
+                        self.undo.remove(0);
+                    }
+                    self.redo.clear();
+                    self.dirty = true;
+                    self.set_status("Fill committed");
+                } else {
+                    self.set_status("No temporary transform");
+                }
             }
             Action::ToggleSolo => {
                 self.snapshot();
@@ -1054,7 +1197,17 @@ impl App {
             Action::Save => {
                 // Cross-task dependency: `config::data_dir()` is defined in Task 21.
                 let dir = crate::config::data_dir().join("sets");
-                match crate::pattern::store::save_set(&dir, &mut self.set) {
+                // Ensure stable ids on the LIVE set first so that any uncommitted
+                // fill's lane inherits the same id it already had (or gets one now),
+                // and so that re-saves always produce the same filename.
+                self.set.ensure_id();
+                for l in &mut self.set.lanes {
+                    l.pattern.ensure_id();
+                }
+                // Build the committed view (fill reverted to original) and write that
+                // to disk. The live set — with the active fill — is untouched.
+                let mut committed = self.committed_set();
+                match crate::pattern::store::save_set(&dir, &mut committed) {
                     Ok(path) => {
                         self.current_set_path = Some(path);
                         self.set_status("Saved");
@@ -1105,27 +1258,29 @@ impl App {
                 if lane >= self.set.lanes.len() {
                     return cmds;
                 }
-                // Build the port cycle list: "(default)" + all available ports.
-                // "(default)" → route = None; named port → route = Some(LaneRoute{...})
-                let n_ports = self.route_editor_ports.len();
-                // Current selection index: 0 = default, 1..=n = port[i-1]
+                // Build the port cycle list: "(default)" + the selectable ports. The
+                // selectable ports include the synthetic virtual "midip" entry FIRST, then
+                // the hardware ports (see `route_port_choices`). "(default)" → route = None;
+                // any named choice → route = Some(LaneRoute{...}).
+                let choices = self.route_port_choices();
+                // Current selection index: 0 = default, 1..=n = choices[i-1] (match by key).
                 let current_idx = match &self.set.lanes[lane].route {
                     None => 0usize,
-                    Some(r) => self
-                        .route_editor_ports
+                    Some(r) => choices
                         .iter()
-                        .position(|p| p == &r.port.name)
+                        .position(|p| p.stable_key == r.port.stable_key)
                         .map(|i| i + 1)
                         .unwrap_or(0),
                 };
-                let total = n_ports + 1; // 0=default, 1..=n_ports
+                let total = choices.len() + 1; // 0=default, 1..=choices.len()
                 let next_idx = ((current_idx as i32 + d).rem_euclid(total as i32)) as usize;
                 self.snapshot();
                 if next_idx == 0 {
                     self.set.lanes[lane].route = None;
                     self.set_status(format!("Lane {lane}: route → (default)"));
                 } else {
-                    let port_name = self.route_editor_ports[next_idx - 1].clone();
+                    let port = choices[next_idx - 1].clone();
+                    let port_name = port.name.clone();
                     // Preserve existing channel/clock_out when switching ports.
                     let existing = self.set.lanes[lane].route.as_ref();
                     let channel = existing
@@ -1133,10 +1288,7 @@ impl App {
                         .unwrap_or_else(|| self.set.lanes[lane].profile.channel);
                     let clock_out = existing.map(|r| r.clock_out).unwrap_or(true);
                     self.set.lanes[lane].route = Some(LaneRoute {
-                        port: PortRef {
-                            stable_key: port_name.clone(),
-                            name: port_name.clone(),
-                        },
+                        port,
                         channel,
                         clock_out,
                     });
@@ -1269,6 +1421,23 @@ impl App {
                     cmds.push(UiCommand::CancelQueue { lane });
                 }
             }
+            Action::RestartLane => {
+                if self.engine_playing {
+                    let lane = self.focus;
+                    let pat = self.set.lanes[lane].pattern.clone();
+                    let name = pat.name.clone();
+                    let quant = self.launch_quant;
+                    self.queued[lane] = Some(name.clone());
+                    self.set_status("Lane restart queued (next bar/beat)");
+                    cmds.push(UiCommand::QueuePattern {
+                        lane,
+                        pattern: pat,
+                        quant,
+                    });
+                } else {
+                    self.set_status("Restart applies while playing");
+                }
+            }
             Action::ToggleMirror => {
                 self.mirror_on = !self.mirror_on;
                 self.set_status(if self.mirror_on {
@@ -1364,8 +1533,16 @@ impl App {
                 let dir = crate::config::data_dir().join("sets");
                 self.set.name = name.clone();
                 self.set.id = crate::persist::Id::nil();
+                // Ensure stable ids on the live set (and all lane patterns) so that
+                // subsequent re-saves use the same filename.
                 self.set.ensure_id();
-                match crate::pattern::store::save_set(&dir, &mut self.set) {
+                for l in &mut self.set.lanes {
+                    l.pattern.ensure_id();
+                }
+                // Write the committed view (fill reverted) while keeping the live set
+                // (with the active fill) intact in memory.
+                let mut committed = self.committed_set();
+                match crate::pattern::store::save_set(&dir, &mut committed) {
                     Ok(path) => {
                         self.current_set_path = Some(path);
                         self.dirty = false;
@@ -1901,6 +2078,22 @@ impl App {
     /// Whether the Set has unsaved mutations.
     pub fn dirty(&self) -> bool {
         self.dirty
+    }
+
+    /// Returns a clone of `self.set` with any uncommitted fill reverted to its
+    /// pre-fill original. When no fill is active this is identical to `self.set.clone()`.
+    ///
+    /// Use this whenever writing to disk (save / recovery) so that a latched but
+    /// uncommitted fill is never baked into a file.  The live `self.set` (and the
+    /// engine) are intentionally NOT touched.
+    pub fn committed_set(&self) -> Set {
+        let mut s = self.set.clone();
+        if let Some(tt) = &self.temp_transform {
+            if tt.lane < s.lanes.len() {
+                s.lanes[tt.lane].pattern = tt.original.clone();
+            }
+        }
+        s
     }
 
     fn move_cursor(&mut self, drow: i32, dcol: i32) {
@@ -2496,6 +2689,54 @@ fn quant_label(q: Quant) -> &'static str {
     match q {
         Quant::NextBar => "next bar",
         Quant::NextBeat => "next beat",
+    }
+}
+
+/// Apply a deterministic fill to a pattern.
+///
+/// **Drum lane:** on the LAST BEAT (the final `min(4, length)` steps), add a hit
+/// on each of those steps using the first existing voice note in the pattern, or
+/// note 38 (snare) if none. Velocity 100, prob 1.0, ratchet 1. Hits are layered
+/// over existing hits; duplicates (same note on same step) are not added.
+///
+/// **Melodic lane:** on the LAST BEAT's non-rest notes, double the ratchet
+/// (clamped to 8). If there are no notes in the last beat, the pattern is unchanged.
+///
+/// The function is idempotent-enough to be deterministic: the same input always
+/// produces the same output. (A second call IS safe but NOT perfectly idempotent for
+/// drums because the hit would already be present and the dedup guard blocks it.)
+pub fn apply_fill(p: &mut Pattern) {
+    let length = p.length.max(1);
+    let beat_len = 4_usize.min(length);
+    let last_beat_start = length.saturating_sub(beat_len);
+
+    match &mut p.data {
+        PatternData::Drums(steps) => {
+            // Find the first voice note present anywhere in the pattern, fallback to 38.
+            let fill_note: u8 = steps
+                .iter()
+                .flat_map(|s| s.iter())
+                .map(|h| h.note)
+                .next()
+                .unwrap_or(38);
+
+            for step in steps.iter_mut().skip(last_beat_start) {
+                // Dedup: only add if no existing hit with the same note.
+                if !step.iter().any(|h| h.note == fill_note) {
+                    step.push(DrumHit {
+                        note: fill_note,
+                        vel: 100,
+                        prob: 1.0,
+                        ratchet: 1,
+                    });
+                }
+            }
+        }
+        PatternData::Melodic(steps) => {
+            for note in steps.iter_mut().skip(last_beat_start).flatten() {
+                note.ratchet = (note.ratchet * 2).min(8);
+            }
+        }
     }
 }
 
@@ -4036,6 +4277,67 @@ mod tests {
         assert!(!app.focused_lane().mute, "undo must unmute the lane");
     }
 
+    // ── Per-drum-voice mute (§2.6) ────────────────────────────────────────────
+
+    #[test]
+    fn toggle_voice_mute_updates_lane_and_emits() {
+        let mut app = new_app();
+        // Focus lane 0 (drums), cur_row=0 → DRUM_VOICES[0].note.
+        app.apply(Action::FocusLane(0));
+        let note = profiles::DRUM_VOICES[0].note;
+        assert!(!app.focused_lane().muted_voices.contains(&note));
+
+        let cmds = app.apply(Action::ToggleVoiceMute);
+
+        // Lane must now contain the note in muted_voices.
+        assert!(
+            app.focused_lane().muted_voices.contains(&note),
+            "muted_voices must include the cursor voice note after toggle"
+        );
+        // Must be dirty (snapshot taken).
+        assert!(app.dirty, "ToggleVoiceMute must mark dirty");
+        // Must emit MuteVoice{on:true}.
+        assert!(
+            cmds.iter().any(
+                |c| matches!(c, UiCommand::MuteVoice { lane: 0, note: n, on: true } if *n == note)
+            ),
+            "must emit MuteVoice{{lane:0, note:{note}, on:true}}; got: {cmds:?}"
+        );
+
+        // Toggle again → unmute.
+        let cmds2 = app.apply(Action::ToggleVoiceMute);
+        assert!(
+            !app.focused_lane().muted_voices.contains(&note),
+            "muted_voices must not contain note after second toggle"
+        );
+        assert!(
+            cmds2.iter().any(
+                |c| matches!(c, UiCommand::MuteVoice { lane: 0, note: n, on: false } if *n == note)
+            ),
+            "second toggle must emit MuteVoice{{on:false}}; got: {cmds2:?}"
+        );
+    }
+
+    #[test]
+    fn toggle_voice_mute_noop_on_melodic() {
+        let mut app = new_app();
+        // Focus lane 1 (melodic).
+        app.apply(Action::FocusLane(1));
+        assert_eq!(app.focused_kind(), LaneKind::Melodic);
+
+        let cmds = app.apply(Action::ToggleVoiceMute);
+
+        // No MuteVoice command emitted.
+        assert!(
+            !cmds
+                .iter()
+                .any(|c| matches!(c, UiCommand::MuteVoice { .. })),
+            "melodic lane must not emit MuteVoice; got: {cmds:?}"
+        );
+        // Not dirty.
+        assert!(!app.dirty, "melodic voice mute must not mark dirty");
+    }
+
     #[test]
     fn undo_emits_full_resync_including_bpm_and_swing() {
         let mut app = new_app();
@@ -4276,6 +4578,65 @@ mod tests {
             )),
             "expected SetRoute{{lane:0, route:None}}, got: {:?}",
             cmds
+        );
+    }
+
+    /// The route editor's selectable ports must include a synthetic "midip" virtual entry
+    /// (alongside the hardware ports from `list_output_ports`) so a lane can be pointed at
+    /// midip's own engine-managed virtual source.
+    #[test]
+    fn route_editor_lists_midip_virtual_port() {
+        use crate::pattern::model::{VIRTUAL_PORT_KEY, VIRTUAL_PORT_NAME};
+        let mut app = new_app();
+        app.apply(Action::OpenRouteEditor);
+        // Even with NO real hardware ports, the virtual "midip" entry must be offered.
+        app.route_editor_ports = Vec::new();
+        let choices = app.route_port_choices();
+        assert!(
+            choices
+                .iter()
+                .any(|p| p.stable_key == VIRTUAL_PORT_KEY && p.name == VIRTUAL_PORT_NAME),
+            "route port choices must include the virtual 'midip' entry; got: {choices:?}"
+        );
+    }
+
+    /// Cycling a lane's port lands on the virtual "midip" port and emits a SetRoute whose
+    /// route key == VIRTUAL_PORT_KEY (so the engine maps it to the virtual destination).
+    #[test]
+    fn route_cycle_port_can_select_virtual_midip() {
+        use crate::pattern::model::VIRTUAL_PORT_KEY;
+        let mut app = new_app();
+        app.apply(Action::OpenRouteEditor);
+        app.route_editor_ports = Vec::new(); // no hardware → choices are [midip]
+                                             // Cycle forward until a lane route targets the virtual key (bounded loop).
+        let mut found = false;
+        for _ in 0..app.route_port_choices().len() + 2 {
+            let cmds = app.apply(Action::RouteCyclePort(1));
+            if app
+                .set
+                .lanes
+                .get(app.route_editor_lane)
+                .and_then(|l| l.route.as_ref())
+                .map(|r| r.port.stable_key == VIRTUAL_PORT_KEY)
+                .unwrap_or(false)
+            {
+                assert!(
+                    cmds.iter().any(|c| matches!(
+                        c,
+                        UiCommand::SetRoute {
+                            route: Some(r),
+                            ..
+                        } if r.port.stable_key == VIRTUAL_PORT_KEY
+                    )),
+                    "selecting midip must emit SetRoute with the virtual key; got: {cmds:?}"
+                );
+                found = true;
+                break;
+            }
+        }
+        assert!(
+            found,
+            "cycling must be able to select the virtual 'midip' port"
         );
     }
 
@@ -6335,5 +6696,493 @@ mod tests {
             app.crate_issues.is_empty(),
             "crate_issues must clear on RemoveFromCrate"
         );
+    }
+
+    // ── M4b Task 2: quantized lane restart ───────────────────────────────────
+
+    #[test]
+    fn restart_lane_while_playing_queues_current_pattern() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(0));
+        // Record the focused lane's current pattern name before the action.
+        let current_pattern_name = app.set.lanes[0].pattern.name.clone();
+        let set_before = app.set.clone();
+        let undo_len_before = app.undo.len();
+
+        // Simulate engine playing.
+        app.engine_playing = true;
+        let cmds = app.apply(Action::RestartLane);
+
+        // Must emit QueuePattern for the focused lane with its CURRENT pattern.
+        let queue_cmd = cmds
+            .iter()
+            .find(|c| matches!(c, UiCommand::QueuePattern { lane: 0, .. }));
+        assert!(
+            queue_cmd.is_some(),
+            "RestartLane while playing must emit QueuePattern{{lane:0}}; got: {:?}",
+            cmds
+        );
+        if let Some(UiCommand::QueuePattern { lane, pattern, .. }) = queue_cmd {
+            assert_eq!(*lane, 0);
+            assert_eq!(
+                pattern.name, current_pattern_name,
+                "QueuePattern must carry the lane's CURRENT pattern"
+            );
+        }
+
+        // queued[focus] must be set to the current pattern name.
+        assert_eq!(
+            app.queued[0].as_deref(),
+            Some(current_pattern_name.as_str()),
+            "queued[0] must be set to the current pattern name"
+        );
+
+        // No Set mutation (no snapshot pushed, Set unchanged).
+        assert_eq!(app.set, set_before, "RestartLane must not mutate Set");
+        assert_eq!(
+            app.undo.len(),
+            undo_len_before,
+            "RestartLane must not push an undo snapshot"
+        );
+
+        // Status set.
+        assert!(
+            app.status.contains("restart queued"),
+            "status must mention restart queued; got: {:?}",
+            app.status
+        );
+    }
+
+    #[test]
+    fn restart_lane_when_stopped_is_noop_with_status() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(0));
+
+        // Engine stopped (default).
+        assert!(!app.engine_playing);
+        let cmds = app.apply(Action::RestartLane);
+
+        // No QueuePattern must be emitted.
+        assert!(
+            !cmds
+                .iter()
+                .any(|c| matches!(c, UiCommand::QueuePattern { .. })),
+            "RestartLane while stopped must not emit QueuePattern; got: {:?}",
+            cmds
+        );
+
+        // queued[0] must remain None.
+        assert!(
+            app.queued[0].is_none(),
+            "queued[0] must remain None when stopped"
+        );
+
+        // Status must indicate restart only applies while playing.
+        assert!(
+            app.status.to_lowercase().contains("playing"),
+            "status must mention playing; got: {:?}",
+            app.status
+        );
+    }
+
+    // ── M4b Task 3: temporary fill + revert/commit ───────────────────────────
+
+    /// Helper: a drum pattern with one hit on step 0 so apply_fill has a real note to use.
+    fn drum_pattern_with_hit() -> Pattern {
+        let mut steps = vec![Vec::new(); 16];
+        steps[0] = vec![DrumHit {
+            note: 36,
+            vel: 100,
+            prob: 1.0,
+            ratchet: 1,
+        }];
+        Pattern {
+            name: "kick".into(),
+            desc: String::new(),
+            length: 16,
+            data: PatternData::Drums(steps),
+            id: crate::persist::Id::nil(),
+        }
+    }
+
+    /// Helper: a melodic pattern with a note in the last beat so ratchet doubling fires.
+    fn melodic_pattern_with_note() -> Pattern {
+        let mut steps: Vec<Option<MelodicNote>> = vec![None; 16];
+        // Put a note at step 13 (last beat = steps 12-15 for a 16-step pattern).
+        steps[13] = Some(MelodicNote {
+            semi: 0,
+            vel: 1.0,
+            slide: false,
+            len: 0.5,
+            prob: 1.0,
+            ratchet: 1,
+        });
+        Pattern {
+            name: "bass-note".into(),
+            desc: String::new(),
+            length: 16,
+            data: PatternData::Melodic(steps),
+            id: crate::persist::Id::nil(),
+        }
+    }
+
+    #[test]
+    fn toggle_fill_applies_then_reverts() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(0)); // drums lane
+                                         // Install a known pattern.
+        let original = drum_pattern_with_hit();
+        app.set.lanes[0].pattern = original.clone();
+
+        // ToggleFill: should apply fill, set temp_transform, not dirty.
+        let cmds = app.apply(Action::ToggleFill);
+        assert!(
+            app.temp_transform.is_some(),
+            "temp_transform must be Some after ToggleFill"
+        );
+        assert_ne!(
+            app.set.lanes[0].pattern, original,
+            "lane pattern must change after fill"
+        );
+        assert!(
+            !app.dirty,
+            "ToggleFill must NOT mark dirty (non-destructive)"
+        );
+        assert!(
+            cmds.iter()
+                .any(|c| matches!(c, UiCommand::LoadPattern { lane: 0, .. })),
+            "ToggleFill must emit LoadPattern for the focused lane"
+        );
+        assert!(
+            app.status.to_lowercase().contains("fill"),
+            "status must mention fill; got: {:?}",
+            app.status
+        );
+
+        // ToggleFill again: must revert byte-identical to original.
+        let revert_cmds = app.apply(Action::ToggleFill);
+        assert!(
+            app.temp_transform.is_none(),
+            "temp_transform must be None after second ToggleFill (revert)"
+        );
+        assert_eq!(
+            app.set.lanes[0].pattern, original,
+            "lane pattern must be byte-identical to original after revert"
+        );
+        assert!(!app.dirty, "revert must NOT mark dirty");
+        assert!(
+            revert_cmds
+                .iter()
+                .any(|c| matches!(c, UiCommand::LoadPattern { lane: 0, .. })),
+            "revert must emit LoadPattern for the lane"
+        );
+    }
+
+    #[test]
+    fn commit_transform_keeps_fill_and_marks_dirty() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(0));
+        let original = drum_pattern_with_hit();
+        app.set.lanes[0].pattern = original.clone();
+
+        app.apply(Action::ToggleFill);
+        let filled_pattern = app.set.lanes[0].pattern.clone();
+        assert_ne!(filled_pattern, original);
+        assert!(!app.dirty);
+
+        // CommitTransform: keep fill, mark dirty, snapshot (undo restores pre-fill).
+        app.apply(Action::CommitTransform);
+        assert!(
+            app.temp_transform.is_none(),
+            "temp_transform must be None after CommitTransform"
+        );
+        assert_eq!(
+            app.set.lanes[0].pattern, filled_pattern,
+            "committed lane must keep the filled pattern"
+        );
+        assert!(app.dirty, "CommitTransform must mark dirty");
+        assert!(
+            !app.undo.is_empty(),
+            "CommitTransform must push an undo snapshot"
+        );
+
+        // Undo must restore the pre-fill pattern.
+        app.apply(Action::Undo);
+        assert_eq!(
+            app.set.lanes[0].pattern, original,
+            "Undo after CommitTransform must restore the pre-fill pattern"
+        );
+    }
+
+    #[test]
+    fn fill_is_deterministic() {
+        // Applying apply_fill to the same pattern twice produces identical results.
+        let mut p1 = drum_pattern_with_hit();
+        let mut p2 = drum_pattern_with_hit();
+        crate::app::apply_fill(&mut p1);
+        crate::app::apply_fill(&mut p2);
+        assert_eq!(
+            p1, p2,
+            "apply_fill must be deterministic: same input → same output"
+        );
+    }
+
+    #[test]
+    fn fill_adds_hits_on_last_beat_drums() {
+        // A 16-step drum pattern: last beat = steps 12-15.
+        // apply_fill must add fill_note hits on all 4 of those steps.
+        let mut p = drum_pattern_with_hit();
+        let fill_note: u8 = 36; // first note in the pattern
+        crate::app::apply_fill(&mut p);
+        if let PatternData::Drums(steps) = &p.data {
+            for (idx, step) in steps.iter().enumerate().skip(12) {
+                assert!(
+                    step.iter().any(|h| h.note == fill_note),
+                    "step {idx} in last beat must have a fill hit with note {fill_note}"
+                );
+            }
+        } else {
+            panic!("expected Drums pattern");
+        }
+    }
+
+    #[test]
+    fn fill_doubles_ratchet_on_last_beat_melodic() {
+        let mut p = melodic_pattern_with_note();
+        crate::app::apply_fill(&mut p);
+        if let PatternData::Melodic(steps) = &p.data {
+            let note = steps[13].as_ref().expect("step 13 must have a note");
+            assert_eq!(
+                note.ratchet, 2,
+                "ratchet must be doubled (1 → 2) on last-beat note"
+            );
+        } else {
+            panic!("expected Melodic pattern");
+        }
+    }
+
+    #[test]
+    fn focus_change_reverts_temp_fill() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(0));
+        let original = drum_pattern_with_hit();
+        app.set.lanes[0].pattern = original.clone();
+
+        // Apply fill.
+        app.apply(Action::ToggleFill);
+        assert!(app.temp_transform.is_some());
+        let filled = app.set.lanes[0].pattern.clone();
+        assert_ne!(filled, original);
+
+        // FocusNext must revert fill and clear temp_transform.
+        let cmds = app.apply(Action::FocusNext);
+        assert!(
+            app.temp_transform.is_none(),
+            "temp_transform must be cleared on FocusNext"
+        );
+        assert_eq!(
+            app.set.lanes[0].pattern, original,
+            "FocusNext must restore the original pattern"
+        );
+        assert!(
+            cmds.iter()
+                .any(|c| matches!(c, UiCommand::LoadPattern { lane: 0, .. })),
+            "FocusNext must emit LoadPattern to restore the lane in the engine"
+        );
+        assert!(!app.dirty, "focus change revert must not mark dirty");
+    }
+
+    #[test]
+    fn focus_lane_reverts_temp_fill() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(0));
+        let original = drum_pattern_with_hit();
+        app.set.lanes[0].pattern = original.clone();
+
+        app.apply(Action::ToggleFill);
+        assert!(app.temp_transform.is_some());
+
+        // FocusLane to another lane must revert.
+        let cmds = app.apply(Action::FocusLane(1));
+        assert!(app.temp_transform.is_none());
+        assert_eq!(app.set.lanes[0].pattern, original);
+        assert!(cmds
+            .iter()
+            .any(|c| matches!(c, UiCommand::LoadPattern { lane: 0, .. })));
+    }
+
+    #[test]
+    fn commit_transform_noop_when_no_fill() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(0));
+        assert!(app.temp_transform.is_none());
+        let undo_before = app.undo.len();
+        app.apply(Action::CommitTransform);
+        assert!(
+            !app.dirty,
+            "CommitTransform with no temp must not mark dirty"
+        );
+        assert_eq!(
+            app.undo.len(),
+            undo_before,
+            "CommitTransform with no temp must not push undo snapshot"
+        );
+        assert!(
+            app.status.contains("No temporary"),
+            "status must indicate no transform; got: {:?}",
+            app.status
+        );
+    }
+
+    // ── M4b fix: committed_set + save non-destructive while fill is latched ──
+
+    #[test]
+    fn committed_set_reverts_active_fill() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(0));
+        let original = drum_pattern_with_hit();
+        app.set.lanes[0].pattern = original.clone();
+
+        // With no fill: committed_set == self.set.
+        let no_fill = app.committed_set();
+        assert_eq!(
+            no_fill.lanes[0].pattern, app.set.lanes[0].pattern,
+            "committed_set with no fill must equal live set lane"
+        );
+        assert!(app.temp_transform.is_none());
+
+        // Apply fill; now committed_set should revert lane 0 to the original.
+        app.apply(Action::ToggleFill);
+        assert!(
+            app.temp_transform.is_some(),
+            "temp_transform must be Some after ToggleFill"
+        );
+        // The live set has the fill applied.
+        assert_ne!(
+            app.set.lanes[0].pattern, original,
+            "live set must have the fill pattern after ToggleFill"
+        );
+
+        let committed = app.committed_set();
+        assert_eq!(
+            committed.lanes[0].pattern, original,
+            "committed_set must revert fill lane to original"
+        );
+        // Other lanes must be unaffected.
+        for i in 1..app.set.lanes.len() {
+            assert_eq!(
+                committed.lanes[i].pattern, app.set.lanes[i].pattern,
+                "committed_set must not alter unaffected lanes"
+            );
+        }
+        // Live set must still have the fill active.
+        assert!(
+            app.temp_transform.is_some(),
+            "temp_transform must still be Some — committed_set must not mutate app"
+        );
+    }
+
+    #[test]
+    fn save_while_fill_active_persists_original() {
+        use crate::pattern::store;
+
+        let tok = unique_token("m4bfix-save-fill");
+        let tmp_sets = std::env::temp_dir().join(format!("midip-{}-sets", tok));
+        std::fs::create_dir_all(&tmp_sets).unwrap();
+
+        let mut app = new_app();
+        app.apply(Action::FocusLane(0));
+        let original = drum_pattern_with_hit();
+        app.set.lanes[0].pattern = original.clone();
+
+        // Toggle fill — lane 0 in live set is now the filled pattern.
+        app.apply(Action::ToggleFill);
+        assert!(app.temp_transform.is_some(), "fill must be latched");
+        let filled = app.set.lanes[0].pattern.clone();
+        assert_ne!(
+            filled, original,
+            "fill must differ from original for this test to be meaningful"
+        );
+
+        // Ensure ids so we can round-trip via save_set / load_set directly.
+        app.set.ensure_id();
+        for l in &mut app.set.lanes {
+            l.pattern.ensure_id();
+        }
+
+        // Save the committed view to a temp dir and load it back.
+        let mut committed = app.committed_set();
+        let saved_path = store::save_set(&tmp_sets, &mut committed).expect("save_set must succeed");
+        let loaded = store::load_set(&saved_path).expect("load_set must succeed");
+
+        // The saved file must contain the ORIGINAL, not the fill.
+        assert_eq!(
+            loaded.lanes[0].pattern.data, original.data,
+            "saved file must contain original pattern, not the uncommitted fill"
+        );
+
+        // The live app state must be untouched: fill still active.
+        assert!(
+            app.temp_transform.is_some(),
+            "temp_transform must still be Some after saving"
+        );
+        assert_eq!(
+            app.set.lanes[0].pattern.data, filled.data,
+            "live set must still hold the filled pattern after saving"
+        );
+
+        // Cleanup.
+        std::fs::remove_file(&saved_path).ok();
+        std::fs::remove_dir_all(&tmp_sets).ok();
+    }
+
+    #[test]
+    fn save_keeps_stable_id_with_fill_active() {
+        use crate::pattern::store;
+
+        let tok = unique_token("m4bfix-stable-id");
+        let tmp_sets = std::env::temp_dir().join(format!("midip-{}-sets", tok));
+        std::fs::create_dir_all(&tmp_sets).unwrap();
+
+        let mut app = new_app();
+        app.apply(Action::FocusLane(0));
+        app.set.lanes[0].pattern = drum_pattern_with_hit();
+
+        // Latch a fill.
+        app.apply(Action::ToggleFill);
+        assert!(app.temp_transform.is_some());
+
+        // First save.
+        app.set.ensure_id();
+        for l in &mut app.set.lanes {
+            l.pattern.ensure_id();
+        }
+        let set_id = app.set.id.clone();
+        assert!(!set_id.is_nil(), "set id must be non-nil before saving");
+
+        let mut committed1 = app.committed_set();
+        let path1 = store::save_set(&tmp_sets, &mut committed1).expect("first save must succeed");
+
+        // Second save (fill still latched).
+        let mut committed2 = app.committed_set();
+        let path2 = store::save_set(&tmp_sets, &mut committed2).expect("second save must succeed");
+
+        // Both saves must produce the same path (stable id → stable filename).
+        assert_eq!(
+            path1, path2,
+            "re-saving with fill latched must produce the same filename (stable id)"
+        );
+
+        // Loaded set must have the same id.
+        let loaded = store::load_set(&path1).expect("load must succeed");
+        assert_eq!(
+            loaded.id, set_id,
+            "loaded set id must match the live set id"
+        );
+        assert!(!loaded.id.is_nil(), "saved id must be non-nil");
+
+        // Cleanup.
+        std::fs::remove_file(&path1).ok();
+        std::fs::remove_dir_all(&tmp_sets).ok();
     }
 }

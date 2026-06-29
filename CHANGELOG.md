@@ -7,6 +7,24 @@ feature milestone is a minor bump).
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-06-29 — Performance controls + routable virtual port
+
+### Added
+- **Per-drum-voice mute** — mute an individual drum voice (e.g. just the hat) live with backtick
+  (`` ` ``), latched and non-destructive; muting releases that voice's sounding note immediately.
+- **Quantized lane restart** (`i`) — re-sync a drifted lane by restarting its phase at the next
+  bar/beat without changing its pattern.
+- **Temporary fill** (`f` to toggle on/off, `F` to commit) — overlay a deterministic fill on the
+  focused lane; toggling off reverts it exactly, committing makes it a permanent (undoable) edit.
+  Changing lane focus reverts an un-committed fill, and a fill is never saved to disk until committed.
+
+### Fixed
+- **The virtual `midip` port is now a first-class routable destination** — select "midip" as a lane's
+  output in the route editor (`w`) and that lane's MIDI goes straight to the virtual source that other
+  apps read, with `CON ●`. (Previously "midip" only carried audio when the mirror toggle was on and
+  could not be targeted per-lane.) The mirror toggle (`M`) still works as a full-stream feed, without
+  double-sending a lane that's also routed to "midip".
+
 ## [0.6.0] — 2026-06-28 — Favorites · crates · live launch
 
 ### Added

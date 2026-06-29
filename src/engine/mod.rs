@@ -73,6 +73,14 @@ pub enum UiCommand {
     /// Enable or disable the virtual-port mirror (T2: toggled by the UI toggle).
     /// Safe to receive in headless mode — just sets the flag; no port is opened.
     SetMirror(bool),
+    /// Per-drum-voice mute (§2.6): silence a single MIDI note on a drum lane, latched.
+    /// When `on=true`, the note is added to `lane.muted_voices` and any sounding instance
+    /// is immediately released. When `on=false`, the note is removed (unmuted silently).
+    MuteVoice {
+        lane: usize,
+        note: u8,
+        on: bool,
+    },
     Quit,
 }
 
@@ -139,8 +147,9 @@ struct EngineState {
     /// port_sinks/watcher, so it flags here and the loop reacts. Ignored headless.
     route_dirty: bool,
     /// Whether the virtual "midip" output mirror is active. Default off.
-    /// When on, `TeeSink` forwards every message to the virtual port IN ADDITION TO the
-    /// hardware fanout — purely additive; hardware path is byte-identical either way.
+    /// When on, the fan-out ALSO delivers every message (notes/CC + Clock) to the virtual
+    /// port IN ADDITION TO the hardware fanout — purely additive; hardware path is
+    /// byte-identical either way (a lane explicitly routed to "midip" is not double-sent).
     mirror_on: bool,
 }
 
@@ -320,6 +329,9 @@ fn apply_command(
         }
         UiCommand::SetMirror(on) => {
             st.mirror_on = on;
+        }
+        UiCommand::MuteVoice { lane, note, on } => {
+            st.seq.set_voice_mute(lane, note, on, now, sink);
         }
         UiCommand::Quit => {
             // Release all sounding notes before exiting — avoids hanging notes on hardware.
@@ -546,6 +558,29 @@ fn build_route_plan(lanes: &[Lane]) -> RoutePlan {
     }
 }
 
+/// Build the route plan AND guarantee the engine-managed virtual "midip" port is present
+/// in `ports` (so it is always a valid routable target, even when no lane uses it). Pure;
+/// UNIT-TESTED. Used by the real engine; `build_route_plan` stays virtual-free for the
+/// hardware-only dedup tests.
+///
+/// A lane whose `effective_route().port.is_virtual()` is recognised by `build_route_plan`
+/// like any other key (dedup by `VIRTUAL_PORT_KEY`), so its channel/clock map to the same
+/// index this function then ensures exists. If no lane routed to it, the virtual port is
+/// appended at the end with no channel/clock mappings (mirror still uses it on demand).
+fn build_route_plan_with_virtual(lanes: &[Lane]) -> RoutePlan {
+    let mut plan = build_route_plan(lanes);
+    if virtual_port_index(&plan).is_none() {
+        plan.ports
+            .push(crate::pattern::model::PortRef::virtual_midip());
+    }
+    plan
+}
+
+/// Index of the virtual "midip" port in a plan's `ports`, if present. Pure; UNIT-TESTED.
+fn virtual_port_index(plan: &RoutePlan) -> Option<usize> {
+    plan.ports.iter().position(|p| p.is_virtual())
+}
+
 /// Port indices a single message targets (route-targeted, NOT broadcast). Pure; UNIT-TESTED.
 ///
 /// - `NoteOn`/`NoteOff`/`ControlChange{channel}` → `channel_to_port[channel]` as a 0-or-1
@@ -570,6 +605,46 @@ fn route_targets(
         MidiMessage::Clock => clock_ports.to_vec(),
         _ => Vec::new(),
     }
+}
+
+/// Port indices a message targets, with the virtual-"midip" mirror FOLDED IN. Pure; UNIT-TESTED.
+///
+/// Starts from `route_targets` (route-driven hardware + any lane routed to the virtual port).
+/// When `mirror_on` and a `virtual_idx` exists, the virtual port is ADDED for the FULL stream
+/// — every channel message (routed or not) and every Clock — replicating the old additive
+/// `TeeSink` mirror. Deduped: if a lane already routes the message to the virtual port (so it
+/// is in the base targets), the mirror does NOT add a second copy. Non-virtual targets are
+/// untouched, so the hardware path is byte-identical whether the mirror is on or off.
+fn route_targets_with_mirror(
+    msg: &crate::midi::message::MidiMessage,
+    channel_to_port: &[Option<usize>; 16],
+    clock_ports: &[usize],
+    virtual_idx: Option<usize>,
+    mirror_on: bool,
+) -> Vec<usize> {
+    use crate::midi::message::MidiMessage;
+    let mut targets = route_targets(msg, channel_to_port, clock_ports);
+    if mirror_on {
+        if let Some(vidx) = virtual_idx {
+            // Mirror only the message types the mirror has always carried: channel
+            // messages + Clock (the full performance stream). Other realtime (Start/Stop/
+            // Continue) are not emitted by the engine, matching the old TeeSink behavior of
+            // forwarding whatever `send` received — but those variants never reach `send`.
+            let mirrorable = matches!(
+                msg,
+                MidiMessage::NoteOn { .. }
+                    | MidiMessage::NoteOff { .. }
+                    | MidiMessage::ControlChange { .. }
+                    | MidiMessage::Clock
+            );
+            // Dedup: only add the virtual port if it is not already a target (e.g. a lane
+            // routed here, or the virtual port is in clock_ports).
+            if mirrorable && !targets.contains(&vidx) {
+                targets.push(vidx);
+            }
+        }
+    }
+    targets
 }
 
 /// All lanes that resolve to the given port index, in lane order. Used to release the
@@ -665,9 +740,21 @@ fn run_port_watcher(
         }
 
         let available = list_output_ports();
+        // The engine-managed virtual "midip" port is NEVER enumerated/connected/dropped here:
+        // it is not a system destination (it never appears in `list_output_ports()`), it is
+        // always present if the engine created it, and the engine installs its sink directly.
+        // Force its presence to `false` so `plan_port_actions` emits no Connect/Drop for it
+        // and `connect()` is never called for the virtual key. Index parity with the engine's
+        // `port_sinks` is preserved (the slot still exists, the watcher just skips it).
         let present: Vec<bool> = port_matches
             .iter()
-            .map(|m| match_port(&available, m).is_some())
+            .map(|m| {
+                if m == crate::pattern::model::VIRTUAL_PORT_KEY {
+                    false
+                } else {
+                    match_port(&available, m).is_some()
+                }
+            })
             .collect();
 
         for action in plan_port_actions(&present, &connected) {
@@ -765,21 +852,38 @@ pub fn spawn_engine(set: Set, mut link: Box<dyn LinkClock>) -> EngineHandle {
         // these are `mut`. The watcher connects each distinct port by its key/name — for
         // profile-derived routes the key == the old `port_match`, so default behavior is
         // unchanged.
-        let plan = build_route_plan(&set.lanes);
-        let mut channel_to_port = plan.channel_to_port;
-        let mut clock_ports = plan.clock_ports;
-        let mut lane_to_port = plan.lane_to_port;
+        // Route plan ALWAYS includes the engine-managed virtual "midip" port (so a lane can
+        // target it and the mirror has a destination), even when no lane currently routes to
+        // it. The virtual port lives in `port_sinks` like any other port, but the watcher
+        // SKIPS it (it is never enumerated/connected — see `run_port_watcher`).
+        let plan = build_route_plan_with_virtual(&set.lanes);
+        // Index of the virtual port in `port_sinks`. Stable across re-plans because the
+        // virtual key is always present in both the old and new key sets (carried over).
+        // Computed before the plan's fields are moved out below.
+        let mut virtual_idx = virtual_port_index(&plan);
         // Distinct port keys currently realized in `port_sinks` (parallel by index). The
         // re-plan compares the new key set against this to decide whether to re-spawn.
         let mut port_keys: Vec<String> =
             plan.ports.iter().map(|p| port_key(p).to_string()).collect();
+        let mut channel_to_port = plan.channel_to_port;
+        let mut clock_ports = plan.clock_ports;
+        let mut lane_to_port = plan.lane_to_port;
 
         let mut st = EngineState::new(set);
         let mut pending: Vec<(u64, UiCommand)> = Vec::new();
         let mut events: Vec<EngineEvent> = Vec::new();
         let start = std::time::Instant::now();
 
-        // Every port starts disconnected (NullSink); the watcher will connect present ports.
+        // Create the virtual "midip" output ONCE before the loop — this opens a CoreMIDI
+        // virtual source that other apps on the machine can subscribe to. No-op on non-Unix
+        // or if CoreMIDI is unavailable; the engine runs without it in both cases.
+        // The virtual sink is installed DIRECTLY into `port_sinks[virtual_idx]` (a first-class
+        // managed port). It is never connected by the watcher; `connected` reflects whether
+        // the real virtual output was created, so a lane routed to "midip" shows CON ●.
+        let virtual_created = crate::midi::ports::create_virtual_output("midip");
+
+        // Every port starts disconnected (NullSink); the watcher will connect present hardware
+        // ports. The virtual slot is overwritten below with the real virtual output (if any).
         let mut port_sinks: Vec<PortSink> = port_keys
             .iter()
             .map(|_| PortSink {
@@ -788,19 +892,21 @@ pub fn spawn_engine(set: Set, mut link: Box<dyn LinkClock>) -> EngineHandle {
                 port_name: String::new(),
             })
             .collect();
-
-        // Create the virtual "midip" output ONCE before the loop — this opens a CoreMIDI
-        // virtual source that other apps on the machine can subscribe to. No-op on non-Unix
-        // or if CoreMIDI is unavailable; the engine runs without it in both cases.
-        // The virtual sink is wrapped by `TeeSink` each iteration (see below) so it is
-        // NEVER part of the `PortFanoutSink`/watcher path — hardware routing is untouched.
-        let mut virtual_sink: Option<Box<dyn MidiSink>> =
-            crate::midi::ports::create_virtual_output("midip")
-                .map(|s| Box::new(s) as Box<dyn MidiSink>);
+        if let Some(vidx) = virtual_idx {
+            if let Some(sink) = virtual_created {
+                port_sinks[vidx] = PortSink {
+                    sink: Box::new(sink),
+                    connected: true,
+                    port_name: crate::pattern::model::VIRTUAL_PORT_NAME.to_string(),
+                };
+            }
+            // If creation failed, the slot stays NullSink/disconnected (CON ○ for midip).
+        }
 
         // Spawn the device-watcher: it owns enumeration/connection and streams PortUpdates.
-        // Each distinct port is matched by its stable_key (falling back to name). Re-spawned
-        // on a SetRoute that changes the distinct port set, so these handles are `mut`.
+        // Each distinct port is matched by its stable_key (falling back to name). The virtual
+        // key is passed for index parity but the watcher skips it. Re-spawned on a SetRoute
+        // that changes the distinct port set, so these handles are `mut`.
         let (watcher, mut update_rx, mut request_tx) = spawn_watcher(port_keys.clone());
         let mut watcher = Some(watcher);
 
@@ -847,6 +953,8 @@ pub fn spawn_engine(set: Set, mut link: Box<dyn LinkClock>) -> EngineHandle {
                                 ports: &mut port_sinks,
                                 channel_to_port: &channel_to_port,
                                 clock_ports: &clock_ports,
+                                virtual_idx,
+                                mirror_on: false,
                             };
                             st.seq.release_lanes(&lanes, now, &mut fanout);
                         }
@@ -867,6 +975,8 @@ pub fn spawn_engine(set: Set, mut link: Box<dyn LinkClock>) -> EngineHandle {
                             ports: &mut port_sinks,
                             channel_to_port: &channel_to_port,
                             clock_ports: &clock_ports,
+                            virtual_idx,
+                            mirror_on: false,
                         };
                         st.seq.release_lanes(&lanes, now, &mut fanout);
                         let ps = &mut port_sinks[idx];
@@ -882,23 +992,17 @@ pub fn spawn_engine(set: Set, mut link: Box<dyn LinkClock>) -> EngineHandle {
             // Clock reaches each clock-out port ONCE (a shared port appears once — no
             // double-clock). NO enumerate/connect here — the watcher owns connections.
             //
-            // `TeeSink` wraps `fanout` so that when the mirror is on, every message is
-            // ALSO forwarded to the virtual port. The hardware path is byte-identical
-            // whether the mirror is on or off — `TeeSink` never replaces the fanout.
-            //
-            // `fanout` and `tee` are scoped to the inner block so their borrows of
-            // `port_sinks` and `virtual_sink` are fully dropped before the health-check /
-            // route-replan below re-borrows them. `&mut virtual_sink` borrows the Option
-            // container per iteration; `TeeSink::send` derefs it — NLL accepts this safely.
+            // The mirror is FOLDED into the fan-out: when `mirror_on`, the full stream is
+            // ALSO delivered to the virtual port index (deduped against any lane already
+            // routed there). The hardware path is byte-identical whether the mirror is on or
+            // off. `fanout` is scoped to the inner block so its borrow of `port_sinks` is
+            // dropped before the health-check / route-replan below re-borrows it.
             let quit = {
                 let mut fanout = PortFanoutSink {
                     ports: &mut port_sinks,
                     channel_to_port: &channel_to_port,
                     clock_ports: &clock_ports,
-                };
-                let mut tee = TeeSink {
-                    primary: &mut fanout,
-                    mirror: &mut virtual_sink,
+                    virtual_idx,
                     mirror_on: st.mirror_on,
                 };
                 step_engine(
@@ -906,18 +1010,20 @@ pub fn spawn_engine(set: Set, mut link: Box<dyn LinkClock>) -> EngineHandle {
                     now,
                     &mut pending,
                     link.as_mut(),
-                    &mut tee,
+                    &mut fanout,
                     &mut events,
                 )
             };
 
             // --- Health: detect connected ports whose sink failed; release notes, drop, ask
             //     the watcher to reconnect. Gather unhealthy indices in an immutable pass
-            //     first (borrow checker), then mutate. NO enumerate/connect here. ---
+            //     first (borrow checker), then mutate. NO enumerate/connect here. The virtual
+            //     port is SKIPPED — it is engine-managed (never watcher-reconnected); dropping
+            //     it and asking the watcher to rebuild it would lose it permanently. ---
             let unhealthy: Vec<usize> = port_sinks
                 .iter()
                 .enumerate()
-                .filter(|(_, ps)| ps.connected && !ps.sink.health())
+                .filter(|(idx, ps)| Some(*idx) != virtual_idx && ps.connected && !ps.sink.health())
                 .map(|(idx, _)| idx)
                 .collect();
             for idx in unhealthy {
@@ -927,6 +1033,8 @@ pub fn spawn_engine(set: Set, mut link: Box<dyn LinkClock>) -> EngineHandle {
                         ports: &mut port_sinks,
                         channel_to_port: &channel_to_port,
                         clock_ports: &clock_ports,
+                        virtual_idx,
+                        mirror_on: false,
                     };
                     st.seq.release_lanes(&lanes, now, &mut fanout);
                 }
@@ -961,12 +1069,16 @@ pub fn spawn_engine(set: Set, mut link: Box<dyn LinkClock>) -> EngineHandle {
             //     NO enumerate/connect here; the watcher owns that. ---
             if st.route_dirty {
                 st.route_dirty = false;
-                let new_plan = build_route_plan(st.seq.lanes());
+                // Re-plan ALWAYS includes the virtual port (same as startup) so it stays a
+                // valid target after a route change. Its slot is carried over by key below,
+                // preserving the live virtual sink.
+                let new_plan = build_route_plan_with_virtual(st.seq.lanes());
                 let new_keys: Vec<String> = new_plan
                     .ports
                     .iter()
                     .map(|p| port_key(p).to_string())
                     .collect();
+                virtual_idx = virtual_port_index(&new_plan);
 
                 // Always adopt the new channel/clock/lane maps (a route change can move a
                 // channel between existing ports without changing the key SET).
@@ -977,11 +1089,14 @@ pub fn spawn_engine(set: Set, mut link: Box<dyn LinkClock>) -> EngineHandle {
                 if new_keys != port_keys {
                     // Release every sounding note before the topology shifts (the old
                     // channel→port map still routes the NoteOffs to the live connections).
+                    // Mirror is OFF for cleanup, so `virtual_idx` is unused here — pass None.
                     {
                         let mut fanout = PortFanoutSink {
                             ports: &mut port_sinks,
                             channel_to_port: &channel_to_port,
                             clock_ports: &clock_ports,
+                            virtual_idx: None,
+                            mirror_on: false,
                         };
                         st.seq.release_all(now, &mut fanout);
                     }
@@ -1043,63 +1158,38 @@ pub fn spawn_engine(set: Set, mut link: Box<dyn LinkClock>) -> EngineHandle {
     }
 }
 
-/// Route-targeted fan-out: delivers each `send` ONLY to the port(s) its `route_targets`
-/// resolves to — a channel message goes to that channel's single mapped port; MIDI Clock
-/// goes once to each clock-out port. Unmapped channels drop silently. (Replaces the old
-/// broadcast-to-every-port model.) One delivery per physical port preserves no-double-clock.
+/// Route-targeted fan-out: delivers each `send` ONLY to the port(s) its targets resolve to
+/// — a channel message goes to that channel's single mapped port; MIDI Clock goes once to
+/// each clock-out port. Unmapped channels drop silently. One delivery per physical port
+/// preserves no-double-clock.
+///
+/// The virtual-"midip" MIRROR is folded in here (replacing the old additive `TeeSink`):
+/// when `mirror_on` and a `virtual_idx` exists, the FULL stream is ALSO delivered to the
+/// virtual port — deduped so a lane already routed to "midip" is not sent twice. Non-virtual
+/// (hardware) targets are byte-identical whether the mirror is on or off.
 struct PortFanoutSink<'a> {
     ports: &'a mut Vec<PortSink>,
     channel_to_port: &'a [Option<usize>; 16],
     clock_ports: &'a [usize],
+    /// Index of the engine-managed virtual "midip" port in `ports`, if present.
+    virtual_idx: Option<usize>,
+    /// When true, mirror the full stream to `virtual_idx` (in addition to routing).
+    mirror_on: bool,
 }
 
 impl<'a> MidiSink for PortFanoutSink<'a> {
     fn send(&mut self, msg: crate::midi::message::MidiMessage, at_micros: u64) {
-        for idx in route_targets(&msg, self.channel_to_port, self.clock_ports) {
+        for idx in route_targets_with_mirror(
+            &msg,
+            self.channel_to_port,
+            self.clock_ports,
+            self.virtual_idx,
+            self.mirror_on,
+        ) {
             if let Some(ps) = self.ports.get_mut(idx) {
                 ps.sink.send(msg.clone(), at_micros);
             }
         }
-    }
-}
-
-/// Additive tee: always forwards every message to `primary`; if `mirror_on` and `mirror`
-/// is `Some`, ALSO forwards an identical copy to the mirror sink.
-///
-/// The mirror receives the RAW full stream (all channels + MIDI clock) — independent of
-/// `route_targets` — so the virtual port carries everything. The hardware path through
-/// `primary` is byte-identical whether the mirror is on or off.
-///
-/// Two distinct lifetimes prevent the borrow checker from tying `primary` and `mirror`
-/// to the same scope, which would propagate the mirror's borrow into the surrounding loop
-/// and block subsequent uses of the port-sink / virtual-sink locals.
-///
-/// `mirror` borrows the `Option` CONTAINER (`&mut Option<Box<dyn MidiSink>>`) rather than
-/// an `Option<&mut dyn MidiSink>`. Borrowing the container — and dereferencing inside
-/// `send()` — keeps the borrow trivially scoped per loop iteration, which NLL accepts
-/// cleanly. (An `Option<&mut dyn ..>` reborrow tripped an NLL false-positive because the
-/// `Option<Box<..>>` destructor at the enclosing scope's exit appeared to extend the
-/// borrow across iterations.) All safe — no `unsafe`/raw pointers.
-struct TeeSink<'p, 'm> {
-    primary: &'p mut dyn MidiSink,
-    mirror: &'m mut Option<Box<dyn MidiSink>>,
-    mirror_on: bool,
-}
-
-impl<'p, 'm> MidiSink for TeeSink<'p, 'm> {
-    fn send(&mut self, msg: crate::midi::message::MidiMessage, at_micros: u64) {
-        // Primary always receives the message — hardware path unchanged.
-        self.primary.send(msg.clone(), at_micros);
-        // Mirror is purely additive: only when enabled AND a mirror sink exists.
-        if self.mirror_on {
-            if let Some(m) = self.mirror.as_mut() {
-                m.send(msg, at_micros);
-            }
-        }
-    }
-
-    fn health(&self) -> bool {
-        self.primary.health()
     }
 }
 
@@ -1889,104 +1979,351 @@ mod tests {
         assert!((bpm - 120.0).abs() < 2.0, "expected bpm ≈ 120, got {bpm}");
     }
 
-    // --- TeeSink / virtual mirror tests ---
+    // --- Virtual "midip" port: first-class routable destination + folded mirror ---
+    //
+    // The virtual port is now a managed `PortSink` (NOT a separate TeeSink target). The
+    // mirror is folded into the fan-out: when `mirror_on`, the FULL stream is delivered to
+    // the virtual port index in ADDITION to whatever `route_targets` resolves, deduped so a
+    // lane routed to "midip" while the mirror is also on is not sent twice. The earlier
+    // M2.5 `TeeSink` tests were rewritten to assert the SAME observable mirror behavior via
+    // the new `route_targets_with_mirror` path (TeeSink removed).
 
-    /// Mirror sink that records into a shared buffer the test can inspect after the boxed
-    /// sink is type-erased into `Box<dyn MidiSink>` (as the engine stores `virtual_sink`).
-    /// `Arc<Mutex<..>>` (not `Rc`) because `MidiSink: Send`.
+    use crate::pattern::model::VIRTUAL_PORT_KEY;
+
+    /// Sink that records into a shared buffer the test can inspect AFTER it is type-erased
+    /// into `Box<dyn MidiSink>` (as a `PortSink` stores it). `Arc<Mutex<..>>` (not `Rc`)
+    /// because `MidiSink: Send`. Replaces the old `SharedRecordingSink` used by the TeeSink
+    /// tests; same purpose, used now to inspect fan-out delivery per port.
     #[derive(Clone)]
-    struct SharedRecordingSink {
+    struct RecordingProbe {
         events: std::sync::Arc<std::sync::Mutex<Vec<(u64, crate::midi::MidiMessage)>>>,
     }
-    impl SharedRecordingSink {
+    impl RecordingProbe {
         fn new() -> Self {
-            SharedRecordingSink {
+            RecordingProbe {
                 events: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             }
         }
+        fn len(&self) -> usize {
+            self.events.lock().unwrap().len()
+        }
     }
-    impl MidiSink for SharedRecordingSink {
+    impl MidiSink for RecordingProbe {
         fn send(&mut self, msg: crate::midi::MidiMessage, at_micros: u64) {
             self.events.lock().unwrap().push((at_micros, msg));
         }
     }
 
-    /// With mirror_on=false the primary always records the message; the mirror does not.
+    /// A lane explicitly routed to the virtual "midip" port on the given channel.
+    fn virtual_lane(set: &Set, lane: usize, channel: u8, clock_out: bool) -> Lane {
+        let mut l = set.lanes[lane].clone();
+        l.route = Some(LaneRoute {
+            port: PortRef::virtual_midip(),
+            channel,
+            clock_out,
+        });
+        l
+    }
+
+    /// `build_route_plan_with_virtual` always includes the virtual "midip" port in its
+    /// `ports` list (so it is a valid routable target even when no lane currently uses it).
     #[test]
-    fn tee_forwards_to_primary_always() {
-        let mut primary = RecordingSink::new();
-        let mirror = SharedRecordingSink::new();
-        let mirror_events = mirror.events.clone();
-        let mut mirror_opt: Option<Box<dyn MidiSink>> = Some(Box::new(mirror));
-        {
-            let mut tee = TeeSink {
-                primary: &mut primary,
-                mirror: &mut mirror_opt,
-                mirror_on: false,
-            };
-            tee.send(crate::midi::MidiMessage::Clock, 42);
-        }
+    fn build_route_plan_includes_virtual_port() {
+        let set = default_set();
+        let plan = build_route_plan_with_virtual(&set.lanes);
+        let vidx = virtual_port_index(&plan).expect("virtual port must be present in the plan");
+        assert_eq!(plan.ports[vidx].stable_key, VIRTUAL_PORT_KEY);
+        assert_eq!(plan.ports[vidx].name, "midip");
+        // The two hardware ports (T-8, S-1) plus the virtual port = 3 distinct ports.
+        assert_eq!(plan.ports.len(), 3, "two hardware ports + the virtual port");
+    }
+
+    /// A lane whose route key == VIRTUAL_PORT_KEY maps its channel to the virtual port index.
+    #[test]
+    fn lane_routed_to_virtual_maps_to_virtual_port() {
+        let mut set = default_set();
+        // Route lane 2 (S-1, melodic) to the virtual port on channel 7.
+        set.lanes[2] = virtual_lane(&set, 2, 7, true);
+
+        let plan = build_route_plan_with_virtual(&set.lanes);
+        let vidx = virtual_port_index(&plan).expect("virtual port present");
+
+        // Channel 7 routes to the virtual port index.
         assert_eq!(
-            primary.events.len(),
-            1,
-            "primary must always receive the message"
+            plan.channel_to_port[7],
+            Some(vidx),
+            "ch7 must map to the virtual port index"
         );
+        // The lane itself maps to the virtual port index.
         assert_eq!(
-            mirror_events.lock().unwrap().len(),
-            0,
-            "mirror must NOT receive the message when mirror_on=false"
+            plan.lane_to_port[2], vidx,
+            "lane 2 delivers to the virtual port"
+        );
+        // clock_out=true → the virtual port appears in clock_ports.
+        assert!(
+            plan.clock_ports.contains(&vidx),
+            "clock_out lane routed to virtual must clock the virtual port"
         );
     }
 
-    /// With mirror_on=true BOTH primary and mirror record the same message + timestamp.
+    /// When a lane routes channel→virtual (and mirror is OFF), `route_targets_with_mirror`
+    /// delivers that channel's messages to the virtual port index.
     #[test]
-    fn tee_mirrors_when_on() {
-        let mut primary = RecordingSink::new();
-        let mirror = SharedRecordingSink::new();
-        let mirror_events = mirror.events.clone();
-        let mut mirror_opt: Option<Box<dyn MidiSink>> = Some(Box::new(mirror));
-        let msg = crate::midi::MidiMessage::NoteOn {
-            channel: 1,
+    fn route_targets_delivers_to_virtual_when_routed() {
+        let mut channel_to_port = [None; 16];
+        let vidx = 1usize;
+        channel_to_port[3] = Some(vidx); // ch3 routed to the virtual port
+        let clock_ports: Vec<usize> = vec![];
+
+        let note = crate::midi::MidiMessage::NoteOn {
+            channel: 3,
             note: 60,
             vel: 100,
         };
-        {
-            let mut tee = TeeSink {
-                primary: &mut primary,
-                mirror: &mut mirror_opt,
-                mirror_on: true,
-            };
-            tee.send(msg.clone(), 999);
-        }
+        // mirror_on=false: only the routed target.
         assert_eq!(
-            primary.events,
-            vec![(999, msg.clone())],
-            "primary must record the message"
+            route_targets_with_mirror(&note, &channel_to_port, &clock_ports, Some(vidx), false),
+            vec![vidx]
         );
+        // An unrouted channel with mirror off → nothing reaches the virtual port.
+        let other = crate::midi::MidiMessage::NoteOn {
+            channel: 9,
+            note: 36,
+            vel: 100,
+        };
+        assert!(route_targets_with_mirror(
+            &other,
+            &channel_to_port,
+            &clock_ports,
+            Some(vidx),
+            false
+        )
+        .is_empty());
+    }
+
+    /// With mirror_on=true, the FULL stream (notes/CC + Clock) reaches the virtual port,
+    /// regardless of routing — equivalent to the old additive TeeSink mirror.
+    #[test]
+    fn route_targets_delivers_everything_to_virtual_when_mirror_on() {
+        let mut channel_to_port = [None; 16];
+        let vidx = 0usize;
+        // ch9 is routed to a DIFFERENT (hardware) port index 1; the virtual port is vidx 0.
+        channel_to_port[9] = Some(1);
+        let clock_ports: Vec<usize> = vec![1]; // hardware clocks; virtual not in clock_ports
+
+        // A note on a hardware-routed channel: hardware target PLUS the virtual mirror.
+        let note = crate::midi::MidiMessage::NoteOn {
+            channel: 9,
+            note: 36,
+            vel: 100,
+        };
+        let mut got =
+            route_targets_with_mirror(&note, &channel_to_port, &clock_ports, Some(vidx), true);
+        got.sort_unstable();
         assert_eq!(
-            *mirror_events.lock().unwrap(),
-            vec![(999, msg)],
-            "mirror must record the same message when mirror_on=true"
+            got,
+            vec![0, 1],
+            "mirror adds the virtual port to the hardware target"
+        );
+
+        // Clock reaches every clock port PLUS the virtual port when mirror is on.
+        let mut clk = route_targets_with_mirror(
+            &crate::midi::MidiMessage::Clock,
+            &channel_to_port,
+            &clock_ports,
+            Some(vidx),
+            true,
+        );
+        clk.sort_unstable();
+        assert_eq!(clk, vec![0, 1], "mirror clocks the virtual port too");
+
+        // An UNROUTED channel still mirrors to the virtual port (full stream).
+        let unrouted = crate::midi::MidiMessage::NoteOn {
+            channel: 5,
+            note: 40,
+            vel: 64,
+        };
+        assert_eq!(
+            route_targets_with_mirror(&unrouted, &channel_to_port, &clock_ports, Some(vidx), true),
+            vec![vidx],
+            "mirror delivers even unrouted channels to the virtual port"
         );
     }
 
-    /// With mirror=None and mirror_on=true only primary records; no panic.
+    /// Dedup: a lane routed to the virtual port WHILE the mirror is also on must NOT send the
+    /// message twice — the virtual port appears exactly once in the target list.
     #[test]
-    fn tee_no_mirror_when_none() {
-        let mut primary = RecordingSink::new();
-        let mut mirror_opt: Option<Box<dyn MidiSink>> = None;
+    fn mirror_plus_route_does_not_double_send() {
+        let mut channel_to_port = [None; 16];
+        let vidx = 0usize;
+        channel_to_port[3] = Some(vidx); // ch3 ROUTED to the virtual port
+        let clock_ports: Vec<usize> = vec![vidx]; // and the virtual port clocks out
+
+        let note = crate::midi::MidiMessage::NoteOn {
+            channel: 3,
+            note: 60,
+            vel: 100,
+        };
+        let targets =
+            route_targets_with_mirror(&note, &channel_to_port, &clock_ports, Some(vidx), true);
+        assert_eq!(
+            targets,
+            vec![vidx],
+            "virtual port must appear exactly once (route + mirror deduped); got {targets:?}"
+        );
+
+        // Same for Clock: virtual port in clock_ports AND mirror on → still once.
+        let clk = route_targets_with_mirror(
+            &crate::midi::MidiMessage::Clock,
+            &channel_to_port,
+            &clock_ports,
+            Some(vidx),
+            true,
+        );
+        assert_eq!(
+            clk,
+            vec![vidx],
+            "Clock to virtual must not double when in clock_ports AND mirror on; got {clk:?}"
+        );
+    }
+
+    /// Rewritten M2.5 mirror test (was `tee_forwards_to_primary_always`): with mirror OFF the
+    /// hardware path is unaffected and the virtual port receives nothing for an unrouted msg.
+    #[test]
+    fn fanout_mirror_off_does_not_reach_virtual() {
+        let channel_to_port = [None; 16]; // nothing routed
+        let vidx = 0usize;
+        let clock_ports: Vec<usize> = vec![];
+        // Clock with mirror off and virtual not in clock_ports → virtual gets nothing.
+        let clk = route_targets_with_mirror(
+            &crate::midi::MidiMessage::Clock,
+            &channel_to_port,
+            &clock_ports,
+            Some(vidx),
+            false,
+        );
+        assert!(
+            !clk.contains(&vidx),
+            "mirror OFF must not deliver to the virtual port; got {clk:?}"
+        );
+    }
+
+    /// Rewritten M2.5 mirror test (was `tee_mirrors_when_on`): mirror ON delivers the full
+    /// stream to the virtual port via a `PortFanoutSink` carrying RecordingSinks — the same
+    /// observable behavior as the old TeeSink mirror, now folded into the fan-out.
+    #[test]
+    fn fanout_mirrors_full_stream_when_on() {
+        // Two ports: index 0 = hardware (ch9 routed here), index 1 = virtual.
+        let hw_probe = RecordingProbe::new();
+        let virtual_probe = RecordingProbe::new();
+        let mut ports = vec![
+            PortSink {
+                sink: Box::new(hw_probe.clone()),
+                connected: true,
+                port_name: "HW".into(),
+            },
+            PortSink {
+                sink: Box::new(virtual_probe.clone()),
+                connected: true,
+                port_name: "midip".into(),
+            },
+        ];
+        let mut channel_to_port = [None; 16];
+        channel_to_port[9] = Some(0);
+        let clock_ports = vec![0];
+        let vidx = 1usize;
+
         {
-            let mut tee = TeeSink {
-                primary: &mut primary,
-                mirror: &mut mirror_opt,
+            let mut fanout = PortFanoutSink {
+                ports: &mut ports,
+                channel_to_port: &channel_to_port,
+                clock_ports: &clock_ports,
+                virtual_idx: Some(vidx),
                 mirror_on: true,
             };
-            tee.send(crate::midi::MidiMessage::Clock, 1);
+            let note = crate::midi::MidiMessage::NoteOn {
+                channel: 9,
+                note: 36,
+                vel: 100,
+            };
+            fanout.send(note, 999);
+            fanout.send(crate::midi::MidiMessage::Clock, 1000);
         }
+
+        // The virtual port (idx 1) must have received BOTH the note and the clock (mirror).
         assert_eq!(
-            primary.events.len(),
-            1,
-            "primary must still receive the message"
+            virtual_probe.len(),
+            2,
+            "mirror ON: virtual port must receive the full stream (note + clock)"
+        );
+        // Hardware port (idx 0) byte-identical: the note (routed) + the clock (clock_ports).
+        assert_eq!(hw_probe.len(), 2, "hardware path unaffected by the mirror");
+    }
+
+    /// Rewritten M2.5 mirror test (was `tee_no_mirror_when_none`): when there is NO virtual
+    /// port (None), mirror_on=true is a no-op and never panics; hardware path is untouched.
+    #[test]
+    fn fanout_no_virtual_port_is_noop_when_mirror_on() {
+        let channel_to_port = [None; 16];
+        let clock_ports = vec![0usize];
+        // virtual_idx = None: mirror on must not add any phantom index.
+        let clk = route_targets_with_mirror(
+            &crate::midi::MidiMessage::Clock,
+            &channel_to_port,
+            &clock_ports,
+            None,
+            true,
+        );
+        assert_eq!(clk, vec![0], "no virtual port → mirror adds nothing");
+    }
+
+    /// CON ●: a lane routed to the virtual port reports `connected=true` whenever the virtual
+    /// sink is the real virtual output (created). Pure status derivation.
+    #[test]
+    fn lane_routed_to_virtual_reports_connected() {
+        let mut set = default_set();
+        set.lanes[2] = virtual_lane(&set, 2, 7, true);
+        let plan = build_route_plan_with_virtual(&set.lanes);
+        let vidx = virtual_port_index(&plan).unwrap();
+
+        // Build port_sinks mirroring spawn_engine: hardware ports NullSink/disconnected; the
+        // virtual port carries the (simulated) created virtual sink → connected=true.
+        let ports: Vec<PortSink> = plan
+            .ports
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                if i == vidx {
+                    PortSink {
+                        sink: Box::new(RecordingSink::new()), // stands in for the real virtual sink
+                        connected: true,
+                        port_name: p.name.clone(),
+                    }
+                } else {
+                    PortSink {
+                        sink: Box::new(NullSink),
+                        connected: false,
+                        port_name: String::new(),
+                    }
+                }
+            })
+            .collect();
+
+        let mut events: Vec<EngineEvent> = Vec::new();
+        emit_lane_status(&ports, &plan.lane_to_port, &mut events);
+
+        let lane2 = events.iter().find_map(|e| match e {
+            EngineEvent::DeviceStatus {
+                lane: 2,
+                connected,
+                port,
+            } => Some((*connected, port.clone())),
+            _ => None,
+        });
+        assert_eq!(
+            lane2,
+            Some((true, "midip".to_string())),
+            "lane routed to the virtual port must report connected=true with name 'midip'"
         );
     }
 
