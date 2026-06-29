@@ -528,6 +528,138 @@ pub fn save_favorites(dir: &Path, favs: &Favorites) -> anyhow::Result<()> {
     Ok(())
 }
 
+// ── Crate model + store ───────────────────────────────────────────────────────
+
+/// The current on-disk schema version for crates. Increment when the format changes.
+pub const CURRENT_CRATES_VERSION: u32 = 1;
+
+/// One slot in a crate: a pattern reference plus an optional display label override.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CrateEntry {
+    pub pattern: PatternRef,
+    #[serde(default)]
+    pub label: Option<String>,
+}
+
+/// A named, ordered collection of pattern references.
+/// A pattern may appear in multiple crates; entries within one crate may also repeat.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Crate {
+    #[serde(default)]
+    pub id: persist::Id,
+    pub name: String,
+    #[serde(default)]
+    pub entries: Vec<CrateEntry>,
+}
+
+/// Top-level index of all crates, persisted as a single `crates.json`.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct CrateIndex {
+    #[serde(default)]
+    pub version: u32,
+    #[serde(default)]
+    pub crates: Vec<Crate>,
+}
+
+impl CrateIndex {
+    /// Push a new crate with a fresh id; returns the index of the new crate.
+    pub fn add_crate(&mut self, name: String) -> usize {
+        self.crates.push(Crate {
+            id: persist::mint_id(),
+            name,
+            entries: Vec::new(),
+        });
+        self.crates.len() - 1
+    }
+
+    /// Remove the crate at `idx`. No-op if out of range.
+    pub fn remove_crate(&mut self, idx: usize) {
+        if idx < self.crates.len() {
+            self.crates.remove(idx);
+        }
+    }
+
+    /// Rename the crate at `idx`, keeping its stable id. No-op if out of range.
+    pub fn rename_crate(&mut self, idx: usize, name: String) {
+        if let Some(c) = self.crates.get_mut(idx) {
+            c.name = name;
+        }
+    }
+
+    /// Clone the crate at `idx` with a fresh id and name `"<name> copy"`.
+    /// Returns the index of the new crate, or `None` if `idx` is out of range.
+    pub fn duplicate_crate(&mut self, idx: usize) -> Option<usize> {
+        let src = self.crates.get(idx)?.clone();
+        let new_crate = Crate {
+            id: persist::mint_id(),
+            name: format!("{} copy", src.name),
+            entries: src.entries,
+        };
+        self.crates.push(new_crate);
+        Some(self.crates.len() - 1)
+    }
+
+    /// Append `entry` to the crate at `crate_idx`. No-op if out of range.
+    pub fn add_entry(&mut self, crate_idx: usize, entry: CrateEntry) {
+        if let Some(c) = self.crates.get_mut(crate_idx) {
+            c.entries.push(entry);
+        }
+    }
+
+    /// Remove the entry at `entry_idx` from the crate at `crate_idx`.
+    /// No-op if either index is out of range.
+    pub fn remove_entry(&mut self, crate_idx: usize, entry_idx: usize) {
+        if let Some(c) = self.crates.get_mut(crate_idx) {
+            if entry_idx < c.entries.len() {
+                c.entries.remove(entry_idx);
+            }
+        }
+    }
+
+    /// Move the entry at `from` to position `to` within the crate at `crate_idx`.
+    /// No-op if `crate_idx`, `from`, or `to` are out of range.
+    pub fn reorder_entry(&mut self, crate_idx: usize, from: usize, to: usize) {
+        let Some(c) = self.crates.get_mut(crate_idx) else {
+            return;
+        };
+        let len = c.entries.len();
+        if from >= len || to >= len {
+            return;
+        }
+        let entry = c.entries.remove(from);
+        c.entries.insert(to, entry);
+    }
+}
+
+/// Path of the crates index file under `dir`.
+pub fn crates_path(dir: &Path) -> PathBuf {
+    dir.join("crates.json")
+}
+
+/// Load the crate index from `dir/crates.json`.
+/// Returns `CrateIndex::default()` on any error (missing file, parse error).
+pub fn load_crates(dir: &Path) -> CrateIndex {
+    let path = crates_path(dir);
+    let Ok(json) = std::fs::read_to_string(&path) else {
+        return CrateIndex::default();
+    };
+    serde_json::from_str(&json).unwrap_or_default()
+}
+
+/// Atomically write the crate index to `dir/crates.json`, stamping the current version.
+pub fn save_crates(dir: &Path, index: &CrateIndex) -> anyhow::Result<()> {
+    let path = crates_path(dir);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).context("creating crates dir")?;
+    }
+    let mut stamped = index.clone();
+    stamped.version = CURRENT_CRATES_VERSION;
+    let json = serde_json::to_string_pretty(&stamped).context("serializing crates")?;
+    persist::write_atomic(&path, json.as_bytes())
+        .with_context(|| format!("writing crates {}", path.display()))?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1389,5 +1521,158 @@ mod tests {
         assert!(loaded.contains(&vendored_ref("drums")));
         assert!(loaded.contains(&vendored_ref("bass")));
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // ── Task 2: Crate model + store ──────────────────────────────────────────
+
+    fn drum_entry() -> CrateEntry {
+        CrateEntry {
+            pattern: vendored_ref("drums"),
+            label: None,
+        }
+    }
+
+    fn bass_entry() -> CrateEntry {
+        CrateEntry {
+            pattern: vendored_ref("bass"),
+            label: Some("my bass".to_string()),
+        }
+    }
+
+    #[test]
+    fn crate_index_roundtrip() {
+        let dir = unique_dir("crate-roundtrip");
+        let mut idx = CrateIndex::default();
+        let ci = idx.add_crate("Set A".to_string());
+        idx.add_entry(ci, drum_entry());
+        idx.add_entry(ci, bass_entry());
+
+        let id_before = idx.crates[ci].id.clone();
+
+        save_crates(&dir, &idx).unwrap();
+        let loaded = load_crates(&dir);
+
+        assert_eq!(loaded.version, CURRENT_CRATES_VERSION);
+        assert_eq!(loaded.crates.len(), 1);
+        assert_eq!(loaded.crates[0].name, "Set A");
+        assert_eq!(loaded.crates[0].id, id_before);
+        assert_eq!(loaded.crates[0].entries.len(), 2);
+        assert_eq!(loaded.crates[0].entries[0], drum_entry());
+        assert_eq!(loaded.crates[0].entries[1], bass_entry());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn add_remove_rename_crate() {
+        let mut idx = CrateIndex::default();
+        let ci = idx.add_crate("Alpha".to_string());
+        let id_before = idx.crates[ci].id.clone();
+
+        // rename keeps id
+        idx.rename_crate(ci, "Beta".to_string());
+        assert_eq!(idx.crates[ci].name, "Beta");
+        assert_eq!(idx.crates[ci].id, id_before, "rename must keep id stable");
+
+        // add a second crate then remove first
+        idx.add_crate("Gamma".to_string());
+        assert_eq!(idx.crates.len(), 2);
+        idx.remove_crate(0);
+        assert_eq!(idx.crates.len(), 1);
+        assert_eq!(idx.crates[0].name, "Gamma");
+
+        // out-of-range remove is a no-op (must not panic)
+        idx.remove_crate(99);
+        assert_eq!(idx.crates.len(), 1);
+    }
+
+    #[test]
+    fn duplicate_crate_fresh_id() {
+        let mut idx = CrateIndex::default();
+        let ci = idx.add_crate("Original".to_string());
+        idx.add_entry(ci, drum_entry());
+        let orig_id = idx.crates[ci].id.clone();
+
+        let dup_ci = idx.duplicate_crate(ci).expect("duplicate must succeed");
+        let dup = &idx.crates[dup_ci];
+
+        assert_ne!(dup.id, orig_id, "duplicate must have a fresh id");
+        assert_eq!(dup.name, "Original copy");
+        assert_eq!(dup.entries.len(), 1, "entries must be copied");
+        assert_eq!(dup.entries[0], drum_entry());
+
+        // out-of-range duplicate returns None (must not panic)
+        assert!(idx.duplicate_crate(99).is_none());
+    }
+
+    #[test]
+    fn add_remove_reorder_entry() {
+        let mut idx = CrateIndex::default();
+        let ci = idx.add_crate("Crate".to_string());
+        idx.add_entry(ci, drum_entry());
+        idx.add_entry(ci, bass_entry());
+
+        let synth_entry = CrateEntry {
+            pattern: vendored_ref("synth"),
+            label: None,
+        };
+        idx.add_entry(ci, synth_entry.clone());
+        // entries: [drums, bass, synth]
+        assert_eq!(idx.crates[ci].entries.len(), 3);
+
+        // reorder: move index 2 (synth) to index 0
+        idx.reorder_entry(ci, 2, 0);
+        // entries: [synth, drums, bass]
+        assert_eq!(idx.crates[ci].entries[0], synth_entry);
+        assert_eq!(idx.crates[ci].entries[1], drum_entry());
+        assert_eq!(idx.crates[ci].entries[2], bass_entry());
+
+        // out-of-range reorder is a no-op (must not panic)
+        idx.reorder_entry(ci, 99, 0);
+        idx.reorder_entry(ci, 0, 99);
+        idx.reorder_entry(99, 0, 1);
+        assert_eq!(
+            idx.crates[ci].entries.len(),
+            3,
+            "entries unchanged after bad reorder"
+        );
+
+        // remove entry at index 1 (drums)
+        idx.remove_entry(ci, 1);
+        assert_eq!(idx.crates[ci].entries.len(), 2);
+        assert_eq!(idx.crates[ci].entries[0], synth_entry);
+        assert_eq!(idx.crates[ci].entries[1], bass_entry());
+
+        // out-of-range remove_entry is a no-op (must not panic)
+        idx.remove_entry(ci, 99);
+        idx.remove_entry(99, 0);
+        assert_eq!(idx.crates[ci].entries.len(), 2);
+    }
+
+    #[test]
+    fn same_pattern_in_two_crates() {
+        let mut idx = CrateIndex::default();
+        let ca = idx.add_crate("Crate A".to_string());
+        let cb = idx.add_crate("Crate B".to_string());
+
+        // The same PatternRef added to both crates — must be allowed
+        idx.add_entry(ca, drum_entry());
+        idx.add_entry(cb, drum_entry());
+
+        assert_eq!(idx.crates[ca].entries[0].pattern, vendored_ref("drums"));
+        assert_eq!(idx.crates[cb].entries[0].pattern, vendored_ref("drums"));
+    }
+
+    #[test]
+    fn load_crates_missing_returns_default() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let absent = std::env::temp_dir().join(format!("midip-crate-absent-{}", nanos));
+        // Directory does not exist — must return empty default
+        let loaded = load_crates(&absent);
+        assert_eq!(loaded.version, 0);
+        assert!(loaded.crates.is_empty());
     }
 }
