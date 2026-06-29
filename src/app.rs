@@ -33,6 +33,7 @@ pub enum NamePurpose {
     RenameSet,
     SaveUserPattern,
     RenameScene,
+    RenameChain,
 }
 
 /// Action to perform when a Confirm dialog is accepted.
@@ -46,6 +47,8 @@ pub enum ConfirmAction {
     ConformToScale(usize),
     /// Remove the scene at `index` from `set.scenes` (after user confirmation).
     DeleteScene(usize),
+    /// Remove the chain at `index` from `set.chains` (after user confirmation).
+    DeleteChain(usize),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -67,6 +70,9 @@ pub enum Mode {
     /// Scene manager: list, capture, recall, rename, duplicate, delete scenes.
     /// Opened from Edit via `'G'`; `Esc`/`'G'` closes.
     Scenes,
+    /// Chain manager: list, create, rename, duplicate, delete chains and edit entries.
+    /// Opened from Edit (M7 UI — key assigned in Task 6).
+    Chains,
     /// QWERTY piano note-input sub-mode (melodic lanes only).
     ///
     /// Entered from melodic Edit via `'I'` (Shift+i — was unbound before M5a-T5).
@@ -243,6 +249,42 @@ pub enum Action {
     RecallSelectedScene,
     /// Resolve the selected scene's assignments; store missing lane indices.
     ValidateScene,
+    // ── M7 Chain manager ─────────────────────────────────────────────────────
+    /// Open the chain manager overlay from Edit mode.
+    OpenChains,
+    /// Close the chain manager and return to Edit.
+    CloseChains,
+    /// Move chain selection by delta (clamped).
+    ChainSelect(i32),
+    /// Create a new chain with an auto-generated name.
+    CreateChain,
+    /// Open name-entry to rename the selected chain.
+    RenameChain,
+    /// Internal: commit the rename with the supplied name.
+    DoRenameChain(String),
+    /// Duplicate the selected chain (deep clone + new ids + " copy" suffix).
+    DuplicateChain,
+    /// Open a Confirm dialog before deleting the selected chain.
+    DeleteChain,
+    /// Internal: remove the chain at `idx`, clamp sel, return to Chains.
+    DoDeleteChain(usize),
+    /// Append a new entry (scene_id) to the selected chain.
+    AddChainEntry { chain: usize, scene_id: crate::persist::Id },
+    /// Remove entry at `entry` from chain `chain`.
+    RemoveChainEntry { chain: usize, entry: usize },
+    /// Move entry at `entry` earlier in chain `chain`.
+    MoveChainEntry { chain: usize, entry: usize, up: bool },
+    /// Set `repeats` on the given entry (clamped >= 1).
+    SetChainEntryRepeats { chain: usize, entry: usize, value: u32 },
+    /// Set `bars` on the given entry (clamped >= 1).
+    SetChainEntryBars { chain: usize, entry: usize, value: u32 },
+    /// Toggle the `looped` flag on chain at `idx`.
+    ToggleChainLoop(usize),
+    // ── M7 Transport stubs (real behavior in Task 5) ──────────────────────────
+    /// Open the chains overlay (alias used by song-mode UI).
+    PlayChain(usize),
+    StopChain,
+    JumpChainEntry(usize),
     // ── Name-entry dialog ─────────────────────────────────────────────
     OpenNameEntry(NamePurpose),
     NameChar(char),
@@ -480,6 +522,8 @@ pub struct App {
     pub scene_sel: usize,
     /// Lane indices whose assignments could not be resolved by the last `ValidateScene`.
     pub scene_issues: Vec<usize>,
+    /// Index of the currently selected chain in `set.chains`.
+    pub chain_sel: usize,
 }
 
 /// Default melodic velocity multiplier when placing a note (1.0 -> MIDI 100).
@@ -550,6 +594,7 @@ impl App {
             note_input_octave: 0,
             scene_sel: 0,
             scene_issues: Vec::new(),
+            chain_sel: 0,
         }
     }
 
@@ -1763,6 +1808,127 @@ impl App {
                     }
                 }
             }
+            // ── M7 Chain manager ─────────────────────────────────────────────
+            Action::OpenChains => {
+                self.mode = Mode::Chains;
+            }
+            Action::CloseChains => {
+                self.mode = Mode::Edit;
+            }
+            Action::ChainSelect(delta) => {
+                let n = self.set.chains.len();
+                if n > 0 {
+                    let sel = self.chain_sel as i32 + delta;
+                    self.chain_sel = sel.clamp(0, (n as i32) - 1) as usize;
+                }
+            }
+            Action::CreateChain => {
+                let n = self.set.chains.len() + 1;
+                let name = format!("Chain {n}");
+                self.snapshot();
+                crate::pattern::chain::create_chain(&mut self.set, &name);
+                self.chain_sel = self.set.chains.len() - 1;
+                self.set_status(format!("Created {name}"));
+            }
+            Action::RenameChain => {
+                if let Some(chain) = self.set.chains.get(self.chain_sel) {
+                    self.name_input = chain.name.clone();
+                    self.mode = Mode::NameEntry(NamePurpose::RenameChain);
+                }
+            }
+            Action::DoRenameChain(name) => {
+                if self.set.chains.get(self.chain_sel).is_some() {
+                    self.snapshot();
+                    crate::pattern::chain::rename_chain(&mut self.set, self.chain_sel, &name);
+                    self.set_status(format!("Renamed to \"{name}\""));
+                }
+                self.mode = Mode::Chains;
+            }
+            Action::DuplicateChain => {
+                if self.set.chains.get(self.chain_sel).is_some() {
+                    self.snapshot();
+                    let new_idx =
+                        crate::pattern::chain::duplicate_chain(&mut self.set, self.chain_sel);
+                    self.chain_sel = new_idx;
+                    self.set_status("Chain duplicated");
+                }
+            }
+            Action::DeleteChain => {
+                let idx = self.chain_sel;
+                if self.set.chains.get(idx).is_some() {
+                    self.mode = Mode::Confirm(ConfirmAction::DeleteChain(idx));
+                }
+            }
+            Action::DoDeleteChain(idx) => {
+                if idx < self.set.chains.len() {
+                    self.snapshot();
+                    crate::pattern::chain::delete_chain(&mut self.set, idx);
+                    let n = self.set.chains.len();
+                    self.chain_sel = if n == 0 { 0 } else { self.chain_sel.min(n - 1) };
+                    self.set_status("Chain deleted");
+                }
+                self.mode = Mode::Chains;
+            }
+            Action::AddChainEntry { chain, scene_id } => {
+                if self.set.chains.get(chain).is_some() {
+                    self.snapshot();
+                    crate::pattern::chain::add_chain_entry(&mut self.set, chain, scene_id);
+                }
+            }
+            Action::RemoveChainEntry { chain, entry } => {
+                if self.set.chains.get(chain).and_then(|c| c.entries.get(entry)).is_some() {
+                    self.snapshot();
+                    crate::pattern::chain::remove_chain_entry(&mut self.set, chain, entry);
+                }
+            }
+            Action::MoveChainEntry { chain, entry, up } => {
+                if self.set.chains.get(chain).is_some() {
+                    self.snapshot();
+                    if up {
+                        crate::pattern::chain::move_chain_entry_up(&mut self.set, chain, entry);
+                    } else {
+                        crate::pattern::chain::move_chain_entry_down(&mut self.set, chain, entry);
+                    }
+                }
+            }
+            Action::SetChainEntryRepeats { chain, entry, value } => {
+                if self.set.chains.get(chain).and_then(|c| c.entries.get(entry)).is_some() {
+                    self.snapshot();
+                    crate::pattern::chain::set_chain_entry_repeats(
+                        &mut self.set,
+                        chain,
+                        entry,
+                        value,
+                    );
+                }
+            }
+            Action::SetChainEntryBars { chain, entry, value } => {
+                if self.set.chains.get(chain).and_then(|c| c.entries.get(entry)).is_some() {
+                    self.snapshot();
+                    crate::pattern::chain::set_chain_entry_bars(
+                        &mut self.set,
+                        chain,
+                        entry,
+                        value,
+                    );
+                }
+            }
+            Action::ToggleChainLoop(idx) => {
+                if self.set.chains.get(idx).is_some() {
+                    self.snapshot();
+                    crate::pattern::chain::toggle_chain_loop(&mut self.set, idx);
+                }
+            }
+            // ── M7 Transport stubs (real behavior in Task 5) ────────────────────
+            Action::PlayChain(_idx) => {
+                self.set_status("Chain playback: not yet (Task 5)");
+            }
+            Action::StopChain => {
+                self.set_status("Chain stop: not yet (Task 5)");
+            }
+            Action::JumpChainEntry(_idx) => {
+                self.set_status("Chain jump: not yet (Task 5)");
+            }
             Action::RestartLane => {
                 if self.engine_playing {
                     let lane = self.focus;
@@ -1982,6 +2148,7 @@ impl App {
                         NamePurpose::RenameSet => Action::RenameSet(name),
                         NamePurpose::SaveUserPattern => Action::SaveAsUserPattern(name),
                         NamePurpose::RenameScene => Action::DoRenameScene(name),
+                        NamePurpose::RenameChain => Action::DoRenameChain(name),
                     };
                     cmds.extend(self.apply(sub));
                 }
@@ -1997,6 +2164,7 @@ impl App {
                 self.name_input.clear();
                 self.mode = match purpose {
                     NamePurpose::RenameScene => Mode::Scenes,
+                    NamePurpose::RenameChain => Mode::Chains,
                     _ => Mode::Edit,
                 };
             }
@@ -2016,6 +2184,7 @@ impl App {
                     ConfirmAction::ClearPattern => Action::ClearPattern,
                     ConfirmAction::ConformToScale(_) => Action::ConformToScale,
                     ConfirmAction::DeleteScene(idx) => Action::DoDeleteScene(idx),
+                    ConfirmAction::DeleteChain(idx) => Action::DoDeleteChain(idx),
                 };
                 cmds.extend(self.apply(sub));
             }
@@ -2029,6 +2198,7 @@ impl App {
                 };
                 self.mode = match action {
                     ConfirmAction::DeleteScene(_) => Mode::Scenes,
+                    ConfirmAction::DeleteChain(_) => Mode::Chains,
                     _ => Mode::Edit,
                 };
                 self.set_status("Cancelled");
@@ -2661,6 +2831,7 @@ impl App {
             Mode::Confirm(_) => "CONFIRM",
             Mode::CrateView => "CRATE VIEW",
             Mode::Scenes => "SCENES",
+            Mode::Chains => "CHAINS",
             Mode::NoteInput => "NOTE INPUT",
         }
     }
@@ -9193,5 +9364,217 @@ mod tests {
             "lane 0 must be identified as missing; got: {:?}",
             app.scene_issues
         );
+    }
+
+    // ── M7 Task 4: Chain manager actions ─────────────────────────────────────
+
+    #[test]
+    fn open_close_chains_changes_mode() {
+        let mut app = new_app();
+        assert_eq!(app.mode, Mode::Edit);
+        app.apply(Action::OpenChains);
+        assert_eq!(app.mode, Mode::Chains);
+        app.apply(Action::CloseChains);
+        assert_eq!(app.mode, Mode::Edit);
+    }
+
+    #[test]
+    fn create_chain_adds_chain_dirty_undoable() {
+        let mut app = new_app();
+        assert!(app.set.chains.is_empty());
+        let pre = app.undo.len();
+        app.apply(Action::CreateChain);
+        assert_eq!(app.set.chains.len(), 1, "CreateChain must add a chain");
+        assert!(app.dirty, "CreateChain must mark dirty");
+        assert!(app.undo.len() > pre, "CreateChain must push undo snapshot");
+        assert_eq!(app.chain_sel, 0);
+        assert!(
+            app.set.chains[0].name.starts_with("Chain"),
+            "auto-name must start with Chain"
+        );
+    }
+
+    #[test]
+    fn create_chain_increments_sel() {
+        let mut app = new_app();
+        app.apply(Action::CreateChain);
+        app.apply(Action::CreateChain);
+        assert_eq!(app.set.chains.len(), 2);
+        assert_eq!(app.chain_sel, 1, "sel must point at newest chain");
+    }
+
+    #[test]
+    fn chain_select_clamps() {
+        let mut app = new_app();
+        app.apply(Action::CreateChain);
+        app.apply(Action::CreateChain);
+        app.chain_sel = 0;
+        app.apply(Action::ChainSelect(-5));
+        assert_eq!(app.chain_sel, 0, "must clamp at 0");
+        app.apply(Action::ChainSelect(99));
+        assert_eq!(app.chain_sel, 1, "must clamp at len-1");
+    }
+
+    #[test]
+    fn rename_chain_via_name_entry() {
+        let mut app = new_app();
+        app.apply(Action::CreateChain);
+        app.apply(Action::OpenChains);
+        app.chain_sel = 0;
+        app.apply(Action::RenameChain);
+        assert_eq!(app.mode, Mode::NameEntry(NamePurpose::RenameChain));
+        let pre = app.undo.len();
+        app.apply(Action::NameCommit); // empty name → no-op dispatch
+        // commit with a real name
+        app.apply(Action::RenameChain);
+        app.name_input = "My Chain".to_string();
+        app.apply(Action::NameCommit);
+        assert_eq!(app.set.chains[0].name, "My Chain");
+        assert!(app.dirty);
+        assert!(app.undo.len() > pre);
+        assert_eq!(app.mode, Mode::Chains, "must return to Chains after rename");
+    }
+
+    #[test]
+    fn duplicate_chain_fresh_id_and_copy_suffix() {
+        let mut app = new_app();
+        app.apply(Action::CreateChain);
+        let orig_id = app.set.chains[0].id.clone();
+        let pre = app.undo.len();
+        app.apply(Action::DuplicateChain);
+        assert_eq!(app.set.chains.len(), 2);
+        assert_ne!(app.set.chains[1].id, orig_id, "duplicate must have fresh id");
+        assert!(
+            app.set.chains[1].name.ends_with(" copy"),
+            "duplicate name must end with ' copy'"
+        );
+        assert!(app.dirty);
+        assert!(app.undo.len() > pre);
+        assert_eq!(app.chain_sel, 1, "sel must point at the copy");
+    }
+
+    #[test]
+    fn delete_chain_confirm_then_removes() {
+        let mut app = new_app();
+        app.apply(Action::CreateChain);
+        app.apply(Action::CreateChain);
+        app.apply(Action::OpenChains);
+        app.chain_sel = 1;
+        app.apply(Action::DeleteChain);
+        assert_eq!(
+            app.mode,
+            Mode::Confirm(ConfirmAction::DeleteChain(1)),
+            "must open Confirm(DeleteChain(1))"
+        );
+        let pre = app.undo.len();
+        app.apply(Action::ConfirmYes);
+        assert_eq!(app.set.chains.len(), 1, "must remove chain");
+        assert_eq!(app.chain_sel, 0, "sel must clamp to 0");
+        assert!(app.dirty);
+        assert!(app.undo.len() > pre);
+        assert_eq!(app.mode, Mode::Chains, "must return to Chains after delete");
+    }
+
+    #[test]
+    fn confirm_no_delete_chain_returns_to_chains() {
+        let mut app = new_app();
+        app.apply(Action::CreateChain);
+        app.apply(Action::OpenChains);
+        app.chain_sel = 0;
+        app.apply(Action::DeleteChain);
+        assert_eq!(app.mode, Mode::Confirm(ConfirmAction::DeleteChain(0)));
+        app.apply(Action::ConfirmNo);
+        assert_eq!(
+            app.mode,
+            Mode::Chains,
+            "ConfirmNo on DeleteChain must return to Mode::Chains"
+        );
+        assert_eq!(app.set.chains.len(), 1, "chain must not be deleted on cancel");
+    }
+
+    #[test]
+    fn add_remove_chain_entry_dirty_undoable() {
+        let mut app = new_app();
+        app.apply(Action::CreateChain);
+        let sid = crate::persist::mint_id();
+        let pre = app.undo.len();
+        app.apply(Action::AddChainEntry { chain: 0, scene_id: sid.clone() });
+        assert_eq!(app.set.chains[0].entries.len(), 1);
+        assert_eq!(app.set.chains[0].entries[0].scene_id, sid);
+        assert!(app.dirty);
+        assert!(app.undo.len() > pre);
+        // remove it
+        let pre2 = app.undo.len();
+        app.apply(Action::RemoveChainEntry { chain: 0, entry: 0 });
+        assert!(app.set.chains[0].entries.is_empty());
+        assert!(app.undo.len() > pre2);
+    }
+
+    #[test]
+    fn move_chain_entry_dirty_undoable() {
+        let mut app = new_app();
+        app.apply(Action::CreateChain);
+        let s0 = crate::persist::mint_id();
+        let s1 = crate::persist::mint_id();
+        app.apply(Action::AddChainEntry { chain: 0, scene_id: s0.clone() });
+        app.apply(Action::AddChainEntry { chain: 0, scene_id: s1.clone() });
+        let pre = app.undo.len();
+        app.apply(Action::MoveChainEntry { chain: 0, entry: 1, up: true });
+        assert_eq!(app.set.chains[0].entries[0].scene_id, s1);
+        assert!(app.dirty);
+        assert!(app.undo.len() > pre);
+        app.apply(Action::MoveChainEntry { chain: 0, entry: 0, up: false });
+        assert_eq!(app.set.chains[0].entries[0].scene_id, s0);
+    }
+
+    #[test]
+    fn set_chain_entry_repeats_bars_clamped() {
+        let mut app = new_app();
+        app.apply(Action::CreateChain);
+        app.apply(Action::AddChainEntry { chain: 0, scene_id: crate::persist::mint_id() });
+        let pre = app.undo.len();
+        app.apply(Action::SetChainEntryRepeats { chain: 0, entry: 0, value: 0 });
+        assert_eq!(app.set.chains[0].entries[0].repeats, 1, "clamped to 1");
+        assert!(app.undo.len() > pre);
+        app.apply(Action::SetChainEntryRepeats { chain: 0, entry: 0, value: 3 });
+        assert_eq!(app.set.chains[0].entries[0].repeats, 3);
+        app.apply(Action::SetChainEntryBars { chain: 0, entry: 0, value: 0 });
+        assert_eq!(app.set.chains[0].entries[0].bars, 1, "clamped to 1");
+        app.apply(Action::SetChainEntryBars { chain: 0, entry: 0, value: 4 });
+        assert_eq!(app.set.chains[0].entries[0].bars, 4);
+    }
+
+    #[test]
+    fn toggle_chain_loop_action_dirty_undoable() {
+        let mut app = new_app();
+        app.apply(Action::CreateChain);
+        assert!(!app.set.chains[0].looped);
+        let pre = app.undo.len();
+        app.apply(Action::ToggleChainLoop(0));
+        assert!(app.set.chains[0].looped);
+        assert!(app.dirty);
+        assert!(app.undo.len() > pre);
+        app.apply(Action::ToggleChainLoop(0));
+        assert!(!app.set.chains[0].looped);
+    }
+
+    #[test]
+    fn transport_stubs_set_status_no_panic() {
+        let mut app = new_app();
+        app.apply(Action::PlayChain(0));
+        assert!(!app.status.is_empty());
+        app.apply(Action::StopChain);
+        assert!(!app.status.is_empty());
+        app.apply(Action::JumpChainEntry(0));
+        assert!(!app.status.is_empty());
+    }
+
+    #[test]
+    fn undo_restores_chain_state() {
+        let mut app = new_app();
+        app.apply(Action::CreateChain);
+        assert_eq!(app.set.chains.len(), 1);
+        app.apply(Action::Undo);
+        assert!(app.set.chains.is_empty(), "undo must restore empty chain list");
     }
 }

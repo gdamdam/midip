@@ -199,6 +199,18 @@ pub fn key_to_action(key: KeyEvent, mode: Mode, kind: LaneKind) -> Action {
                 _ => Action::None,
             };
         }
+        Mode::Chains => {
+            return match key.code {
+                KeyCode::Up => Action::ChainSelect(-1),
+                KeyCode::Down => Action::ChainSelect(1),
+                KeyCode::Char('c') => Action::CreateChain,
+                KeyCode::Char('r') => Action::RenameChain,
+                KeyCode::Char('d') => Action::DuplicateChain,
+                KeyCode::Char('x') | KeyCode::Delete => Action::DeleteChain,
+                KeyCode::Esc => Action::CloseChains,
+                _ => Action::None,
+            };
+        }
         Mode::Edit => {}
     }
 

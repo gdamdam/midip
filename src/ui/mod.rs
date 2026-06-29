@@ -45,6 +45,7 @@ fn context_footer(app: &App) -> Line<'static> {
         Mode::Scenes => {
             "[↑↓]select [enter]recall [c]capture [r]rename [d]dup [x]del [z]validate [G/esc]close"
         }
+        Mode::Chains => "[↑↓]select [c]create [r]rename [d]dup [x]del [esc]close",
         Mode::NoteInput => "[a-k]white [w/e/t/y/u]black [z]oct- [x]oct+ [bksp]del [esc]exit",
     };
     let label_style = Style::default()
@@ -132,6 +133,7 @@ pub fn render(f: &mut Frame, app: &App) {
         Mode::Confirm(_) => mgmt::render_confirm(f, centered(area, 50, 25), app),
         Mode::CrateView => crate_view::render_crate_view(f, centered(area, 70, 70), app),
         Mode::Scenes => scene_view::render_scene_view(f, centered(area, 70, 70), app),
+        Mode::Chains => {} // chain UI rendered in Task 6
         Mode::NoteInput => mgmt::render_note_input(f, centered(area, 60, 20), app),
         Mode::Edit | Mode::TempoEntry => {}
     }
