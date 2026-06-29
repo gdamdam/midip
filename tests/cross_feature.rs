@@ -1299,7 +1299,12 @@ fn chain_roundtrip_create_save_load_play_advance() {
 
     // Drum pattern: BD on step 0 (lane 0, ch 9).
     let mut drum_steps: Vec<DrumStep> = vec![Vec::new(); 16];
-    drum_steps[0].push(DrumHit { note: 36, vel: 100, prob: 1.0, ratchet: 1 });
+    drum_steps[0].push(DrumHit {
+        note: 36,
+        vel: 100,
+        prob: 1.0,
+        ratchet: 1,
+    });
     let mut drum_pat = Pattern {
         name: "bd-pattern".into(),
         desc: String::new(),
@@ -1349,8 +1354,8 @@ fn chain_roundtrip_create_save_load_play_advance() {
         bpm: 120.0,
         swing: 0.5,
         lanes: vec![
-            make_lane(profs[0], drum_pat.clone()),  // lane 0: drums (ch 9)
-            make_lane(profs[2], syn_pat.clone()),   // lane 1: synth, held note
+            make_lane(profs[0], drum_pat.clone()), // lane 0: drums (ch 9)
+            make_lane(profs[2], syn_pat.clone()),  // lane 1: synth, held note
         ],
         id: midip::persist::Id::nil(),
         scenes: Vec::new(),
@@ -1384,7 +1389,11 @@ fn chain_roundtrip_create_save_load_play_advance() {
     let loaded_set = store::load_set(&saved_path).unwrap();
 
     assert_eq!(loaded_set.chains.len(), 1, "chain must survive save/load");
-    assert_eq!(loaded_set.chains[0].entries.len(), 2, "both entries must survive");
+    assert_eq!(
+        loaded_set.chains[0].entries.len(),
+        2,
+        "both entries must survive"
+    );
     assert_eq!(
         loaded_set.chains[0].entries[0].scene_id, scene_a.id,
         "entry 0 must reference scene A"
@@ -1430,7 +1439,9 @@ fn chain_roundtrip_create_save_load_play_advance() {
     );
     // When stopped, recall_scene_quant uses LoadPattern (immediate apply), not QueueScene.
     assert!(
-        play_cmds.iter().any(|c| matches!(c, UiCommand::LoadPattern { .. })),
+        play_cmds
+            .iter()
+            .any(|c| matches!(c, UiCommand::LoadPattern { .. })),
         "PlayChain from stopped must emit LoadPattern for entry 0; got: {play_cmds:?}"
     );
 
@@ -1441,7 +1452,9 @@ fn chain_roundtrip_create_save_load_play_advance() {
     // (c) Bar boundary 1 (step=16): entry A has dwelled 1 bar → Advance to entry B.
     let bar1_cmds = app.tick_chain(16);
     assert!(
-        bar1_cmds.iter().any(|c| matches!(c, UiCommand::QueueScene { .. })),
+        bar1_cmds
+            .iter()
+            .any(|c| matches!(c, UiCommand::QueueScene { .. })),
         "tick_chain at step 16 must emit QueueScene for entry B; got: {bar1_cmds:?}"
     );
 
@@ -1496,11 +1509,15 @@ fn chain_roundtrip_create_save_load_play_advance() {
     // Entry 0 (scene A) is recalled immediately via LoadPattern (stopped-transport path);
     // entry 1 (scene B) is recalled via QueueScene at bar boundary 1 (engine_playing=true).
     assert!(
-        engine_cmds.iter().any(|(_, c)| matches!(c, UiCommand::Play)),
+        engine_cmds
+            .iter()
+            .any(|(_, c)| matches!(c, UiCommand::Play)),
         "must have Play command; got: {engine_cmds:?}"
     );
     assert!(
-        engine_cmds.iter().any(|(_, c)| matches!(c, UiCommand::LoadPattern { .. })),
+        engine_cmds
+            .iter()
+            .any(|(_, c)| matches!(c, UiCommand::LoadPattern { .. })),
         "must have LoadPattern for entry 0 (scene A); got: {engine_cmds:?}"
     );
     let q_scene_count = engine_cmds
@@ -1512,7 +1529,9 @@ fn chain_roundtrip_create_save_load_play_advance() {
         "must have exactly 1 QueueScene command (scene B at bar boundary); got: {engine_cmds:?}"
     );
     assert!(
-        engine_cmds.iter().any(|(_, c)| matches!(c, UiCommand::Stop)),
+        engine_cmds
+            .iter()
+            .any(|(_, c)| matches!(c, UiCommand::Stop)),
         "must have a Stop command; got: {engine_cmds:?}"
     );
 
@@ -1531,9 +1550,11 @@ fn chain_roundtrip_create_save_load_play_advance() {
     );
 
     // At least some MIDI was emitted (non-vacuous guard: real notes sounded).
-    let note_ons: Vec<_> = sink.events.iter().filter(|(_, m)| {
-        matches!(m, MidiMessage::NoteOn { vel, .. } if *vel > 0)
-    }).collect();
+    let note_ons: Vec<_> = sink
+        .events
+        .iter()
+        .filter(|(_, m)| matches!(m, MidiMessage::NoteOn { vel, .. } if *vel > 0))
+        .collect();
     assert!(
         !note_ons.is_empty(),
         "engine must emit real NoteOns across chain playback; got no NoteOns"

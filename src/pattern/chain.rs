@@ -89,7 +89,11 @@ pub fn delete_chain(set: &mut Set, idx: usize) {
 /// No-op if `chain_idx` is out of range.
 pub fn add_chain_entry(set: &mut Set, chain_idx: usize, scene_id: persist::Id) {
     if let Some(chain) = set.chains.get_mut(chain_idx) {
-        chain.entries.push(ChainEntry { scene_id, repeats: 1, bars: 1 });
+        chain.entries.push(ChainEntry {
+            scene_id,
+            repeats: 1,
+            bars: 1,
+        });
     }
 }
 

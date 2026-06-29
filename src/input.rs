@@ -1922,5 +1922,4 @@ mod tests {
             "'m' must ToggleSelectedChainLoop"
         );
     }
-
 }

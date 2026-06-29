@@ -269,7 +269,10 @@ pub enum Action {
     /// Internal: remove the chain at `idx`, clamp sel, return to Chains.
     DoDeleteChain(usize),
     /// Append a new entry (scene_id) to the selected chain.
-    AddChainEntry { chain: usize, scene_id: crate::persist::Id },
+    AddChainEntry {
+        chain: usize,
+        scene_id: crate::persist::Id,
+    },
     /// Append the currently selected scene (scene_sel) to the selected chain (chain_sel).
     AddSelectedSceneToChain,
     /// Remove the selected entry (chain_entry_sel) from the selected chain (chain_sel).
@@ -279,13 +282,28 @@ pub enum Action {
     /// Move entry selection up by 1 within the selected chain's entries.
     ChainEntrySelectPrev,
     /// Remove entry at `entry` from chain `chain`.
-    RemoveChainEntry { chain: usize, entry: usize },
+    RemoveChainEntry {
+        chain: usize,
+        entry: usize,
+    },
     /// Move entry at `entry` earlier in chain `chain`.
-    MoveChainEntry { chain: usize, entry: usize, up: bool },
+    MoveChainEntry {
+        chain: usize,
+        entry: usize,
+        up: bool,
+    },
     /// Set `repeats` on the given entry (clamped >= 1).
-    SetChainEntryRepeats { chain: usize, entry: usize, value: u32 },
+    SetChainEntryRepeats {
+        chain: usize,
+        entry: usize,
+        value: u32,
+    },
     /// Set `bars` on the given entry (clamped >= 1).
-    SetChainEntryBars { chain: usize, entry: usize, value: u32 },
+    SetChainEntryBars {
+        chain: usize,
+        entry: usize,
+        value: u32,
+    },
     /// Toggle the `looped` flag on chain at `idx`.
     ToggleChainLoop(usize),
     /// Toggle loop on the currently selected chain (dispatches ToggleChainLoop(chain_sel)).
@@ -2071,7 +2089,13 @@ impl App {
                 self.chain_entry_sel = self.chain_entry_sel.saturating_sub(1);
             }
             Action::RemoveChainEntry { chain, entry } => {
-                if self.set.chains.get(chain).and_then(|c| c.entries.get(entry)).is_some() {
+                if self
+                    .set
+                    .chains
+                    .get(chain)
+                    .and_then(|c| c.entries.get(entry))
+                    .is_some()
+                {
                     self.snapshot();
                     crate::pattern::chain::remove_chain_entry(&mut self.set, chain, entry);
                 }
@@ -2086,8 +2110,18 @@ impl App {
                     }
                 }
             }
-            Action::SetChainEntryRepeats { chain, entry, value } => {
-                if self.set.chains.get(chain).and_then(|c| c.entries.get(entry)).is_some() {
+            Action::SetChainEntryRepeats {
+                chain,
+                entry,
+                value,
+            } => {
+                if self
+                    .set
+                    .chains
+                    .get(chain)
+                    .and_then(|c| c.entries.get(entry))
+                    .is_some()
+                {
                     self.snapshot();
                     crate::pattern::chain::set_chain_entry_repeats(
                         &mut self.set,
@@ -2097,15 +2131,20 @@ impl App {
                     );
                 }
             }
-            Action::SetChainEntryBars { chain, entry, value } => {
-                if self.set.chains.get(chain).and_then(|c| c.entries.get(entry)).is_some() {
+            Action::SetChainEntryBars {
+                chain,
+                entry,
+                value,
+            } => {
+                if self
+                    .set
+                    .chains
+                    .get(chain)
+                    .and_then(|c| c.entries.get(entry))
+                    .is_some()
+                {
                     self.snapshot();
-                    crate::pattern::chain::set_chain_entry_bars(
-                        &mut self.set,
-                        chain,
-                        entry,
-                        value,
-                    );
+                    crate::pattern::chain::set_chain_entry_bars(&mut self.set, chain, entry, value);
                 }
             }
             Action::ToggleChainLoop(idx) => {
@@ -2125,17 +2164,35 @@ impl App {
             Action::AdjustSelectedChainEntryBars(delta) => {
                 let chain = self.chain_sel;
                 let entry = self.chain_entry_sel;
-                if let Some(e) = self.set.chains.get(chain).and_then(|c| c.entries.get(entry)) {
+                if let Some(e) = self
+                    .set
+                    .chains
+                    .get(chain)
+                    .and_then(|c| c.entries.get(entry))
+                {
                     let new_val = (e.bars as i32 + delta).max(1) as u32;
-                    cmds.extend(self.apply(Action::SetChainEntryBars { chain, entry, value: new_val }));
+                    cmds.extend(self.apply(Action::SetChainEntryBars {
+                        chain,
+                        entry,
+                        value: new_val,
+                    }));
                 }
             }
             Action::AdjustSelectedChainEntryRepeats(delta) => {
                 let chain = self.chain_sel;
                 let entry = self.chain_entry_sel;
-                if let Some(e) = self.set.chains.get(chain).and_then(|c| c.entries.get(entry)) {
+                if let Some(e) = self
+                    .set
+                    .chains
+                    .get(chain)
+                    .and_then(|c| c.entries.get(entry))
+                {
                     let new_val = (e.repeats as i32 + delta).max(1) as u32;
-                    cmds.extend(self.apply(Action::SetChainEntryRepeats { chain, entry, value: new_val }));
+                    cmds.extend(self.apply(Action::SetChainEntryRepeats {
+                        chain,
+                        entry,
+                        value: new_val,
+                    }));
                 }
             }
             // ── M7 Task 5: chain playback ───────────────────────────────────────
@@ -2180,9 +2237,7 @@ impl App {
                 // Re-anchor playback to entry `idx` at the next bar boundary and recall it.
                 if let Some(pb) = self.chain_playback.as_ref() {
                     let chain_id = pb.chain_id.clone();
-                    if let Some(chain_idx) =
-                        self.set.chains.iter().position(|c| c.id == chain_id)
-                    {
+                    if let Some(chain_idx) = self.set.chains.iter().position(|c| c.id == chain_id) {
                         if idx < self.set.chains[chain_idx].entries.len() {
                             let anchor = Self::next_bar_boundary(self.playhead as u64);
                             if let Some(pb) = self.chain_playback.as_mut() {
@@ -9705,7 +9760,7 @@ mod tests {
         assert_eq!(app.mode, Mode::NameEntry(NamePurpose::RenameChain));
         let pre = app.undo.len();
         app.apply(Action::NameCommit); // empty name → no-op dispatch
-        // commit with a real name
+                                       // commit with a real name
         app.apply(Action::RenameChain);
         app.name_input = "My Chain".to_string();
         app.apply(Action::NameCommit);
@@ -9723,7 +9778,10 @@ mod tests {
         let pre = app.undo.len();
         app.apply(Action::DuplicateChain);
         assert_eq!(app.set.chains.len(), 2);
-        assert_ne!(app.set.chains[1].id, orig_id, "duplicate must have fresh id");
+        assert_ne!(
+            app.set.chains[1].id, orig_id,
+            "duplicate must have fresh id"
+        );
         assert!(
             app.set.chains[1].name.ends_with(" copy"),
             "duplicate name must end with ' copy'"
@@ -9769,7 +9827,11 @@ mod tests {
             Mode::Chains,
             "ConfirmNo on DeleteChain must return to Mode::Chains"
         );
-        assert_eq!(app.set.chains.len(), 1, "chain must not be deleted on cancel");
+        assert_eq!(
+            app.set.chains.len(),
+            1,
+            "chain must not be deleted on cancel"
+        );
     }
 
     #[test]
@@ -9778,7 +9840,10 @@ mod tests {
         app.apply(Action::CreateChain);
         let sid = crate::persist::mint_id();
         let pre = app.undo.len();
-        app.apply(Action::AddChainEntry { chain: 0, scene_id: sid.clone() });
+        app.apply(Action::AddChainEntry {
+            chain: 0,
+            scene_id: sid.clone(),
+        });
         assert_eq!(app.set.chains[0].entries.len(), 1);
         assert_eq!(app.set.chains[0].entries[0].scene_id, sid);
         assert!(app.dirty);
@@ -9796,14 +9861,28 @@ mod tests {
         app.apply(Action::CreateChain);
         let s0 = crate::persist::mint_id();
         let s1 = crate::persist::mint_id();
-        app.apply(Action::AddChainEntry { chain: 0, scene_id: s0.clone() });
-        app.apply(Action::AddChainEntry { chain: 0, scene_id: s1.clone() });
+        app.apply(Action::AddChainEntry {
+            chain: 0,
+            scene_id: s0.clone(),
+        });
+        app.apply(Action::AddChainEntry {
+            chain: 0,
+            scene_id: s1.clone(),
+        });
         let pre = app.undo.len();
-        app.apply(Action::MoveChainEntry { chain: 0, entry: 1, up: true });
+        app.apply(Action::MoveChainEntry {
+            chain: 0,
+            entry: 1,
+            up: true,
+        });
         assert_eq!(app.set.chains[0].entries[0].scene_id, s1);
         assert!(app.dirty);
         assert!(app.undo.len() > pre);
-        app.apply(Action::MoveChainEntry { chain: 0, entry: 0, up: false });
+        app.apply(Action::MoveChainEntry {
+            chain: 0,
+            entry: 0,
+            up: false,
+        });
         assert_eq!(app.set.chains[0].entries[0].scene_id, s0);
     }
 
@@ -9811,16 +9890,35 @@ mod tests {
     fn set_chain_entry_repeats_bars_clamped() {
         let mut app = new_app();
         app.apply(Action::CreateChain);
-        app.apply(Action::AddChainEntry { chain: 0, scene_id: crate::persist::mint_id() });
+        app.apply(Action::AddChainEntry {
+            chain: 0,
+            scene_id: crate::persist::mint_id(),
+        });
         let pre = app.undo.len();
-        app.apply(Action::SetChainEntryRepeats { chain: 0, entry: 0, value: 0 });
+        app.apply(Action::SetChainEntryRepeats {
+            chain: 0,
+            entry: 0,
+            value: 0,
+        });
         assert_eq!(app.set.chains[0].entries[0].repeats, 1, "clamped to 1");
         assert!(app.undo.len() > pre);
-        app.apply(Action::SetChainEntryRepeats { chain: 0, entry: 0, value: 3 });
+        app.apply(Action::SetChainEntryRepeats {
+            chain: 0,
+            entry: 0,
+            value: 3,
+        });
         assert_eq!(app.set.chains[0].entries[0].repeats, 3);
-        app.apply(Action::SetChainEntryBars { chain: 0, entry: 0, value: 0 });
+        app.apply(Action::SetChainEntryBars {
+            chain: 0,
+            entry: 0,
+            value: 0,
+        });
         assert_eq!(app.set.chains[0].entries[0].bars, 1, "clamped to 1");
-        app.apply(Action::SetChainEntryBars { chain: 0, entry: 0, value: 4 });
+        app.apply(Action::SetChainEntryBars {
+            chain: 0,
+            entry: 0,
+            value: 4,
+        });
         assert_eq!(app.set.chains[0].entries[0].bars, 4);
     }
 
@@ -9857,7 +9955,10 @@ mod tests {
         app.apply(Action::CreateChain);
         assert_eq!(app.set.chains.len(), 1);
         app.apply(Action::Undo);
-        assert!(app.set.chains.is_empty(), "undo must restore empty chain list");
+        assert!(
+            app.set.chains.is_empty(),
+            "undo must restore empty chain list"
+        );
     }
 
     // ── M7 Task 5: chain playback (auto-advance, loop, stop-at-end, jump, override) ──
@@ -9875,7 +9976,11 @@ mod tests {
     /// patterns) and one chain whose entries point at those scenes (each `bars` × `repeats`).
     /// Returns (app, chain_idx). The app is marked engine_playing so recalls queue.
     fn app_with_chain(
-        entries: &[(usize /*scene*/, u32 /*bars*/, u32 /*repeats*/)],
+        entries: &[(
+            usize, /*scene*/
+            u32,   /*bars*/
+            u32,   /*repeats*/
+        )],
         looped: bool,
     ) -> (App, usize) {
         let mut app = new_app();
@@ -9948,9 +10053,14 @@ mod tests {
         let (mut app, c) = app_with_chain(&[(0, 1, 1), (1, 1, 1)], false);
         let cmds = app.apply(Action::PlayChain(c));
         // Entry 0's scene recalled as ONE quantized QueueScene at NextBar.
-        assert_eq!(count_queue_scenes(&cmds), 1, "entry 0 scene recalled once; got {cmds:?}");
-        if let Some(UiCommand::QueueScene { quant, .. }) =
-            cmds.iter().find(|c| matches!(c, UiCommand::QueueScene { .. }))
+        assert_eq!(
+            count_queue_scenes(&cmds),
+            1,
+            "entry 0 scene recalled once; got {cmds:?}"
+        );
+        if let Some(UiCommand::QueueScene { quant, .. }) = cmds
+            .iter()
+            .find(|c| matches!(c, UiCommand::QueueScene { .. }))
         {
             assert_eq!(*quant, Quant::NextBar, "recall quantized to NextBar");
         }
@@ -9964,8 +10074,14 @@ mod tests {
     fn play_empty_chain_is_noop_with_status() {
         let (mut app, c) = app_with_chain(&[], false);
         let cmds = app.apply(Action::PlayChain(c));
-        assert!(count_queue_scenes(&cmds) == 0, "empty chain emits no recall");
-        assert!(app.chain_playback.is_none(), "empty chain does not arm playback");
+        assert!(
+            count_queue_scenes(&cmds) == 0,
+            "empty chain emits no recall"
+        );
+        assert!(
+            app.chain_playback.is_none(),
+            "empty chain does not arm playback"
+        );
         assert!(!app.status.is_empty(), "status warns about empty chain");
     }
 
@@ -9978,7 +10094,11 @@ mod tests {
         // Drive the REAL wiring: feed the engine's Playhead at the dwell boundary.
         let advance_step = anchor0 + 16;
         let cmds = playhead_event(&mut app, advance_step as usize);
-        assert_eq!(count_queue_scenes(&cmds), 1, "entry 1 scene recalled at its boundary; got {cmds:?}");
+        assert_eq!(
+            count_queue_scenes(&cmds),
+            1,
+            "entry 1 scene recalled at its boundary; got {cmds:?}"
+        );
         let pb = app.chain_playback.as_ref().expect("still playing");
         assert_eq!(pb.entry_idx, 1, "advanced to entry 1");
         assert_eq!(pb.entry_start_step, advance_step, "entry_start re-anchored");
@@ -9996,7 +10116,10 @@ mod tests {
             cmds.iter().any(|c| matches!(c, UiCommand::Stop)),
             "stop-at-end emits the global Stop (engine seq.stop releases all notes); got {cmds:?}"
         );
-        assert!(app.chain_playback.is_none(), "playback cleared at stop-at-end");
+        assert!(
+            app.chain_playback.is_none(),
+            "playback cleared at stop-at-end"
+        );
     }
 
     #[test]
@@ -10007,8 +10130,15 @@ mod tests {
         let anchor0 = app.chain_playback.as_ref().unwrap().entry_start_step;
         let advance_step = anchor0 + 16;
         let cmds = app.tick_chain(advance_step);
-        assert_eq!(count_queue_scenes(&cmds), 1, "loop re-recalls entry 0; got {cmds:?}");
-        assert!(!cmds.iter().any(|c| matches!(c, UiCommand::Stop)), "loop must NOT stop");
+        assert_eq!(
+            count_queue_scenes(&cmds),
+            1,
+            "loop re-recalls entry 0; got {cmds:?}"
+        );
+        assert!(
+            !cmds.iter().any(|c| matches!(c, UiCommand::Stop)),
+            "loop must NOT stop"
+        );
         let pb = app.chain_playback.as_ref().expect("still active on loop");
         assert_eq!(pb.entry_idx, 0, "wrapped to entry 0");
         assert_eq!(pb.entry_start_step, advance_step, "re-anchored on wrap");
@@ -10028,7 +10158,11 @@ mod tests {
         );
         // No further auto-advance after override.
         let cmds = app.tick_chain(64);
-        assert_eq!(count_queue_scenes(&cmds), 0, "no auto-advance after manual override");
+        assert_eq!(
+            count_queue_scenes(&cmds),
+            0,
+            "no auto-advance after manual override"
+        );
     }
 
     #[test]
@@ -10039,7 +10173,10 @@ mod tests {
         let cmds = app.apply(Action::StopChain);
         assert!(app.chain_playback.is_none(), "StopChain clears playback");
         // Pending recall (queued display) cleared.
-        assert!(app.queued.iter().all(|q| q.is_none()), "queued recall cancelled");
+        assert!(
+            app.queued.iter().all(|q| q.is_none()),
+            "queued recall cancelled"
+        );
         assert!(
             cmds.iter().any(|c| matches!(c, UiCommand::Stop)),
             "StopChain stops transport (all-notes-off via engine); got {cmds:?}"
@@ -10067,7 +10204,10 @@ mod tests {
         let cmds = app.apply(Action::PlayChain(c));
         assert!(app.playing);
         let play_count = cmds.iter().filter(|c| matches!(c, UiCommand::Play)).count();
-        assert_eq!(play_count, 0, "must not emit extra Play when already playing; got {cmds:?}");
+        assert_eq!(
+            play_count, 0,
+            "must not emit extra Play when already playing; got {cmds:?}"
+        );
     }
 
     #[test]
@@ -10075,7 +10215,10 @@ mod tests {
         let (mut app, c) = app_with_chain(&[(0, 1, 1)], false);
         app.chain_sel = c;
         app.apply(Action::PlaySelectedChain);
-        assert!(app.chain_playback.is_some(), "PlaySelectedChain must arm playback for chain_sel");
+        assert!(
+            app.chain_playback.is_some(),
+            "PlaySelectedChain must arm playback for chain_sel"
+        );
     }
 
     #[test]
@@ -10084,8 +10227,15 @@ mod tests {
         app.apply(Action::PlayChain(c));
         app.playhead = 8; // mid-bar
         let cmds = app.apply(Action::JumpChainEntry(1));
-        assert_eq!(count_queue_scenes(&cmds), 1, "jump recalls target entry's scene; got {cmds:?}");
-        let pb = app.chain_playback.as_ref().expect("still active after jump");
+        assert_eq!(
+            count_queue_scenes(&cmds),
+            1,
+            "jump recalls target entry's scene; got {cmds:?}"
+        );
+        let pb = app
+            .chain_playback
+            .as_ref()
+            .expect("still active after jump");
         assert_eq!(pb.entry_idx, 1, "jumped to entry 1");
         // Re-anchored to the next bar boundary (>= current playhead).
         assert_eq!(pb.entry_start_step % 16, 0, "anchor is a bar boundary");
@@ -10102,11 +10252,22 @@ mod tests {
         let advance_step = anchor0 + 16;
         let cmds = app.tick_chain(advance_step);
         // Unresolved scene: NO recall, but STILL advance + re-anchor (deterministic dwell).
-        assert_eq!(count_queue_scenes(&cmds), 0, "unresolved scene recalls nothing; got {cmds:?}");
+        assert_eq!(
+            count_queue_scenes(&cmds),
+            0,
+            "unresolved scene recalls nothing; got {cmds:?}"
+        );
         let pb = app.chain_playback.as_ref().expect("still active");
         assert_eq!(pb.entry_idx, 1, "advanced past missing scene");
-        assert_eq!(pb.entry_start_step, advance_step, "re-anchored despite missing");
-        assert!(app.status.contains("MISSING"), "warns [MISSING]; got {:?}", app.status);
+        assert_eq!(
+            pb.entry_start_step, advance_step,
+            "re-anchored despite missing"
+        );
+        assert!(
+            app.status.contains("MISSING"),
+            "warns [MISSING]; got {:?}",
+            app.status
+        );
     }
 
     #[test]
@@ -10116,8 +10277,16 @@ mod tests {
         let anchor0 = app.chain_playback.as_ref().unwrap().entry_start_step;
         // Bar boundary at +16 is still inside the 2-bar dwell -> Hold.
         let cmds = app.tick_chain(anchor0 + 16);
-        assert_eq!(count_queue_scenes(&cmds), 0, "holds inside dwell; got {cmds:?}");
-        assert_eq!(app.chain_playback.as_ref().unwrap().entry_idx, 0, "still on entry 0");
+        assert_eq!(
+            count_queue_scenes(&cmds),
+            0,
+            "holds inside dwell; got {cmds:?}"
+        );
+        assert_eq!(
+            app.chain_playback.as_ref().unwrap().entry_idx,
+            0,
+            "still on entry 0"
+        );
     }
 
     // Note-safety is verified end-to-end at the engine level (where the sounding

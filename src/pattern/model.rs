@@ -382,7 +382,11 @@ mod chain_model_tests {
 
     #[test]
     fn dwell_steps_is_bars_times_repeats_times_16() {
-        let e = ChainEntry { scene_id: persist::mint_id(), repeats: 2, bars: 4 };
+        let e = ChainEntry {
+            scene_id: persist::mint_id(),
+            repeats: 2,
+            bars: 4,
+        };
         assert_eq!(e.dwell_steps(), 2 * 4 * 16); // 128 steps
     }
 
@@ -390,9 +394,16 @@ mod chain_model_tests {
     fn chain_serde_roundtrip_and_loop_rename() {
         let mut c = Chain::new("verse->chorus");
         c.looped = true;
-        c.entries.push(ChainEntry { scene_id: persist::mint_id(), repeats: 1, bars: 8 });
+        c.entries.push(ChainEntry {
+            scene_id: persist::mint_id(),
+            repeats: 1,
+            bars: 8,
+        });
         let json = serde_json::to_string(&c).unwrap();
-        assert!(json.contains("\"loop\""), "field must serialize as `loop`, got: {json}");
+        assert!(
+            json.contains("\"loop\""),
+            "field must serialize as `loop`, got: {json}"
+        );
         assert!(!json.contains("looped"));
         let back: Chain = serde_json::from_str(&json).unwrap();
         assert_eq!(back.name, c.name);
@@ -404,8 +415,16 @@ mod chain_model_tests {
     #[test]
     fn total_steps_sums_entry_dwells() {
         let mut c = Chain::new("x");
-        c.entries.push(ChainEntry { scene_id: persist::mint_id(), repeats: 1, bars: 2 }); // 32
-        c.entries.push(ChainEntry { scene_id: persist::mint_id(), repeats: 3, bars: 1 }); // 48
+        c.entries.push(ChainEntry {
+            scene_id: persist::mint_id(),
+            repeats: 1,
+            bars: 2,
+        }); // 32
+        c.entries.push(ChainEntry {
+            scene_id: persist::mint_id(),
+            repeats: 3,
+            bars: 1,
+        }); // 48
         assert_eq!(c.total_steps(), 80);
     }
 }

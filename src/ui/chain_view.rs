@@ -41,7 +41,11 @@ pub fn render_chain_view(f: &mut Frame, area: Rect, app: &App) {
             .unwrap_or("[MISSING]");
 
         let loop_tag = chain_opt.filter(|c| c.looped).map(|_| " ↻").unwrap_or("");
-        let state_tag = if pb.active { "▶ PLAYING" } else { "⏸ QUEUED" };
+        let state_tag = if pb.active {
+            "▶ PLAYING"
+        } else {
+            "⏸ QUEUED"
+        };
 
         // Calculate bar progress within entry.
         let dwell = entry_opt.map(|e| e.dwell_steps()).unwrap_or(1).max(1);
@@ -65,13 +69,13 @@ pub fn render_chain_view(f: &mut Frame, area: Rect, app: &App) {
         )));
     }
 
-    lines.push(Line::from(Span::raw("─────────────────────────────────────")));
+    lines.push(Line::from(Span::raw(
+        "─────────────────────────────────────",
+    )));
 
     // ── Chain list ─────────────────────────────────────────────────────────
     if chain_count == 0 {
-        lines.push(Line::from(Span::raw(
-            "  (no chains — press [c] to create)",
-        )));
+        lines.push(Line::from(Span::raw("  (no chains — press [c] to create)")));
     } else {
         let scroll = app
             .chain_sel
@@ -160,9 +164,11 @@ pub fn render_chain_view(f: &mut Frame, area: Rect, app: &App) {
                         .unwrap_or("[MISSING]");
 
                     // Is this entry currently playing?
-                    let live_tag = if app.chain_playback.as_ref().is_some_and(|pb| {
-                        pb.chain_id == chain.id && pb.entry_idx == j
-                    }) {
+                    let live_tag = if app
+                        .chain_playback
+                        .as_ref()
+                        .is_some_and(|pb| pb.chain_id == chain.id && pb.entry_idx == j)
+                    {
                         " ▶"
                     } else {
                         ""
@@ -177,8 +183,7 @@ pub fn render_chain_view(f: &mut Frame, area: Rect, app: &App) {
                     lines.push(Line::from(Span::styled(
                         format!(
                             "{e_marker}{j}: \"{scene_name}\"  {}bar × {}x{live_tag}",
-                            entry.bars,
-                            entry.repeats,
+                            entry.bars, entry.repeats,
                         ),
                         style,
                     )));
@@ -287,7 +292,10 @@ mod tests {
         app.apply(Action::CreateChain);
         // Add an entry with a dangling scene_id (no matching scene exists).
         let bogus_id = crate::persist::mint_id();
-        app.apply(Action::AddChainEntry { chain: 0, scene_id: bogus_id });
+        app.apply(Action::AddChainEntry {
+            chain: 0,
+            scene_id: bogus_id,
+        });
         app.mode = Mode::Chains;
         let s = render_to_string(&app);
         assert!(

@@ -2113,7 +2113,10 @@ mod tests {
         assert_eq!(v["version"], 2, "v1 must migrate to version 2");
         // Deserialize into SetDto — missing `chains` key must default to [].
         let dto: SetDto = serde_json::from_value(v).unwrap();
-        assert!(dto.chains.is_empty(), "missing chains field must default to empty");
+        assert!(
+            dto.chains.is_empty(),
+            "missing chains field must default to empty"
+        );
     }
 
     #[test]
@@ -2122,7 +2125,11 @@ mod tests {
         let dir = unique_dir("chain-roundtrip");
         let mut set = Set::default_set(default_profiles());
         let mut c = Chain::new("A->B");
-        c.entries.push(ChainEntry { scene_id: persist::mint_id(), repeats: 2, bars: 4 });
+        c.entries.push(ChainEntry {
+            scene_id: persist::mint_id(),
+            repeats: 2,
+            bars: 4,
+        });
         set.chains.push(c);
         let path = save_set(&dir, &mut set).unwrap();
         let loaded = load_set(&path).unwrap();
