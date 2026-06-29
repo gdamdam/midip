@@ -7,6 +7,25 @@ feature milestone is a minor bump).
 
 ## [Unreleased]
 
+## [0.11.0] — 2026-06-29 — Song Mode
+
+### Added
+- **Song mode / chaining** — build an ordered **chain** of scenes that plays back automatically.
+  Each entry holds for `bars × repeats` bars, then the chain quantize-launches the next scene on
+  the next bar boundary (reusing scene recall — note-safe, no hung notes). Chains can **loop**,
+  **stop at the end**, and be **jumped live** to any entry; a manual scene recall takes over and
+  stops the chain. Multiple named chains per set.
+- **Chain manager** (`K`) — create (`c`), rename (`r`), duplicate (`d`), delete (`x`), play
+  (`Enter`, which starts transport), stop (`C`), and jump to the selected entry (`j`); add the
+  focused scene as an entry (`a`), navigate entries (`Tab`), reorder/edit `bars` (`[` / `]`) and
+  `repeats` (`{` / `}`), and toggle loop (`m`). A live "now playing" line shows the current entry,
+  bar position, and loop state; an unresolved scene shows `[MISSING]` and holds its dwell without
+  recalling.
+
+### Changed
+- Chains are stored inside the set file (**backward-compatible**: old sets load with no chains;
+  set format version bumped 1 → 2 via an additive migration).
+
 ## [0.10.0] — 2026-06-29 — Scenes
 
 ### Added
