@@ -231,7 +231,10 @@ mod tests {
         const {
             assert!(!T8_BASS.poly, "T-8 BASS must be mono (poly == false)");
             assert!(S1.poly, "S-1 SYNTH must be poly (poly == true)");
-            assert!(!T8_DRUMS.poly, "T-8 DRUMS poly is false (irrelevant for drum lanes)");
+            assert!(
+                !T8_DRUMS.poly,
+                "T-8 DRUMS poly is false (irrelevant for drum lanes)"
+            );
         }
     }
 }
