@@ -2508,4 +2508,113 @@ mod tests {
             evs
         );
     }
+
+    /// M7 Task 5 note-safety: the App drives chain auto-advance by emitting the existing
+    /// `QueueScene` recall on each bar boundary and a terminal `UiCommand::Stop` at
+    /// stop-at-end. This test reproduces that exact command sequence against a set whose
+    /// lane sustains a long note ACROSS each transition, then asserts that every NoteOn is
+    /// matched by a NoteOff (net == 0 per (channel,note)) — i.e. no hung notes across the
+    /// scene swaps or the final stop. All emission rides the already-tested recall +
+    /// `seq.stop` (release-before-swap, M1 registry) paths; chain playback adds none.
+    #[test]
+    fn chain_recall_transitions_leave_no_hung_notes() {
+        use crate::engine::scheduler::{LaunchState, Quant};
+        use crate::midi::MidiMessage;
+        use crate::pattern::model::{MelodicNote, MelodicStep, Pattern, PatternData};
+
+        let mut set = default_set();
+        set.bpm = 120.0; // one 16th = 125_000 µs, one bar (16 steps) = 2_000_000 µs
+
+        // A pattern that holds a note for a full bar (len 16) on lane 2 so it is still
+        // sounding when the next scene's QueueScene swaps the lane at the bar boundary.
+        let held = |semi: i8| -> Pattern {
+            let mut steps = vec![MelodicStep::default(); 16];
+            steps[0] = MelodicStep::from(vec![MelodicNote {
+                semi,
+                vel: 1.0,
+                slide: false,
+                len: 16.0,
+                prob: 1.0,
+                ratchet: 1,
+            }]);
+            Pattern {
+                name: "held".into(),
+                desc: String::new(),
+                length: 16,
+                data: PatternData::Melodic(steps),
+                id: crate::persist::Id::nil(),
+            }
+        };
+        let state = LaunchState {
+            mute: false,
+            solo: false,
+            transpose: 0,
+            octave: 0,
+        };
+
+        let bar = 2_000_000u64;
+        let step = 125_000u64;
+        let mut link = FakeLink::new(); // manual transport
+        let mut sink = RecordingSink::new();
+        // Mirror the App: recall entry 0 at play, entry 1 queued before bar boundary 1,
+        // then Stop at the end of entry 1 (bar boundary 2). Each recall is ONE QueueScene
+        // carrying lane 2 (the held note), exactly as `recall_scene` builds it.
+        let _ = run_engine_headless(
+            set,
+            &mut link,
+            &mut sink,
+            vec![
+                (0, UiCommand::Play),
+                (
+                    0,
+                    UiCommand::QueueScene {
+                        quant: Quant::NextBar,
+                        lanes: vec![(2, held(0), state)],
+                    },
+                ),
+                (
+                    bar - step,
+                    UiCommand::QueueScene {
+                        quant: Quant::NextBar,
+                        lanes: vec![(2, held(5), state)],
+                    },
+                ),
+                (2 * bar, UiCommand::Stop),
+            ],
+            2 * bar + step, // a hair past the stop
+            step / 4,
+        );
+
+        // Net per-(channel,note) balance: NoteOn (vel>0) = +1, NoteOff (or vel==0) = -1.
+        use std::collections::HashMap;
+        let mut net: HashMap<(u8, u8), i32> = HashMap::new();
+        for (_, msg) in &sink.events {
+            match msg {
+                MidiMessage::NoteOn { channel, note, vel } if *vel > 0 => {
+                    *net.entry((*channel, *note)).or_insert(0) += 1;
+                }
+                MidiMessage::NoteOn { channel, note, .. } => {
+                    *net.entry((*channel, *note)).or_insert(0) -= 1;
+                }
+                MidiMessage::NoteOff { channel, note } => {
+                    *net.entry((*channel, *note)).or_insert(0) -= 1;
+                }
+                _ => {}
+            }
+        }
+        let hung: Vec<_> = net.iter().filter(|(_, &v)| v > 0).collect();
+        assert!(
+            hung.is_empty(),
+            "no hung notes across chain transitions + stop; leftover: {hung:?}; events: {:?}",
+            sink.events
+        );
+        // Sanity: at least one note actually sounded (otherwise the test is vacuous).
+        assert!(
+            sink.events
+                .iter()
+                .any(|(_, m)| matches!(m, MidiMessage::NoteOn { vel, .. } if *vel > 0)),
+            "expected real NoteOns in the run; got {:?}",
+            sink.events
+        );
+    }
 }

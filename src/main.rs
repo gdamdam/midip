@@ -146,9 +146,13 @@ fn run(mut terminal: Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
             }
         }
 
-        // Drain engine events into display state.
+        // Drain engine events into display state. Some events (Playhead bar boundaries)
+        // drive chain auto-advance, which emits commands the engine must receive.
         while let Ok(ev) = engine.rx.try_recv() {
-            app.on_engine_event(ev);
+            let cmds = app.on_engine_event(ev);
+            for cmd in cmds {
+                send_or_toast(&engine.tx, cmd, &mut app);
+            }
         }
 
         // Expire status toasts after ~3 s (STATUS_TTL_FRAMES × 16 ms poll timeout).

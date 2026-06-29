@@ -524,6 +524,11 @@ pub struct App {
     pub scene_issues: Vec<usize>,
     /// Index of the currently selected chain in `set.chains`.
     pub chain_sel: usize,
+    /// M7 Task 5: live chain playback state (runtime only — NOT persisted). `Some` while a
+    /// chain is auto-advancing; the App runs `chain_decision` at each engine-reported bar
+    /// boundary (see `tick_chain`) and recalls the next entry's scene via the existing
+    /// quantized `recall_scene` path. `None` when idle/stopped/overridden.
+    pub chain_playback: Option<crate::pattern::chain::ChainPlayback>,
 }
 
 /// Default melodic velocity multiplier when placing a note (1.0 -> MIDI 100).
@@ -595,6 +600,7 @@ impl App {
             scene_sel: 0,
             scene_issues: Vec::new(),
             chain_sel: 0,
+            chain_playback: None,
         }
     }
 
@@ -846,6 +852,124 @@ impl App {
             ));
         }
         cmds
+    }
+
+    // ── M7 Task 5: chain playback (app-side auto-advance) ───────────────────────────
+    //
+    // `ChainPlayback` lives on the App. The engine reports the ABSOLUTE step via
+    // `EngineEvent::Playhead{step,..}` (`step = seq.current_step()`); `on_engine_event`
+    // calls `tick_chain(step)` on each bar boundary (step % 16 == 0). On Advance/LoopWrap
+    // the App recalls the next entry's scene through the EXISTING quantized `recall_scene`
+    // path (one `QueueScene` at `Quant::NextBar`); on Stop it emits `UiCommand::Stop`
+    // (the engine's `seq.stop` releases all sounding notes). No new note emission.
+
+    /// Resolve a chain entry's `scene_id` to its index in `set.scenes`, if present.
+    fn scene_index_by_id(&self, scene_id: &crate::persist::Id) -> Option<usize> {
+        self.set.scenes.iter().position(|s| &s.id == scene_id)
+    }
+
+    /// The next bar boundary at or after `step` (absolute 16th grid). When `step` is itself
+    /// a boundary it is returned unchanged (a recall queued there lands on it).
+    fn next_bar_boundary(step: u64) -> u64 {
+        if step.is_multiple_of(16) {
+            step
+        } else {
+            (step / 16 + 1) * 16
+        }
+    }
+
+    /// Arm the chain `entry`'s scene: recall it (one quantized `QueueScene` at `NextBar`)
+    /// when its `scene_id` resolves; if it does NOT resolve, recall nothing but push a
+    /// `[MISSING]` warning. Either way the caller still advances/anchors so dwell timing
+    /// stays deterministic. Returns the recall `UiCommand`s (possibly empty).
+    fn arm_chain_entry(&mut self, chain_idx: usize, entry_idx: usize) -> Vec<UiCommand> {
+        let Some(scene_id) = self
+            .set
+            .chains
+            .get(chain_idx)
+            .and_then(|c| c.entries.get(entry_idx))
+            .map(|e| e.scene_id.clone())
+        else {
+            return vec![];
+        };
+        match self.scene_index_by_id(&scene_id) {
+            Some(scene_idx) => self.recall_scene(scene_idx),
+            None => {
+                self.set_status(format!("[MISSING] chain entry {} scene", entry_idx + 1));
+                vec![]
+            }
+        }
+    }
+
+    /// Driven by `on_engine_event` at each bar boundary with the engine's ABSOLUTE step.
+    /// Runs `chain_decision` for the active chain and returns the resulting commands:
+    /// - `Hold` → no commands.
+    /// - `Advance(n)`/`LoopWrap` → recall entry n's scene (re-anchor `entry_start_step`).
+    /// - `Stop` → clear playback + `UiCommand::Stop` (engine releases all sounding notes).
+    ///
+    /// Returns the commands the caller must forward to the engine. No-op (empty) when no
+    /// chain is active, when `now_step` is not past the current anchor, or the chain is gone.
+    pub fn tick_chain(&mut self, now_step: u64) -> Vec<UiCommand> {
+        let Some(pb) = self.chain_playback.as_ref() else {
+            return vec![];
+        };
+        if !pb.active {
+            return vec![];
+        }
+        // Only decide AT a fresh bar boundary strictly past the entry's anchor; the anchor
+        // boundary itself is the entry's start (decision there would always Hold).
+        if !now_step.is_multiple_of(16) || now_step <= pb.entry_start_step {
+            return vec![];
+        }
+        let chain_id = pb.chain_id.clone();
+        let entry_idx = pb.entry_idx;
+        let entry_start_step = pb.entry_start_step;
+        let Some(chain_idx) = self.set.chains.iter().position(|c| c.id == chain_id) else {
+            // The chain was deleted out from under playback — stop cleanly.
+            self.chain_playback = None;
+            return vec![UiCommand::Stop];
+        };
+        let decision = {
+            let chain = &self.set.chains[chain_idx];
+            crate::pattern::chain::chain_decision(chain, entry_idx, entry_start_step, now_step)
+        };
+        use crate::pattern::chain::ChainStep;
+        let next = match decision {
+            ChainStep::Hold => return vec![],
+            ChainStep::Advance(n) => n,
+            ChainStep::LoopWrap => 0,
+            ChainStep::Stop => {
+                self.stop_chain_playback();
+                return vec![UiCommand::Stop];
+            }
+        };
+        // Re-anchor BEFORE recall so the recall's status/queued state is coherent.
+        if let Some(pb) = self.chain_playback.as_mut() {
+            pb.entry_idx = next;
+            pb.entry_start_step = now_step;
+        }
+        self.arm_chain_entry(chain_idx, next)
+    }
+
+    /// Clear chain playback and any pending chain-queued recall display. Does NOT emit
+    /// commands (the caller decides whether a transport `Stop` is also issued).
+    fn stop_chain_playback(&mut self) {
+        self.chain_playback = None;
+        for q in self.queued.iter_mut() {
+            *q = None;
+        }
+    }
+
+    /// Manual takeover: when the performer issues a manual scene recall or pattern launch
+    /// while a chain is auto-advancing, deactivate auto-advance (transport keeps playing,
+    /// the manual action proceeds). A no-op when no chain is active.
+    fn deactivate_chain_on_manual(&mut self) {
+        if let Some(pb) = self.chain_playback.as_mut() {
+            if pb.active {
+                pb.active = false;
+                self.set_status("Chain auto-advance off (manual override)");
+            }
+        }
     }
 
     /// Advance the autosave debounce counter. Returns `true` exactly when the counter
@@ -1385,6 +1509,8 @@ impl App {
                     self.set.lanes[self.focus].pattern = pat.clone();
                     if self.engine_playing {
                         // Playing: queue to the next launch boundary (clip-launcher style).
+                        // Manual launch takes over from any chain auto-advance.
+                        self.deactivate_chain_on_manual();
                         let quant = self.launch_quant;
                         self.queued[self.focus] = Some(name.clone());
                         self.set_status(format!("Queued {} ({})", name, quant_label(quant)));
@@ -1706,6 +1832,9 @@ impl App {
                 }
             }
             Action::RecallScene(index) => {
+                // Manual recall takes over: deactivate chain auto-advance (the performer
+                // is steering by hand now). Transport keeps playing; only auto-advance stops.
+                self.deactivate_chain_on_manual();
                 cmds.extend(self.recall_scene(index));
             }
             // ── Scene manager ──────────────────────────────────────────────────
@@ -1919,15 +2048,64 @@ impl App {
                     crate::pattern::chain::toggle_chain_loop(&mut self.set, idx);
                 }
             }
-            // ── M7 Transport stubs (real behavior in Task 5) ────────────────────
-            Action::PlayChain(_idx) => {
-                self.set_status("Chain playback: not yet (Task 5)");
+            // ── M7 Task 5: chain playback ───────────────────────────────────────
+            Action::PlayChain(idx) => {
+                match self.set.chains.get(idx) {
+                    None => self.set_status("No such chain"),
+                    Some(chain) if chain.entries.is_empty() => {
+                        self.set_status("Chain is empty");
+                    }
+                    Some(chain) => {
+                        // Anchor entry 0 at the next bar boundary; the scene recall (one
+                        // quantized QueueScene at NextBar) lands on that same boundary.
+                        let anchor = Self::next_bar_boundary(self.playhead as u64);
+                        self.chain_playback = Some(crate::pattern::chain::ChainPlayback {
+                            chain_id: chain.id.clone(),
+                            entry_idx: 0,
+                            entry_start_step: anchor,
+                            active: true,
+                        });
+                        cmds.extend(self.arm_chain_entry(idx, 0));
+                        self.set_status(format!("Playing chain \"{}\"", self.set.chains[idx].name));
+                    }
+                }
             }
             Action::StopChain => {
-                self.set_status("Chain stop: not yet (Task 5)");
+                if self.chain_playback.take().is_some() {
+                    self.stop_chain_playback();
+                    // Stop transport too: the engine's seq.stop releases all sounding notes.
+                    cmds.push(UiCommand::Stop);
+                    self.playing = false;
+                    self.set_status("Chain stopped");
+                } else {
+                    self.set_status("No chain playing");
+                }
             }
-            Action::JumpChainEntry(_idx) => {
-                self.set_status("Chain jump: not yet (Task 5)");
+            Action::JumpChainEntry(idx) => {
+                // Re-anchor playback to entry `idx` at the next bar boundary and recall it.
+                if let Some(pb) = self.chain_playback.as_ref() {
+                    let chain_id = pb.chain_id.clone();
+                    if let Some(chain_idx) =
+                        self.set.chains.iter().position(|c| c.id == chain_id)
+                    {
+                        if idx < self.set.chains[chain_idx].entries.len() {
+                            let anchor = Self::next_bar_boundary(self.playhead as u64);
+                            if let Some(pb) = self.chain_playback.as_mut() {
+                                pb.entry_idx = idx;
+                                pb.entry_start_step = anchor;
+                                pb.active = true;
+                            }
+                            cmds.extend(self.arm_chain_entry(chain_idx, idx));
+                            self.set_status(format!("Jumped to entry {}", idx + 1));
+                        } else {
+                            self.set_status("No such chain entry");
+                        }
+                    } else {
+                        self.set_status("Chain no longer exists");
+                    }
+                } else {
+                    self.set_status("No chain playing");
+                }
             }
             Action::RestartLane => {
                 if self.engine_playing {
@@ -2682,12 +2860,18 @@ impl App {
         cmds
     }
 
-    /// Fold an EngineEvent into display state.
-    pub fn on_engine_event(&mut self, ev: EngineEvent) {
+    /// Fold an EngineEvent into display state. Returns any `UiCommand`s the caller must
+    /// forward to the engine — currently only chain auto-advance recalls/stop, triggered
+    /// at each bar boundary reported via `EngineEvent::Playhead`.
+    pub fn on_engine_event(&mut self, ev: EngineEvent) -> Vec<UiCommand> {
+        let mut cmds = Vec::new();
         match ev {
             EngineEvent::Playhead { step, bar, .. } => {
                 self.playhead = step;
                 self.bar = bar;
+                // M7 Task 5: drive chain auto-advance at each engine-reported step. The
+                // boundary gate lives in `tick_chain` (step % 16 == 0, past the anchor).
+                cmds.extend(self.tick_chain(step as u64));
             }
             EngineEvent::LinkStatus {
                 enabled,
@@ -2759,6 +2943,7 @@ impl App {
                 }
             }
         }
+        cmds
     }
 
     // --- internal helpers ---
@@ -9559,9 +9744,11 @@ mod tests {
     }
 
     #[test]
-    fn transport_stubs_set_status_no_panic() {
+    fn chain_transport_actions_noop_without_chain() {
+        // With no chains/playback, the transport actions are graceful no-ops with status.
         let mut app = new_app();
         app.apply(Action::PlayChain(0));
+        assert!(app.chain_playback.is_none(), "no chain to play");
         assert!(!app.status.is_empty());
         app.apply(Action::StopChain);
         assert!(!app.status.is_empty());
@@ -9577,4 +9764,238 @@ mod tests {
         app.apply(Action::Undo);
         assert!(app.set.chains.is_empty(), "undo must restore empty chain list");
     }
+
+    // ── M7 Task 5: chain playback (auto-advance, loop, stop-at-end, jump, override) ──
+    //
+    // App-side approach (A): `chain_playback` lives on `App`. The engine already reports
+    // the ABSOLUTE step via `EngineEvent::Playhead{step,..}` (step = seq.current_step()).
+    // On each Playhead at a bar boundary (step % 16 == 0) the App runs `chain_decision`
+    // and, on Advance/LoopWrap, recalls the next entry's scene via the existing
+    // `recall_scene` -> `QueueScene` path (quantized to NextBar). Stop emits the existing
+    // `UiCommand::Stop` (engine's `seq.stop` releases all sounding notes). No new emission.
+
+    use crate::pattern::model::{Chain, ChainEntry, LaneAssignment, Scene};
+
+    /// Build an app with N scenes (each a full all-lane assignment over the inline lane
+    /// patterns) and one chain whose entries point at those scenes (each `bars` × `repeats`).
+    /// Returns (app, chain_idx). The app is marked engine_playing so recalls queue.
+    fn app_with_chain(
+        entries: &[(usize /*scene*/, u32 /*bars*/, u32 /*repeats*/)],
+        looped: bool,
+    ) -> (App, usize) {
+        let mut app = new_app();
+        // Distinct ids per lane so User-ref resolution is unambiguous.
+        let ids: Vec<crate::persist::Id> = (0..app.set.lanes.len())
+            .map(|_| crate::persist::mint_id())
+            .collect();
+        for (i, lane) in app.set.lanes.iter_mut().enumerate() {
+            lane.pattern.id = ids[i].clone();
+            lane.pattern.name = format!("p{i}");
+        }
+        let make_assignments = || -> Vec<LaneAssignment> {
+            ids.iter()
+                .map(|id| LaneAssignment {
+                    pattern: PatternRef::User(id.clone()),
+                    mute: false,
+                    solo: false,
+                    transpose: 0,
+                    octave: 0,
+                })
+                .collect()
+        };
+        // Two scenes so we can distinguish recalls (each resolves all 3 lanes).
+        let mut scene_ids = Vec::new();
+        for n in 0..2 {
+            let sid = crate::persist::mint_id();
+            app.set.scenes.push(Scene {
+                id: sid.clone(),
+                name: format!("Scene {n}"),
+                assignments: make_assignments(),
+            });
+            scene_ids.push(sid);
+        }
+        let mut chain = Chain::new("c");
+        chain.looped = looped;
+        for &(scene, bars, repeats) in entries {
+            chain.entries.push(ChainEntry {
+                scene_id: scene_ids[scene].clone(),
+                repeats,
+                bars,
+            });
+        }
+        app.set.chains.push(chain);
+        app.engine_playing = true;
+        let c = app.set.chains.len() - 1;
+        (app, c)
+    }
+
+    /// Simulate the engine reporting the absolute playhead at `step`, returning any
+    /// commands `on_engine_event` produces (chain auto-advance recalls/stop). This
+    /// exercises the REAL wiring (`on_engine_event` → `tick_chain`), not `tick_chain` alone.
+    fn playhead_event(app: &mut App, step: usize) -> Vec<UiCommand> {
+        app.on_engine_event(crate::engine::EngineEvent::Playhead {
+            step,
+            bar: (step / 16) as u32,
+            beat: ((step / 4) % 4) as u32,
+            phase: (step % 4) as f32 / 4.0,
+        })
+    }
+
+    /// Count QueueScene commands in a cmd list.
+    fn count_queue_scenes(cmds: &[UiCommand]) -> usize {
+        cmds.iter()
+            .filter(|c| matches!(c, UiCommand::QueueScene { .. }))
+            .count()
+    }
+
+    #[test]
+    fn play_chain_recalls_first_entry_scene_at_next_bar() {
+        let (mut app, c) = app_with_chain(&[(0, 1, 1), (1, 1, 1)], false);
+        let cmds = app.apply(Action::PlayChain(c));
+        // Entry 0's scene recalled as ONE quantized QueueScene at NextBar.
+        assert_eq!(count_queue_scenes(&cmds), 1, "entry 0 scene recalled once; got {cmds:?}");
+        if let Some(UiCommand::QueueScene { quant, .. }) =
+            cmds.iter().find(|c| matches!(c, UiCommand::QueueScene { .. }))
+        {
+            assert_eq!(*quant, Quant::NextBar, "recall quantized to NextBar");
+        }
+        // Playback armed on entry 0, active.
+        let pb = app.chain_playback.as_ref().expect("chain_playback armed");
+        assert_eq!(pb.entry_idx, 0);
+        assert!(pb.active);
+    }
+
+    #[test]
+    fn play_empty_chain_is_noop_with_status() {
+        let (mut app, c) = app_with_chain(&[], false);
+        let cmds = app.apply(Action::PlayChain(c));
+        assert!(count_queue_scenes(&cmds) == 0, "empty chain emits no recall");
+        assert!(app.chain_playback.is_none(), "empty chain does not arm playback");
+        assert!(!app.status.is_empty(), "status warns about empty chain");
+    }
+
+    #[test]
+    fn auto_advances_to_second_entry_after_its_dwell() {
+        // entry0 = 1 bar (dwell 16 steps), entry1 = 1 bar. Play at step 0.
+        let (mut app, c) = app_with_chain(&[(0, 1, 1), (1, 1, 1)], false);
+        app.apply(Action::PlayChain(c));
+        let anchor0 = app.chain_playback.as_ref().unwrap().entry_start_step;
+        // Drive the REAL wiring: feed the engine's Playhead at the dwell boundary.
+        let advance_step = anchor0 + 16;
+        let cmds = playhead_event(&mut app, advance_step as usize);
+        assert_eq!(count_queue_scenes(&cmds), 1, "entry 1 scene recalled at its boundary; got {cmds:?}");
+        let pb = app.chain_playback.as_ref().expect("still playing");
+        assert_eq!(pb.entry_idx, 1, "advanced to entry 1");
+        assert_eq!(pb.entry_start_step, advance_step, "entry_start re-anchored");
+        assert!(pb.active);
+    }
+
+    #[test]
+    fn stop_at_end_stops_transport() {
+        // Non-looped single 1-bar entry: after its dwell, transport stops.
+        let (mut app, c) = app_with_chain(&[(0, 1, 1)], false);
+        app.apply(Action::PlayChain(c));
+        let anchor0 = app.chain_playback.as_ref().unwrap().entry_start_step;
+        let cmds = app.tick_chain(anchor0 + 16);
+        assert!(
+            cmds.iter().any(|c| matches!(c, UiCommand::Stop)),
+            "stop-at-end emits the global Stop (engine seq.stop releases all notes); got {cmds:?}"
+        );
+        assert!(app.chain_playback.is_none(), "playback cleared at stop-at-end");
+    }
+
+    #[test]
+    fn loop_wraps_to_first_entry() {
+        // Looped single 1-bar entry: after its dwell, scene 0 recalled again; still active.
+        let (mut app, c) = app_with_chain(&[(0, 1, 1)], true);
+        app.apply(Action::PlayChain(c));
+        let anchor0 = app.chain_playback.as_ref().unwrap().entry_start_step;
+        let advance_step = anchor0 + 16;
+        let cmds = app.tick_chain(advance_step);
+        assert_eq!(count_queue_scenes(&cmds), 1, "loop re-recalls entry 0; got {cmds:?}");
+        assert!(!cmds.iter().any(|c| matches!(c, UiCommand::Stop)), "loop must NOT stop");
+        let pb = app.chain_playback.as_ref().expect("still active on loop");
+        assert_eq!(pb.entry_idx, 0, "wrapped to entry 0");
+        assert_eq!(pb.entry_start_step, advance_step, "re-anchored on wrap");
+        assert!(pb.active);
+    }
+
+    #[test]
+    fn manual_recall_deactivates_chain() {
+        let (mut app, c) = app_with_chain(&[(0, 1, 1), (1, 1, 1)], false);
+        app.apply(Action::PlayChain(c));
+        assert!(app.chain_playback.as_ref().unwrap().active);
+        // A manual scene recall while playback active takes over.
+        app.apply(Action::RecallScene(0));
+        assert!(
+            app.chain_playback.is_none() || !app.chain_playback.as_ref().unwrap().active,
+            "manual recall must deactivate chain playback"
+        );
+        // No further auto-advance after override.
+        let cmds = app.tick_chain(64);
+        assert_eq!(count_queue_scenes(&cmds), 0, "no auto-advance after manual override");
+    }
+
+    #[test]
+    fn stop_chain_clears_playback_and_cancels_queue() {
+        let (mut app, c) = app_with_chain(&[(0, 1, 1), (1, 1, 1)], false);
+        app.apply(Action::PlayChain(c));
+        assert!(app.chain_playback.is_some());
+        let cmds = app.apply(Action::StopChain);
+        assert!(app.chain_playback.is_none(), "StopChain clears playback");
+        // Pending recall (queued display) cleared.
+        assert!(app.queued.iter().all(|q| q.is_none()), "queued recall cancelled");
+        assert!(
+            cmds.iter().any(|c| matches!(c, UiCommand::Stop)),
+            "StopChain stops transport (all-notes-off via engine); got {cmds:?}"
+        );
+    }
+
+    #[test]
+    fn jump_chain_entry_arms_and_reanchors() {
+        let (mut app, c) = app_with_chain(&[(0, 1, 1), (1, 1, 1)], false);
+        app.apply(Action::PlayChain(c));
+        app.playhead = 8; // mid-bar
+        let cmds = app.apply(Action::JumpChainEntry(1));
+        assert_eq!(count_queue_scenes(&cmds), 1, "jump recalls target entry's scene; got {cmds:?}");
+        let pb = app.chain_playback.as_ref().expect("still active after jump");
+        assert_eq!(pb.entry_idx, 1, "jumped to entry 1");
+        // Re-anchored to the next bar boundary (>= current playhead).
+        assert_eq!(pb.entry_start_step % 16, 0, "anchor is a bar boundary");
+        assert!(pb.entry_start_step >= 8, "anchor at/after current playhead");
+    }
+
+    #[test]
+    fn missing_scene_holds_dwell_and_advances_with_warning() {
+        let (mut app, c) = app_with_chain(&[(0, 1, 1), (1, 1, 1)], false);
+        // Break entry 1's scene_id so it cannot resolve.
+        app.set.chains[c].entries[1].scene_id = crate::persist::mint_id();
+        app.apply(Action::PlayChain(c));
+        let anchor0 = app.chain_playback.as_ref().unwrap().entry_start_step;
+        let advance_step = anchor0 + 16;
+        let cmds = app.tick_chain(advance_step);
+        // Unresolved scene: NO recall, but STILL advance + re-anchor (deterministic dwell).
+        assert_eq!(count_queue_scenes(&cmds), 0, "unresolved scene recalls nothing; got {cmds:?}");
+        let pb = app.chain_playback.as_ref().expect("still active");
+        assert_eq!(pb.entry_idx, 1, "advanced past missing scene");
+        assert_eq!(pb.entry_start_step, advance_step, "re-anchored despite missing");
+        assert!(app.status.contains("MISSING"), "warns [MISSING]; got {:?}", app.status);
+    }
+
+    #[test]
+    fn no_auto_advance_before_dwell_elapses() {
+        let (mut app, c) = app_with_chain(&[(0, 2, 1), (1, 1, 1)], false); // entry0 dwell = 32
+        app.apply(Action::PlayChain(c));
+        let anchor0 = app.chain_playback.as_ref().unwrap().entry_start_step;
+        // Bar boundary at +16 is still inside the 2-bar dwell -> Hold.
+        let cmds = app.tick_chain(anchor0 + 16);
+        assert_eq!(count_queue_scenes(&cmds), 0, "holds inside dwell; got {cmds:?}");
+        assert_eq!(app.chain_playback.as_ref().unwrap().entry_idx, 0, "still on entry 0");
+    }
+
+    // Note-safety is verified end-to-end at the engine level (where the sounding
+    // registry lives) in `src/engine/mod.rs`:
+    // `chain_recall_transitions_leave_no_hung_notes` — it drives the exact command
+    // sequence the App emits (QueueScene recalls at bar boundaries + terminal Stop)
+    // against a note-bearing set and asserts net NoteOn == NoteOff (no hung notes).
 }
