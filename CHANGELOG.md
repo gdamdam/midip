@@ -7,6 +7,9 @@ feature milestone is a minor bump).
 
 ## [Unreleased]
 
+### Changed
+- License changed from MIT to AGPL-3.0-or-later.
+
 ## [0.7.0] — 2026-06-29 — Performance controls + routable virtual port
 
 ### Added

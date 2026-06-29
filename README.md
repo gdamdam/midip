@@ -313,4 +313,5 @@ minor open items, and [`docs/superpowers/specs/`](docs/superpowers/specs/) for t
 
 ## License
 
-MIT.
+midip is licensed under the **GNU Affero General Public License v3.0 or later**
+(AGPL-3.0-or-later). See [`LICENSE`](LICENSE).
