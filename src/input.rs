@@ -250,6 +250,14 @@ pub fn key_to_action(key: KeyEvent, mode: Mode, kind: LaneKind) -> Action {
                         '.' => return Action::AdjustLen(1),
                         '[' => return Action::AdjustOctave(-1),
                         ']' => return Action::AdjustOctave(1),
+                        // 'n'/'N' were unbound in Edit/melodic; chosen for "next/prev scale".
+                        // Cycles the lane's scale through Scale::all() without rewriting notes.
+                        'n' => return Action::CycleScale(1),
+                        'N' => return Action::CycleScale(-1),
+                        // 'h'/'H' were unbound in Edit/melodic; chosen for "half-step root".
+                        // Adjusts the lane root note down/up by one semitone.
+                        'h' => return Action::AdjustRoot(-1),
+                        'H' => return Action::AdjustRoot(1),
                         _ => {}
                     },
                     LaneKind::Drums => match c {
@@ -1419,5 +1427,53 @@ mod tests {
                 "'F' must not be unbound in Edit mode"
             );
         }
+    }
+
+    // ── M5a Task 3: scale picker key bindings ─────────────────────────────────
+
+    /// 'n' was unbound (Action::None) in Edit/melodic; now CycleScale(1).
+    /// 'N' was unbound in Edit/melodic; now CycleScale(-1).
+    /// Both are melodic-only — drums return Action::None.
+    #[test]
+    fn n_key_maps_to_cycle_scale_in_edit_melodic() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('n')), Mode::Edit, LaneKind::Melodic),
+            Action::CycleScale(1),
+            "'n' in Edit/melodic must be CycleScale(1) (was unbound before M5a-T3)"
+        );
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('N')), Mode::Edit, LaneKind::Melodic),
+            Action::CycleScale(-1),
+            "'N' in Edit/melodic must be CycleScale(-1) (was unbound before M5a-T3)"
+        );
+        // Drums — these chars are not bound for drums, must remain None.
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('n')), Mode::Edit, LaneKind::Drums),
+            Action::None,
+            "'n' in Edit/drums must remain Action::None"
+        );
+    }
+
+    /// 'h' was unbound (Action::None) in Edit/melodic; now AdjustRoot(-1).
+    /// 'H' was unbound in Edit/melodic; now AdjustRoot(1).
+    /// Both are melodic-only — drums return Action::None.
+    #[test]
+    fn h_key_maps_to_adjust_root_in_edit_melodic() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('h')), Mode::Edit, LaneKind::Melodic),
+            Action::AdjustRoot(-1),
+            "'h' in Edit/melodic must be AdjustRoot(-1) (was unbound before M5a-T3)"
+        );
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('H')), Mode::Edit, LaneKind::Melodic),
+            Action::AdjustRoot(1),
+            "'H' in Edit/melodic must be AdjustRoot(1) (was unbound before M5a-T3)"
+        );
+        // Drums — these chars are not bound for drums, must remain None.
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('h')), Mode::Edit, LaneKind::Drums),
+            Action::None,
+            "'h' in Edit/drums must remain Action::None"
+        );
     }
 }
