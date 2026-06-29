@@ -1,3 +1,4 @@
+pub mod crate_view;
 pub mod editor_drums;
 pub mod editor_melodic;
 pub mod help;
@@ -39,6 +40,7 @@ fn context_footer(app: &App) -> Line<'static> {
         Mode::RecoveryPrompt => "[r/enter]recover [d/esc]discard [o]open saved",
         Mode::NameEntry(_) => "[a-z 0-9 - #]type name [enter]confirm [esc]cancel",
         Mode::Confirm(_) => "[y/enter]yes [n/esc]no",
+        Mode::CrateView => "[↑↓]entry [←→]crate [enter]launch [a]audition [f]fav [V/esc]close",
     };
     let label_style = Style::default()
         .fg(Color::Black)
@@ -123,6 +125,7 @@ pub fn render(f: &mut Frame, app: &App) {
         Mode::RecoveryPrompt => recovery::render_recovery_prompt(f, centered(area, 70, 60)),
         Mode::NameEntry(_) => mgmt::render_name_entry(f, centered(area, 50, 30), app),
         Mode::Confirm(_) => mgmt::render_confirm(f, centered(area, 50, 25), app),
+        Mode::CrateView => crate_view::render_crate_view(f, centered(area, 70, 70), app),
         Mode::Edit | Mode::TempoEntry => {}
     }
 }

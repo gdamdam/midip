@@ -45,6 +45,9 @@ pub enum Mode {
     NameEntry(NamePurpose),
     /// Yes/no confirmation dialog before a destructive action.
     Confirm(ConfirmAction),
+    /// Live crate browser: browse crate entries and launch patterns without
+    /// committing to the active Set until Enter is pressed.
+    CrateView,
 }
 
 /// Which field is focused in the route editor (cycles Left/Right).
@@ -211,6 +214,21 @@ pub enum Action {
     AddToCrate(usize),
     /// Remove the entry at `entry_idx` from the crate at `crate_idx`; persist.
     RemoveFromCrate(usize, usize),
+    // ── M4a Task 5: live crate view ──────────────────────────────────────────
+    /// Open the crate browser overlay (from Edit mode).
+    OpenCrateView,
+    /// Close the crate browser and return to Edit.
+    CloseCrateView,
+    /// Move the entry selection within the current crate (±1, clamped).
+    CrateEntrySel(i32),
+    /// Switch the active crate (±1, clamped); resets entry selection.
+    CrateSel(i32),
+    /// Launch the selected crate entry to its role-matched lane (quantized).
+    LaunchCrateEntry,
+    /// Audition the selected crate entry (gated: stopped or lane muted).
+    AuditionCrateEntry,
+    /// Toggle the selected crate entry's PatternRef in/out of favorites.
+    FavoriteCrateEntry,
     None,
 }
 
@@ -319,6 +337,12 @@ pub struct App {
     // --- M4a Task 4: crates ---
     /// Named, ordered collections of pattern refs; loaded at startup, persisted on mutation.
     pub crates: CrateIndex,
+
+    // --- M4a Task 5: crate view selection ---
+    /// Index of the currently-displayed crate in `crates.crates`.
+    pub crate_sel: usize,
+    /// Index of the selected entry within the current crate.
+    pub crate_entry_sel: usize,
 }
 
 /// Default melodic velocity multiplier when placing a note (1.0 -> MIDI 100).
@@ -382,6 +406,8 @@ impl App {
             favorites: Favorites::default(),
             fav_filter: false,
             crates: CrateIndex::default(),
+            crate_sel: 0,
+            crate_entry_sel: 0,
         }
     }
 
@@ -409,6 +435,72 @@ impl App {
     /// Best-effort persist of the crate index; ignores errors so a missing data dir never panics.
     pub fn persist_crates(&self) {
         let _ = crate::pattern::store::save_crates(&crate::config::data_dir(), &self.crates);
+    }
+
+    /// Resolve `r` and load/queue it to the role-matched lane.
+    ///
+    /// Lane targeting:
+    /// - `Vendored`: `role_lane_hint()` (drums→0, bass→1, synth→2); unknown → focused lane.
+    /// - `User`: resolved pattern's `kind()` — Drums → first drum lane; Melodic → focused lane
+    ///   if it is melodic, else the first melodic lane.
+    ///
+    /// Returns empty vec and sets status "missing pattern" when the ref cannot be resolved.
+    pub fn launch_ref(&mut self, r: &PatternRef) -> Vec<UiCommand> {
+        let user_dir = crate::config::data_dir().join("patterns");
+        let Some(pat) = crate::pattern::refs::resolve_pattern_ref(r, &self.library, &user_dir)
+        else {
+            self.set_status("missing pattern");
+            return vec![];
+        };
+
+        let lane = if let Some(hint) = r.role_lane_hint() {
+            hint.min(self.set.lanes.len().saturating_sub(1))
+        } else {
+            match pat.kind() {
+                LaneKind::Drums => self
+                    .set
+                    .lanes
+                    .iter()
+                    .position(|l| l.profile.kind == LaneKind::Drums)
+                    .unwrap_or(0),
+                LaneKind::Melodic => {
+                    if self.set.lanes.get(self.focus).map(|l| l.profile.kind)
+                        == Some(LaneKind::Melodic)
+                    {
+                        self.focus
+                    } else {
+                        self.set
+                            .lanes
+                            .iter()
+                            .position(|l| l.profile.kind == LaneKind::Melodic)
+                            .unwrap_or(self.focus)
+                    }
+                }
+            }
+        };
+
+        let name = pat.name.clone();
+        self.snapshot();
+        self.set.lanes[lane].pattern = pat.clone();
+        let mut cmds = Vec::new();
+        if self.engine_playing {
+            let quant = self.launch_quant;
+            self.queued[lane] = Some(name.clone());
+            let quant_str = match quant {
+                Quant::NextBar => "next bar",
+                Quant::NextBeat => "next beat",
+            };
+            self.set_status(format!("Queued {} ({})", name, quant_str));
+            cmds.push(UiCommand::QueuePattern {
+                lane,
+                pattern: pat,
+                quant,
+            });
+        } else {
+            self.set_status(format!("Loaded {}", name));
+            cmds.push(UiCommand::LoadPattern { lane, pattern: pat });
+        }
+        cmds
     }
 
     /// Advance the autosave debounce counter. Returns `true` exactly when the counter
@@ -1464,6 +1556,93 @@ impl App {
                 self.crates.remove_entry(crate_idx, entry_idx);
                 self.persist_crates();
             }
+            // ── M4a Task 5: live crate view ──────────────────────────────────────
+            Action::OpenCrateView => {
+                self.crate_sel = 0;
+                self.crate_entry_sel = 0;
+                self.mode = Mode::CrateView;
+            }
+            Action::CloseCrateView => {
+                self.mode = Mode::Edit;
+            }
+            Action::CrateEntrySel(d) => {
+                if let Some(cr) = self.crates.crates.get(self.crate_sel) {
+                    let n = cr.entries.len();
+                    if n > 0 {
+                        self.crate_entry_sel =
+                            (self.crate_entry_sel as i32 + d).clamp(0, n as i32 - 1) as usize;
+                    }
+                }
+            }
+            Action::CrateSel(d) => {
+                let n = self.crates.crates.len();
+                if n > 0 {
+                    self.crate_sel = (self.crate_sel as i32 + d).clamp(0, n as i32 - 1) as usize;
+                    self.crate_entry_sel = 0;
+                }
+            }
+            Action::LaunchCrateEntry => {
+                let r = self
+                    .crates
+                    .crates
+                    .get(self.crate_sel)
+                    .and_then(|cr| cr.entries.get(self.crate_entry_sel))
+                    .map(|e| e.pattern.clone());
+                if let Some(r) = r {
+                    cmds.extend(self.launch_ref(&r));
+                }
+            }
+            Action::AuditionCrateEntry => {
+                let entry_opt = self
+                    .crates
+                    .crates
+                    .get(self.crate_sel)
+                    .and_then(|cr| cr.entries.get(self.crate_entry_sel))
+                    .map(|e| e.pattern.clone());
+                if let Some(r) = entry_opt {
+                    let user_dir = crate::config::data_dir().join("patterns");
+                    let lane = r
+                        .role_lane_hint()
+                        .map(|h| h.min(self.set.lanes.len().saturating_sub(1)))
+                        .unwrap_or(self.focus);
+                    let lane_muted = self.set.lanes.get(lane).map(|l| l.mute).unwrap_or(false);
+                    if self.engine_playing && !lane_muted {
+                        self.set_status("Mute lane to audition (it's live)");
+                    } else if let Some(pat) =
+                        crate::pattern::refs::resolve_pattern_ref(&r, &self.library, &user_dir)
+                    {
+                        self.set_status(format!("Auditioning {}", pat.name));
+                        self.audition = Some(AuditionPreview {
+                            lane,
+                            pattern: pat.clone(),
+                        });
+                        cmds.push(UiCommand::LoadPattern { lane, pattern: pat });
+                    } else {
+                        self.set_status("missing pattern");
+                    }
+                }
+            }
+            Action::FavoriteCrateEntry => {
+                let r = self
+                    .crates
+                    .crates
+                    .get(self.crate_sel)
+                    .and_then(|cr| cr.entries.get(self.crate_entry_sel))
+                    .map(|e| e.pattern.clone());
+                if let Some(r) = r {
+                    let name = r.display_name();
+                    let added = self.favorites.toggle(r);
+                    let _ = crate::pattern::store::save_favorites(
+                        &crate::config::data_dir(),
+                        &self.favorites,
+                    );
+                    if added {
+                        self.set_status(format!("\u{2605} favorited {}", name));
+                    } else {
+                        self.set_status(format!("unfavorited {}", name));
+                    }
+                }
+            }
             Action::None => {}
         }
         cmds
@@ -1616,6 +1795,7 @@ impl App {
             Mode::RecoveryPrompt => "RECOVERY",
             Mode::NameEntry(_) => "NAME",
             Mode::Confirm(_) => "CONFIRM",
+            Mode::CrateView => "CRATE VIEW",
         }
     }
 
@@ -5475,5 +5655,298 @@ mod tests {
 
         assert_eq!(app.crates.crates[0].entries[0].pattern, ref1);
         assert_eq!(app.crates.crates[0].entries[1].pattern, ref0);
+    }
+
+    // ── M4a Task 5: live crate view ───────────────────────────────────────────
+
+    #[test]
+    fn open_crate_view_sets_mode() {
+        let set = Set::default_set(crate::devices::profiles::default_profiles());
+        let mut app = App::new(set, Library::empty());
+        let cmds = app.apply(Action::OpenCrateView);
+        assert_eq!(app.mode, Mode::CrateView);
+        assert!(cmds.is_empty());
+    }
+
+    #[test]
+    fn close_crate_view_returns_to_edit() {
+        let set = Set::default_set(crate::devices::profiles::default_profiles());
+        let mut app = App::new(set, Library::empty());
+        app.mode = Mode::CrateView;
+        app.apply(Action::CloseCrateView);
+        assert_eq!(app.mode, Mode::Edit);
+    }
+
+    #[test]
+    fn crate_entry_sel_moves_selection_no_command() {
+        use crate::pattern::refs::PatternRef;
+        use crate::pattern::store::CrateEntry;
+        let set = Set::default_set(crate::devices::profiles::default_profiles());
+        let mut app = App::new(set, Library::empty());
+        let crate_idx = app.crates.add_crate("test".to_string());
+        for role in ["drums", "bass", "synth"] {
+            app.crates.add_entry(
+                crate_idx,
+                CrateEntry {
+                    pattern: PatternRef::Vendored {
+                        role: role.to_string(),
+                        genre: "techno".to_string(),
+                        name: "x".to_string(),
+                    },
+                    label: None,
+                },
+            );
+        }
+        app.mode = Mode::CrateView;
+        app.crate_sel = 0;
+        app.crate_entry_sel = 0;
+        let cmds = app.apply(Action::CrateEntrySel(1));
+        assert_eq!(app.crate_entry_sel, 1);
+        assert!(cmds.is_empty(), "navigation must not emit engine commands");
+        app.apply(Action::CrateEntrySel(1));
+        assert_eq!(app.crate_entry_sel, 2);
+        app.apply(Action::CrateEntrySel(1));
+        assert_eq!(app.crate_entry_sel, 2, "must clamp at end");
+    }
+
+    #[test]
+    fn crate_sel_moves_crate_resets_entry_no_command() {
+        let set = Set::default_set(crate::devices::profiles::default_profiles());
+        let mut app = App::new(set, Library::empty());
+        app.crates.add_crate("a".to_string());
+        app.crates.add_crate("b".to_string());
+        app.mode = Mode::CrateView;
+        app.crate_sel = 0;
+        app.crate_entry_sel = 1;
+        let cmds = app.apply(Action::CrateSel(1));
+        assert_eq!(app.crate_sel, 1);
+        assert_eq!(
+            app.crate_entry_sel, 0,
+            "entry sel must reset when crate changes"
+        );
+        assert!(cmds.is_empty());
+    }
+
+    #[test]
+    fn launch_crate_entry_drums_targets_lane_0_when_stopped() {
+        use crate::pattern::library::GenreMap;
+        use crate::pattern::model::PatternData;
+        use crate::pattern::refs::PatternRef;
+        use crate::pattern::store::CrateEntry;
+
+        let mut drums = GenreMap::new();
+        let pat = Pattern {
+            name: "kick".to_string(),
+            desc: String::new(),
+            length: 16,
+            data: PatternData::Drums(vec![vec![]; 16]),
+            id: crate::persist::Id::nil(),
+        };
+        drums.insert("techno".to_string(), vec![pat]);
+        let lib = Library {
+            drums,
+            bass: GenreMap::new(),
+            synth: GenreMap::new(),
+        };
+
+        let set = Set::default_set(crate::devices::profiles::default_profiles());
+        let mut app = App::new(set, lib);
+        app.engine_playing = false;
+
+        let crate_idx = app.crates.add_crate("my crate".to_string());
+        app.crates.add_entry(
+            crate_idx,
+            CrateEntry {
+                pattern: PatternRef::Vendored {
+                    role: "drums".to_string(),
+                    genre: "techno".to_string(),
+                    name: "kick".to_string(),
+                },
+                label: None,
+            },
+        );
+        app.mode = Mode::CrateView;
+        app.crate_sel = 0;
+        app.crate_entry_sel = 0;
+
+        let cmds = app.apply(Action::LaunchCrateEntry);
+        assert!(
+            cmds.iter()
+                .any(|c| matches!(c, UiCommand::LoadPattern { lane: 0, .. })),
+            "drums entry must load to lane 0; got {:?}",
+            cmds
+        );
+    }
+
+    #[test]
+    fn launch_crate_entry_bass_targets_lane_1_when_stopped() {
+        use crate::pattern::library::GenreMap;
+        use crate::pattern::model::PatternData;
+        use crate::pattern::refs::PatternRef;
+        use crate::pattern::store::CrateEntry;
+
+        let mut bass = GenreMap::new();
+        let pat = Pattern {
+            name: "bass line".to_string(),
+            desc: String::new(),
+            length: 16,
+            data: PatternData::Melodic(vec![None; 16]),
+            id: crate::persist::Id::nil(),
+        };
+        bass.insert("techno".to_string(), vec![pat]);
+        let lib = Library {
+            drums: GenreMap::new(),
+            bass,
+            synth: GenreMap::new(),
+        };
+
+        let set = Set::default_set(crate::devices::profiles::default_profiles());
+        let mut app = App::new(set, lib);
+        app.engine_playing = false;
+
+        let crate_idx = app.crates.add_crate("c".to_string());
+        app.crates.add_entry(
+            crate_idx,
+            CrateEntry {
+                pattern: PatternRef::Vendored {
+                    role: "bass".to_string(),
+                    genre: "techno".to_string(),
+                    name: "bass line".to_string(),
+                },
+                label: None,
+            },
+        );
+        app.mode = Mode::CrateView;
+        app.crate_sel = 0;
+        app.crate_entry_sel = 0;
+
+        let cmds = app.apply(Action::LaunchCrateEntry);
+        assert!(
+            cmds.iter()
+                .any(|c| matches!(c, UiCommand::LoadPattern { lane: 1, .. })),
+            "bass entry must load to lane 1; got {:?}",
+            cmds
+        );
+    }
+
+    #[test]
+    fn launch_crate_entry_synth_targets_lane_2_when_stopped() {
+        use crate::pattern::library::GenreMap;
+        use crate::pattern::model::PatternData;
+        use crate::pattern::refs::PatternRef;
+        use crate::pattern::store::CrateEntry;
+
+        let mut synth = GenreMap::new();
+        let pat = Pattern {
+            name: "synth line".to_string(),
+            desc: String::new(),
+            length: 16,
+            data: PatternData::Melodic(vec![None; 16]),
+            id: crate::persist::Id::nil(),
+        };
+        synth.insert("techno".to_string(), vec![pat]);
+        let lib = Library {
+            drums: GenreMap::new(),
+            bass: GenreMap::new(),
+            synth,
+        };
+
+        let set = Set::default_set(crate::devices::profiles::default_profiles());
+        let mut app = App::new(set, lib);
+        app.engine_playing = false;
+
+        let crate_idx = app.crates.add_crate("c".to_string());
+        app.crates.add_entry(
+            crate_idx,
+            CrateEntry {
+                pattern: PatternRef::Vendored {
+                    role: "synth".to_string(),
+                    genre: "techno".to_string(),
+                    name: "synth line".to_string(),
+                },
+                label: None,
+            },
+        );
+        app.crate_sel = 0;
+        app.crate_entry_sel = 0;
+
+        let cmds = app.apply(Action::LaunchCrateEntry);
+        assert!(
+            cmds.iter()
+                .any(|c| matches!(c, UiCommand::LoadPattern { lane: 2, .. })),
+            "synth entry must load to lane 2; got {:?}",
+            cmds
+        );
+    }
+
+    #[test]
+    fn launch_crate_entry_queues_when_playing() {
+        use crate::pattern::library::GenreMap;
+        use crate::pattern::model::PatternData;
+        use crate::pattern::refs::PatternRef;
+        use crate::pattern::store::CrateEntry;
+
+        let mut drums = GenreMap::new();
+        let pat = Pattern {
+            name: "kick".to_string(),
+            desc: String::new(),
+            length: 16,
+            data: PatternData::Drums(vec![vec![]; 16]),
+            id: crate::persist::Id::nil(),
+        };
+        drums.insert("techno".to_string(), vec![pat]);
+        let lib = Library {
+            drums,
+            bass: GenreMap::new(),
+            synth: GenreMap::new(),
+        };
+
+        let set = Set::default_set(crate::devices::profiles::default_profiles());
+        let mut app = App::new(set, lib);
+        app.engine_playing = true;
+
+        let crate_idx = app.crates.add_crate("c".to_string());
+        app.crates.add_entry(
+            crate_idx,
+            CrateEntry {
+                pattern: PatternRef::Vendored {
+                    role: "drums".to_string(),
+                    genre: "techno".to_string(),
+                    name: "kick".to_string(),
+                },
+                label: None,
+            },
+        );
+        app.crate_sel = 0;
+        app.crate_entry_sel = 0;
+
+        let cmds = app.apply(Action::LaunchCrateEntry);
+        assert!(
+            cmds.iter()
+                .any(|c| matches!(c, UiCommand::QueuePattern { lane: 0, .. })),
+            "must queue to lane 0 when playing; got {:?}",
+            cmds
+        );
+        assert_eq!(app.queued[0].as_deref(), Some("kick"));
+    }
+
+    #[test]
+    fn launch_ref_missing_pattern_sets_status_no_command() {
+        use crate::pattern::refs::PatternRef;
+
+        let set = Set::default_set(crate::devices::profiles::default_profiles());
+        let mut app = App::new(set, Library::empty());
+        let r = PatternRef::Vendored {
+            role: "drums".to_string(),
+            genre: "techno".to_string(),
+            name: "nonexistent".to_string(),
+        };
+        let cmds = app.launch_ref(&r);
+        assert!(cmds.is_empty(), "missing pattern must not emit commands");
+        assert!(
+            app.status.contains("missing"),
+            "status must mention missing: {}",
+            app.status
+        );
     }
 }
