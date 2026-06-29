@@ -198,7 +198,7 @@ mod tests {
     use crate::app::App;
     use crate::devices::profiles::default_profiles;
     use crate::pattern::library::{GenreMap, Library};
-    use crate::pattern::model::{DrumHit, Pattern, PatternData, Set};
+    use crate::pattern::model::{DrumHit, Pattern, PatternData, Set, TrigCond};
     use ratatui::backend::TestBackend;
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
@@ -229,6 +229,8 @@ mod tests {
             vel: 127,
             prob: 1.0,
             ratchet: 1,
+            micro: 0,
+            cond: TrigCond::Always,
         }];
         set.lanes[0].pattern = Pattern {
             name: "test".to_string(),
@@ -236,6 +238,7 @@ mod tests {
             length: 16,
             data: PatternData::Drums(steps),
             id: crate::persist::Id::nil(),
+            cc: Default::default(),
         };
         let mut app = App::new(set, empty_library());
         app.focus = 0;
@@ -285,6 +288,8 @@ mod tests {
             vel: 127,
             prob: 1.0,
             ratchet: 1,
+            micro: 0,
+            cond: TrigCond::Always,
         }];
         set.lanes[0].pattern = Pattern {
             name: "test32".to_string(),
@@ -292,6 +297,7 @@ mod tests {
             length: 32,
             data: PatternData::Drums(steps),
             id: crate::persist::Id::nil(),
+            cc: Default::default(),
         };
         let mut app = App::new(set, empty_library());
         app.focus = 0;
@@ -350,6 +356,8 @@ mod tests {
             vel: 100,
             prob: 1.0,
             ratchet: 1,
+            micro: 0,
+            cond: TrigCond::Always,
         }];
         set.lanes[0].pattern = Pattern {
             name: "hdr".to_string(),
@@ -357,6 +365,7 @@ mod tests {
             length: 32,
             data: PatternData::Drums(steps),
             id: crate::persist::Id::nil(),
+            cc: Default::default(),
         };
         let mut app = App::new(set, empty_library());
         app.focus = 0;
@@ -392,6 +401,7 @@ mod tests {
             length: 16,
             data: PatternData::Drums(steps),
             id: crate::persist::Id::nil(),
+            cc: Default::default(),
         };
         let mut app = App::new(set, empty_library());
         app.focus = 0;
@@ -421,6 +431,8 @@ mod tests {
             vel: 80,
             prob: 0.75,
             ratchet: 2,
+            micro: 0,
+            cond: TrigCond::Always,
         }];
         set.lanes[0].pattern = Pattern {
             name: "det".to_string(),
@@ -428,6 +440,7 @@ mod tests {
             length: 16,
             data: PatternData::Drums(steps),
             id: crate::persist::Id::nil(),
+            cc: Default::default(),
         };
         let mut app = App::new(set, empty_library());
         app.focus = 0;

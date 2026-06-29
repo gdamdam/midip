@@ -7,6 +7,8 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 
 use crate::app::App;
+#[cfg(test)]
+use crate::pattern::model::TrigCond;
 use crate::pattern::model::{Lane, PatternData};
 use crate::ui::theme::{lane_color, playhead_style};
 
@@ -429,6 +431,8 @@ mod tests {
                 vel: 100,
                 prob: 1.0,
                 ratchet: 1,
+                micro: 0,
+                cond: TrigCond::Always,
             }];
         }
         app.set.lanes[0].pattern.length = 32;
@@ -496,6 +500,7 @@ mod tests {
                 length: 16,
                 data: PatternData::Drums(vec![Vec::new(); 16]),
                 id: crate::persist::Id::nil(),
+                cc: Default::default(),
             },
         });
 

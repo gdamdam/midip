@@ -9,6 +9,8 @@ use ratatui::Frame;
 use crate::app::App;
 use crate::devices::profiles::{melodic_velocity, resolve_melodic_pitch};
 use crate::music::scale::{degree_label, note_name as scale_note_name};
+#[cfg(test)]
+use crate::pattern::model::TrigCond;
 use crate::pattern::model::{MelodicStep, PatternData};
 use crate::ui::theme::{cursor_style, lane_color, note_name, playhead_style, vel_bar, vel_color};
 
@@ -291,6 +293,8 @@ mod tests {
             len: 1.0,
             prob: 1.0,
             ratchet: 1,
+            micro: 0,
+            cond: TrigCond::Always,
         }]);
         set.lanes[1].pattern = Pattern {
             name: "test32".to_string(),
@@ -298,6 +302,7 @@ mod tests {
             length: 32,
             data: PatternData::Melodic(steps),
             id: crate::persist::Id::nil(),
+            cc: Default::default(),
         };
         let mut app = App::new(set, empty_library());
         app.focus = 1;
@@ -338,6 +343,8 @@ mod tests {
             len: 1.0,
             prob: 1.0,
             ratchet: 1,
+            micro: 0,
+            cond: TrigCond::Always,
         }]);
         steps[4] = MelodicStep::from(vec![MelodicNote {
             semi: 7,
@@ -346,6 +353,8 @@ mod tests {
             len: 1.0,
             prob: 1.0,
             ratchet: 1,
+            micro: 0,
+            cond: TrigCond::Always,
         }]);
         set.lanes[1].pattern = Pattern {
             name: "test".to_string(),
@@ -353,6 +362,7 @@ mod tests {
             length: 16,
             data: PatternData::Melodic(steps),
             id: crate::persist::Id::nil(),
+            cc: Default::default(),
         };
         let mut app = App::new(set, empty_library());
         app.focus = 1;
@@ -400,6 +410,8 @@ mod tests {
             len: 1.0,
             prob: 1.0,
             ratchet: 1,
+            micro: 0,
+            cond: TrigCond::Always,
         }]);
         set.lanes[1].pattern = Pattern {
             name: "hdr".to_string(),
@@ -407,6 +419,7 @@ mod tests {
             length: 32,
             data: PatternData::Melodic(steps),
             id: crate::persist::Id::nil(),
+            cc: Default::default(),
         };
         let mut app = App::new(set, empty_library());
         app.focus = 1;
@@ -441,6 +454,8 @@ mod tests {
             len: 1.0,
             prob: 1.0,
             ratchet: 1,
+            micro: 0,
+            cond: TrigCond::Always,
         }]);
         set.lanes[1].pattern = Pattern {
             name: "co".to_string(),
@@ -448,6 +463,7 @@ mod tests {
             length: 16,
             data: PatternData::Melodic(steps),
             id: crate::persist::Id::nil(),
+            cc: Default::default(),
         };
         let mut app = App::new(set, empty_library());
         app.focus = 1;
@@ -479,6 +495,8 @@ mod tests {
             len: 1.0,
             prob: 1.0,
             ratchet: 1,
+            micro: 0,
+            cond: TrigCond::Always,
         }]);
         set1.lanes[1].pattern = Pattern {
             name: "short".to_string(),
@@ -486,6 +504,7 @@ mod tests {
             length: 16,
             data: PatternData::Melodic(steps1),
             id: crate::persist::Id::nil(),
+            cc: Default::default(),
         };
         let mut app1 = App::new(set1, empty_library());
         app1.focus = 1;
@@ -511,6 +530,8 @@ mod tests {
             len: 8.0,
             prob: 1.0,
             ratchet: 1,
+            micro: 0,
+            cond: TrigCond::Always,
         }]);
         set2.lanes[1].pattern = Pattern {
             name: "long".to_string(),
@@ -518,6 +539,7 @@ mod tests {
             length: 16,
             data: PatternData::Melodic(steps2),
             id: crate::persist::Id::nil(),
+            cc: Default::default(),
         };
         let mut app2 = App::new(set2, empty_library());
         app2.focus = 1;
@@ -551,6 +573,8 @@ mod tests {
             len: 1.0,
             prob: 1.0,
             ratchet: 1,
+            micro: 0,
+            cond: TrigCond::Always,
         }]);
         steps[1] = MelodicStep::from(vec![MelodicNote {
             semi: 2,
@@ -559,6 +583,8 @@ mod tests {
             len: 1.0,
             prob: 1.0,
             ratchet: 1,
+            micro: 0,
+            cond: TrigCond::Always,
         }]);
         set.lanes[1].pattern = Pattern {
             name: "sl".to_string(),
@@ -566,6 +592,7 @@ mod tests {
             length: 16,
             data: PatternData::Melodic(steps),
             id: crate::persist::Id::nil(),
+            cc: Default::default(),
         };
         let mut app = App::new(set, empty_library());
         app.focus = 1;
@@ -605,6 +632,8 @@ mod tests {
             len: 1.0,
             prob: 1.0,
             ratchet: 1,
+            micro: 0,
+            cond: TrigCond::Always,
         }]);
         set.lanes[1].pattern = Pattern {
             name: "lone".to_string(),
@@ -612,6 +641,7 @@ mod tests {
             length: 16,
             data: PatternData::Melodic(steps),
             id: crate::persist::Id::nil(),
+            cc: Default::default(),
         };
         let mut app = App::new(set, empty_library());
         app.focus = 1;
@@ -642,6 +672,7 @@ mod tests {
             length: 16,
             data: PatternData::Melodic(vec![MelodicStep::default(); 16]),
             id: crate::persist::Id::nil(),
+            cc: Default::default(),
         };
         // Set non-zero octave and transpose so the signed display is unambiguous.
         set.lanes[1].octave = 2;
@@ -688,6 +719,8 @@ mod tests {
             len: 2.0,
             prob: 0.5,
             ratchet: 3,
+            micro: 0,
+            cond: TrigCond::Always,
         }]);
         set.lanes[1].pattern = Pattern {
             name: "det".to_string(),
@@ -695,6 +728,7 @@ mod tests {
             length: 16,
             data: PatternData::Melodic(steps),
             id: crate::persist::Id::nil(),
+            cc: Default::default(),
         };
         let mut app = App::new(set, empty_library());
         app.focus = 1;
@@ -772,6 +806,8 @@ mod tests {
                 len: 0.9,
                 prob: 1.0,
                 ratchet: 1,
+                micro: 0,
+                cond: TrigCond::Always,
             },
             MelodicNote {
                 semi: 4,
@@ -780,6 +816,8 @@ mod tests {
                 len: 0.9,
                 prob: 1.0,
                 ratchet: 1,
+                micro: 0,
+                cond: TrigCond::Always,
             },
             MelodicNote {
                 semi: 7,
@@ -788,6 +826,8 @@ mod tests {
                 len: 0.9,
                 prob: 1.0,
                 ratchet: 1,
+                micro: 0,
+                cond: TrigCond::Always,
             },
         ]);
         set.lanes[2].pattern = Pattern {
@@ -796,6 +836,7 @@ mod tests {
             length: 16,
             data: PatternData::Melodic(steps),
             id: crate::persist::Id::nil(),
+            cc: Default::default(),
         };
         let mut app = App::new(set, empty_library());
         app.focus = 2;
@@ -853,6 +894,8 @@ mod tests {
             len: 1.0,
             prob: 1.0,
             ratchet: 1,
+            micro: 0,
+            cond: TrigCond::Always,
         }]);
         set.lanes[1].pattern = Pattern {
             name: "scale-test".to_string(),
@@ -860,6 +903,7 @@ mod tests {
             length: 16,
             data: PatternData::Melodic(steps),
             id: crate::persist::Id::nil(),
+            cc: Default::default(),
         };
         let mut app = App::new(set, empty_library());
         app.focus = 1;

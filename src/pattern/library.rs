@@ -6,7 +6,7 @@ use indexmap::IndexMap;
 use serde::Deserialize;
 
 use crate::devices::profiles::{S1, T8_BASS};
-use crate::pattern::model::{DrumHit, MelodicNote, MelodicStep, Pattern, PatternData};
+use crate::pattern::model::{DrumHit, MelodicNote, MelodicStep, Pattern, PatternData, TrigCond};
 
 /// genre name -> patterns, preserving the file's genre order.
 pub type GenreMap = IndexMap<String, Vec<Pattern>>;
@@ -61,6 +61,8 @@ pub fn parse_drum_file(json: &str) -> anyhow::Result<GenreMap> {
                             vel: h.vel,
                             prob: 1.0,
                             ratchet: 1,
+                            micro: 0,
+                            cond: TrigCond::Always,
                         })
                         .collect::<Vec<DrumHit>>()
                 })
@@ -71,6 +73,7 @@ pub fn parse_drum_file(json: &str) -> anyhow::Result<GenreMap> {
                 length,
                 data: PatternData::Drums(data),
                 id: crate::persist::Id::nil(),
+                cc: vec![Vec::new(); length],
             });
         }
         out.insert(genre, parsed);
@@ -100,6 +103,8 @@ pub fn parse_melodic_file(json: &str, gate_fraction: f32) -> anyhow::Result<Genr
                             len: gate_fraction,
                             prob: 1.0,
                             ratchet: 1,
+                            micro: 0,
+                            cond: TrigCond::Always,
                         })
                         .into_iter()
                         .collect::<Vec<_>>(),
@@ -112,6 +117,7 @@ pub fn parse_melodic_file(json: &str, gate_fraction: f32) -> anyhow::Result<Genr
                 length,
                 data: PatternData::Melodic(data),
                 id: crate::persist::Id::nil(),
+                cc: vec![Vec::new(); length],
             });
         }
         out.insert(genre, parsed);
@@ -286,7 +292,7 @@ impl Library {
 mod tests {
     use super::*;
     use crate::devices::profiles::{S1, T8_BASS};
-    use crate::pattern::model::{LaneKind, PatternData};
+    use crate::pattern::model::{LaneKind, PatternData, TrigCond};
 
     #[test]
     fn parse_drum_file_reads_genres_patterns_and_hits() {
@@ -319,7 +325,9 @@ mod tests {
                         note: 36,
                         vel: 120,
                         prob: 1.0,
-                        ratchet: 1
+                        ratchet: 1,
+                        micro: 0,
+                        cond: TrigCond::Always,
                     }
                 );
                 assert_eq!(
@@ -328,7 +336,9 @@ mod tests {
                         note: 42,
                         vel: 100,
                         prob: 1.0,
-                        ratchet: 1
+                        ratchet: 1,
+                        micro: 0,
+                        cond: TrigCond::Always,
                     }
                 );
                 assert!(steps[1].is_empty());

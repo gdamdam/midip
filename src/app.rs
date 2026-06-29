@@ -13,7 +13,7 @@ use crate::pattern::generate::{generate, next_rng, GenMode, GenParams};
 use crate::pattern::library::{LibRole, Library};
 use crate::pattern::model::{
     DrumHit, DrumStep, Lane, LaneKind, LaneRoute, MelodicNote, MelodicStep, Pattern, PatternData,
-    PortRef, Set,
+    PortRef, Set, TrigCond,
 };
 use crate::pattern::refs::{resolve_scene, PatternRef};
 use crate::pattern::store::{CrateEntry, CrateIndex, Favorites};
@@ -1488,6 +1488,7 @@ impl App {
                     PatternData::Drums(steps) => steps.resize(new_len, Vec::new()),
                     PatternData::Melodic(steps) => steps.resize(new_len, MelodicStep::default()),
                 }
+                lane.pattern.sync_cc_len(new_len);
                 lane.pattern.length = new_len;
                 self.clamp_cursor();
                 cmds.push(self.load_focused());
@@ -1514,6 +1515,7 @@ impl App {
                             }
                         }
                     }
+                    lane.pattern.sync_cc_len(new_len);
                     lane.pattern.length = new_len;
                     self.set_status(format!("Length {} \u{2192} {}", len, new_len));
                     cmds.push(self.load_focused());
@@ -2927,6 +2929,8 @@ impl App {
                                 len: gate,
                                 prob: 1.0,
                                 ratchet: 1,
+                                micro: 0,
+                                cond: TrigCond::Always,
                             };
                             if is_poly {
                                 // Poly lane (M5b Task 4): STACK the pressed pitch onto the
@@ -3015,6 +3019,8 @@ impl App {
                                             len: gate,
                                             prob: 1.0,
                                             ratchet: 1,
+                                            micro: 0,
+                                            cond: TrigCond::Always,
                                         });
                                     }
                                 }
@@ -3431,6 +3437,8 @@ impl App {
                             vel: 100,
                             prob: 1.0,
                             ratchet: 1,
+                            micro: 0,
+                            cond: TrigCond::Always,
                         });
                     }
                 }
@@ -3456,6 +3464,8 @@ impl App {
                             len: gate,
                             prob: 1.0,
                             ratchet: 1,
+                            micro: 0,
+                            cond: TrigCond::Always,
                         }]);
                     }
                 }
@@ -3638,6 +3648,8 @@ impl App {
                         vel: 100,
                         prob: 1.0,
                         ratchet: 1,
+                        micro: 0,
+                        cond: TrigCond::Always,
                     }),
                     (Some(pos), false) => {
                         step.remove(pos);
@@ -4003,6 +4015,8 @@ pub fn apply_fill(p: &mut Pattern) {
                         vel: 100,
                         prob: 1.0,
                         ratchet: 1,
+                        micro: 0,
+                        cond: TrigCond::Always,
                     });
                 }
             }
@@ -4050,6 +4064,8 @@ mod tests {
             vel: 90,
             prob: 1.0,
             ratchet: 1,
+            micro: 0,
+            cond: TrigCond::Always,
         }];
         drums.insert(
             "techno".into(),
@@ -4059,6 +4075,7 @@ mod tests {
                 length: 16,
                 data: PatternData::Drums(dsteps),
                 id: crate::persist::Id::nil(),
+                cc: Default::default(),
             }],
         );
 
@@ -4071,6 +4088,8 @@ mod tests {
             len: 0.5,
             prob: 1.0,
             ratchet: 1,
+            micro: 0,
+            cond: TrigCond::Always,
         }]);
         bass.insert(
             "acid".into(),
@@ -4080,6 +4099,7 @@ mod tests {
                 length: 16,
                 data: PatternData::Melodic(bsteps),
                 id: crate::persist::Id::nil(),
+                cc: Default::default(),
             }],
         );
 
@@ -4092,6 +4112,7 @@ mod tests {
                 length: 16,
                 data: PatternData::Melodic(vec![MelodicStep::default(); 16]),
                 id: crate::persist::Id::nil(),
+                cc: Default::default(),
             }],
         );
 
@@ -5297,6 +5318,8 @@ mod tests {
                 vel: 80,
                 prob: 1.0,
                 ratchet: 1,
+                micro: 0,
+                cond: TrigCond::Always,
             }];
             s
         };
@@ -5309,6 +5332,7 @@ mod tests {
                     length: 16,
                     data: PatternData::Drums(dsteps_a),
                     id: crate::persist::Id::nil(),
+                    cc: Default::default(),
                 },
                 Pattern {
                     name: "pat-B".into(),
@@ -5316,6 +5340,7 @@ mod tests {
                     length: 16,
                     data: PatternData::Drums(dsteps_b),
                     id: crate::persist::Id::nil(),
+                    cc: Default::default(),
                 },
             ],
         );
@@ -5458,6 +5483,7 @@ mod tests {
             length: 16,
             data: PatternData::Drums(vec![Vec::new(); 16]),
             id: crate::persist::Id::nil(),
+            cc: Default::default(),
         };
         let pat_b = Pattern {
             name: "pat-B".into(),
@@ -5470,10 +5496,13 @@ mod tests {
                     vel: 80,
                     prob: 1.0,
                     ratchet: 1,
+                    micro: 0,
+                    cond: TrigCond::Always,
                 }];
                 s
             }),
             id: crate::persist::Id::nil(),
+            cc: Default::default(),
         };
         drums.insert("techno".into(), vec![pat_a, pat_b]);
         let library = Library {
@@ -7222,6 +7251,8 @@ mod tests {
                 vel: 100,
                 prob: 1.0,
                 ratchet: 1,
+                micro: 0,
+                cond: TrigCond::Always,
             };
             steps[0] = vec![hit.clone()];
             steps[4] = vec![hit.clone()];
@@ -7275,6 +7306,8 @@ mod tests {
                 vel: 100,
                 prob: 1.0,
                 ratchet: 1,
+                micro: 0,
+                cond: TrigCond::Always,
             };
             steps[3] = vec![hit.clone()];
         }
@@ -7337,10 +7370,13 @@ mod tests {
                     vel: 100,
                     prob: 1.0,
                     ratchet: 1,
+                    micro: 0,
+                    cond: TrigCond::Always,
                 }];
                 16
             ]),
             id: persist::Id::nil(),
+            cc: Default::default(),
         };
         drums.insert("techno".to_string(), vec![vendored]);
 
@@ -7352,6 +7388,7 @@ mod tests {
             length: 16,
             data: PatternData::Drums(vec![Vec::new(); 16]),
             id: user_id.clone(),
+            cc: Default::default(),
         };
         drums.insert("User".to_string(), vec![user_pat]);
 
@@ -7687,6 +7724,7 @@ mod tests {
             length: 16,
             data: PatternData::Drums(vec![vec![]; 16]),
             id: crate::persist::Id::nil(),
+            cc: Default::default(),
         };
         drums.insert("techno".to_string(), vec![pat]);
         let lib = Library {
@@ -7738,6 +7776,7 @@ mod tests {
             length: 16,
             data: PatternData::Melodic(vec![MelodicStep::default(); 16]),
             id: crate::persist::Id::nil(),
+            cc: Default::default(),
         };
         bass.insert("techno".to_string(), vec![pat]);
         let lib = Library {
@@ -7789,6 +7828,7 @@ mod tests {
             length: 16,
             data: PatternData::Melodic(vec![MelodicStep::default(); 16]),
             id: crate::persist::Id::nil(),
+            cc: Default::default(),
         };
         synth.insert("techno".to_string(), vec![pat]);
         let lib = Library {
@@ -7839,6 +7879,7 @@ mod tests {
             length: 16,
             data: PatternData::Drums(vec![vec![]; 16]),
             id: crate::persist::Id::nil(),
+            cc: Default::default(),
         };
         drums.insert("techno".to_string(), vec![pat]);
         let lib = Library {
@@ -8083,6 +8124,7 @@ mod tests {
             length: 16,
             data: crate::pattern::model::PatternData::Drums(vec![Vec::new(); 16]),
             id: crate::persist::Id::nil(),
+            cc: Default::default(),
         };
         app.audition = Some(AuditionPreview {
             lane: 0,
@@ -8281,6 +8323,8 @@ mod tests {
             vel: 100,
             prob: 1.0,
             ratchet: 1,
+            micro: 0,
+            cond: TrigCond::Always,
         }];
         Pattern {
             name: "kick".into(),
@@ -8288,6 +8332,7 @@ mod tests {
             length: 16,
             data: PatternData::Drums(steps),
             id: crate::persist::Id::nil(),
+            cc: Default::default(),
         }
     }
 
@@ -8302,6 +8347,8 @@ mod tests {
             len: 0.5,
             prob: 1.0,
             ratchet: 1,
+            micro: 0,
+            cond: TrigCond::Always,
         }]);
         Pattern {
             name: "bass-note".into(),
@@ -8309,6 +8356,7 @@ mod tests {
             length: 16,
             data: PatternData::Melodic(steps),
             id: crate::persist::Id::nil(),
+            cc: Default::default(),
         }
     }
 
@@ -9465,6 +9513,8 @@ mod tests {
                 len: 0.9,
                 prob: 1.0,
                 ratchet: 1,
+                micro: 0,
+                cond: TrigCond::Always,
             }]);
         }
 
@@ -9496,6 +9546,8 @@ mod tests {
                 len: 0.9,
                 prob: 1.0,
                 ratchet: 1,
+                micro: 0,
+                cond: TrigCond::Always,
             }]);
         }
         app2.apply(Action::BuildTriad);
@@ -9527,6 +9579,8 @@ mod tests {
                 len: 0.5,
                 prob: 1.0,
                 ratchet: 1,
+                micro: 0,
+                cond: TrigCond::Always,
             }]);
         }
         app.apply(Action::BuildTriad);
@@ -9575,6 +9629,8 @@ mod tests {
                     len: 0.9,
                     prob: 1.0,
                     ratchet: 1,
+                    micro: 0,
+                    cond: TrigCond::Always,
                 },
                 MelodicNote {
                     semi: 4,
@@ -9583,6 +9639,8 @@ mod tests {
                     len: 0.9,
                     prob: 1.0,
                     ratchet: 1,
+                    micro: 0,
+                    cond: TrigCond::Always,
                 },
                 MelodicNote {
                     semi: 7,
@@ -9591,6 +9649,8 @@ mod tests {
                     len: 0.9,
                     prob: 1.0,
                     ratchet: 1,
+                    micro: 0,
+                    cond: TrigCond::Always,
                 },
             ]);
         }

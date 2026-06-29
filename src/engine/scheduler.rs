@@ -3,6 +3,8 @@
 
 use crate::midi::ports::MidiSink;
 use crate::midi::MidiMessage;
+#[cfg(test)]
+use crate::pattern::model::TrigCond;
 use crate::pattern::model::{Lane, MelodicNote, Pattern, PatternData, Set};
 
 /// Ownership domain of a sounding note (design §3.1). M1 only produces Playback;
@@ -1227,6 +1229,8 @@ mod sequencer_tests {
                 vel: 100,
                 prob: 1.0,
                 ratchet: 1,
+                micro: 0,
+                cond: TrigCond::Always,
             });
         }
         Lane {
@@ -1237,6 +1241,7 @@ mod sequencer_tests {
                 length: 16,
                 data: PatternData::Drums(steps),
                 id: crate::persist::Id::nil(),
+                cc: Default::default(),
             },
             mute: false,
             solo: false,
@@ -1246,6 +1251,8 @@ mod sequencer_tests {
             muted_voices: Vec::new(),
             scale: crate::music::scale::Scale::Chromatic,
             root: None,
+            swing: None,
+            clock_div: None,
         }
     }
 
@@ -1266,6 +1273,7 @@ mod sequencer_tests {
                 length: len,
                 data: PatternData::Melodic(steps),
                 id: crate::persist::Id::nil(),
+                cc: Default::default(),
             },
             mute: false,
             solo: false,
@@ -1275,6 +1283,8 @@ mod sequencer_tests {
             muted_voices: Vec::new(),
             scale: crate::music::scale::Scale::Chromatic,
             root: None,
+            swing: None,
+            clock_div: None,
         }
     }
 
@@ -1360,6 +1370,8 @@ mod sequencer_tests {
                 len: 1.0,
                 prob: 1.0,
                 ratchet: 1,
+                micro: 0,
+                cond: TrigCond::Always,
             }),
             None,
             None,
@@ -1404,6 +1416,8 @@ mod sequencer_tests {
                 len: 1.0,
                 prob: 1.0,
                 ratchet: 1,
+                micro: 0,
+                cond: TrigCond::Always,
             }),
             Some(MelodicNote {
                 semi: 5,
@@ -1412,6 +1426,8 @@ mod sequencer_tests {
                 len: 1.0,
                 prob: 1.0,
                 ratchet: 1,
+                micro: 0,
+                cond: TrigCond::Always,
             }),
             None,
             None,
@@ -1489,6 +1505,8 @@ mod sequencer_tests {
                     len: 1.0,
                     prob: 1.0,
                     ratchet: 1,
+                    micro: 0,
+                    cond: TrigCond::Always,
                 }),
                 None,
                 None,
@@ -1534,6 +1552,8 @@ mod sequencer_tests {
             len: 4.0,
             prob: 1.0,
             ratchet: 1,
+            micro: 0,
+            cond: TrigCond::Always,
         })];
         let mut seq = Sequencer::new(set_with(vec![melodic_lane(notes, true)]));
         let mut sink = RecordingSink::new();
@@ -1577,6 +1597,8 @@ mod sequencer_tests {
             vel: 100,
             prob: 1.0,
             ratchet: 1,
+            micro: 0,
+            cond: TrigCond::Always,
         });
         Lane {
             profile: T8_DRUMS,
@@ -1586,6 +1608,7 @@ mod sequencer_tests {
                 length,
                 data: PatternData::Drums(steps),
                 id: crate::persist::Id::nil(),
+                cc: Default::default(),
             },
             mute: false,
             solo: false,
@@ -1595,6 +1618,8 @@ mod sequencer_tests {
             muted_voices: Vec::new(),
             scale: crate::music::scale::Scale::Chromatic,
             root: None,
+            swing: None,
+            clock_div: None,
         }
     }
 
@@ -1683,6 +1708,8 @@ mod sequencer_tests {
                     len: 4.0,
                     prob: 1.0,
                     ratchet: 1,
+                    micro: 0,
+                    cond: TrigCond::Always,
                 }),
                 None,
                 None,
@@ -1740,6 +1767,8 @@ mod sequencer_tests {
                 len: 4.0,
                 prob: 1.0,
                 ratchet: 1,
+                micro: 0,
+                cond: TrigCond::Always,
             })],
             true,
         );
@@ -1808,6 +1837,8 @@ mod sequencer_tests {
             vel: 100,
             prob,
             ratchet,
+            micro: 0,
+            cond: TrigCond::Always,
         });
         Lane {
             profile: T8_DRUMS,
@@ -1817,6 +1848,7 @@ mod sequencer_tests {
                 length: 16,
                 data: PatternData::Drums(steps),
                 id: crate::persist::Id::nil(),
+                cc: Default::default(),
             },
             mute: false,
             solo: false,
@@ -1826,6 +1858,8 @@ mod sequencer_tests {
             muted_voices: Vec::new(),
             scale: crate::music::scale::Scale::Chromatic,
             root: None,
+            swing: None,
+            clock_div: None,
         }
     }
 
@@ -1874,6 +1908,8 @@ mod sequencer_tests {
                 vel: 100,
                 prob: 0.5,
                 ratchet: 1,
+                micro: 0,
+                cond: TrigCond::Always,
             });
         }
         let lane = Lane {
@@ -1884,6 +1920,7 @@ mod sequencer_tests {
                 length: 16,
                 data: PatternData::Drums(steps),
                 id: crate::persist::Id::nil(),
+                cc: Default::default(),
             },
             mute: false,
             solo: false,
@@ -1893,6 +1930,8 @@ mod sequencer_tests {
             muted_voices: Vec::new(),
             scale: crate::music::scale::Scale::Chromatic,
             root: None,
+            swing: None,
+            clock_div: None,
         };
         let run_once = |seed: u64| -> Vec<u64> {
             let mut seq = Sequencer::new(set_with(vec![lane.clone()]));
@@ -2067,6 +2106,8 @@ mod sequencer_tests {
                 vel: 100,
                 prob: 1.0,
                 ratchet: 1,
+                micro: 0,
+                cond: TrigCond::Always,
             });
         }
         Lane {
@@ -2077,6 +2118,7 @@ mod sequencer_tests {
                 length,
                 data: PatternData::Drums(steps),
                 id: crate::persist::Id::nil(),
+                cc: Default::default(),
             },
             mute: false,
             solo: false,
@@ -2086,6 +2128,8 @@ mod sequencer_tests {
             muted_voices: Vec::new(),
             scale: crate::music::scale::Scale::Chromatic,
             root: None,
+            swing: None,
+            clock_div: None,
         }
     }
 
@@ -2255,6 +2299,8 @@ mod sequencer_tests {
                 len: 1.0,
                 prob: 1.0,
                 ratchet: 1,
+                micro: 0,
+                cond: TrigCond::Always,
             }),
             None,
             None,
@@ -2272,6 +2318,7 @@ mod sequencer_tests {
                 length: 4,
                 data: PatternData::Melodic(steps),
                 id: crate::persist::Id::nil(),
+                cc: Default::default(),
             },
             mute: false,
             solo: false,
@@ -2281,6 +2328,8 @@ mod sequencer_tests {
             muted_voices: Vec::new(),
             scale: crate::music::scale::Scale::Chromatic,
             root: None,
+            swing: None,
+            clock_div: None,
         }
     }
 
@@ -2410,6 +2459,8 @@ mod sequencer_tests {
                 vel: 100,
                 prob: 1.0,
                 ratchet: 1,
+                micro: 0,
+                cond: TrigCond::Always,
             });
         }
         Lane {
@@ -2420,6 +2471,7 @@ mod sequencer_tests {
                 length: 4,
                 data: PatternData::Drums(steps),
                 id: crate::persist::Id::nil(),
+                cc: Default::default(),
             },
             mute: false,
             solo: false,
@@ -2429,6 +2481,8 @@ mod sequencer_tests {
             muted_voices: Vec::new(),
             scale: crate::music::scale::Scale::Chromatic,
             root: None,
+            swing: None,
+            clock_div: None,
         }
     }
 
@@ -2680,6 +2734,8 @@ mod sequencer_tests {
                     len: 4.0,
                     prob: 1.0,
                     ratchet: 1,
+                    micro: 0,
+                    cond: TrigCond::Always,
                 }),
                 None,
                 None,
@@ -2765,6 +2821,8 @@ mod sequencer_tests {
             vel: 100,
             prob: 1.0,
             ratchet: 1,
+            micro: 0,
+            cond: TrigCond::Always,
         });
         Lane {
             profile: T8_DRUMS,
@@ -2774,6 +2832,7 @@ mod sequencer_tests {
                 length: 16,
                 data: PatternData::Drums(steps),
                 id: crate::persist::Id::nil(),
+                cc: Default::default(),
             },
             mute: false,
             solo: false,
@@ -2783,6 +2842,8 @@ mod sequencer_tests {
             muted_voices: Vec::new(),
             scale: crate::music::scale::Scale::Chromatic,
             root: None,
+            swing: None,
+            clock_div: None,
         }
     }
 
@@ -3263,12 +3324,16 @@ mod sequencer_tests {
             vel: 100,
             prob: 1.0,
             ratchet: 1,
+            micro: 0,
+            cond: TrigCond::Always,
         });
         steps[0].push(DrumHit {
             note: 42,
             vel: 80,
             prob: 1.0,
             ratchet: 1,
+            micro: 0,
+            cond: TrigCond::Always,
         });
         Lane {
             profile: T8_DRUMS,
@@ -3278,6 +3343,7 @@ mod sequencer_tests {
                 length: 4,
                 data: PatternData::Drums(steps),
                 id: crate::persist::Id::nil(),
+                cc: Default::default(),
             },
             mute: false,
             solo: false,
@@ -3287,6 +3353,8 @@ mod sequencer_tests {
             muted_voices: Vec::new(),
             scale: crate::music::scale::Scale::Chromatic,
             root: None,
+            swing: None,
+            clock_div: None,
         }
     }
 
@@ -3409,6 +3477,7 @@ mod sequencer_tests {
                 length: len,
                 data: PatternData::Melodic(steps),
                 id: crate::persist::Id::nil(),
+                cc: Default::default(),
             },
             mute: false,
             solo: false,
@@ -3418,6 +3487,8 @@ mod sequencer_tests {
             muted_voices: Vec::new(),
             scale: crate::music::scale::Scale::Chromatic,
             root: None,
+            swing: None,
+            clock_div: None,
         }
     }
 
@@ -3429,6 +3500,8 @@ mod sequencer_tests {
             len: 1.0,
             prob: 1.0,
             ratchet: 1,
+            micro: 0,
+            cond: TrigCond::Always,
         }
     }
 
@@ -3657,6 +3730,8 @@ mod sequencer_tests {
             len: 1.0,
             prob: 1.0,
             ratchet: 1,
+            micro: 0,
+            cond: TrigCond::Always,
         };
         let chord = vec![plain_note(0), plain_note(4), plain_note(7)];
         let lane = poly_lane_from_steps(vec![vec![slid], chord, Vec::new(), Vec::new()]);
@@ -3731,6 +3806,8 @@ mod sequencer_tests {
             len: 0.5,
             prob: 1.0,
             ratchet: 2,
+            micro: 0,
+            cond: TrigCond::Always,
         };
         let note_b = MelodicNote {
             semi: 4,
@@ -3739,6 +3816,8 @@ mod sequencer_tests {
             len: 1.0,
             prob: 1.0,
             ratchet: 1,
+            micro: 0,
+            cond: TrigCond::Always,
         };
         let lane = poly_lane_from_steps(vec![
             vec![note_a, note_b],

@@ -9,6 +9,8 @@ use ratatui::Frame;
 use crate::app::{App, LibCol};
 use crate::devices::profiles::{drum_label, resolve_melodic_pitch, T8_DRUMS};
 use crate::pattern::library::{GenreMap, LibRole};
+#[cfg(test)]
+use crate::pattern::model::TrigCond;
 use crate::pattern::model::{Pattern, PatternData};
 use crate::ui::theme;
 
@@ -421,11 +423,14 @@ mod tests {
                     note: 36,
                     vel: 127,
                     prob: 1.0,
-                    ratchet: 1
+                    ratchet: 1,
+                    micro: 0,
+                    cond: TrigCond::Always,
                 }];
                 16
             ]),
             id: crate::persist::Id::nil(),
+            cc: Default::default(),
         };
         drums.insert("techno".to_string(), vec![pat]);
         Library {
@@ -445,6 +450,8 @@ mod tests {
                 len: 0.9,
                 prob: 1.0,
                 ratchet: 1,
+                micro: 0,
+                cond: TrigCond::Always,
             }]),
             MelodicStep::default(),
             MelodicStep::from(vec![MelodicNote {
@@ -454,6 +461,8 @@ mod tests {
                 len: 0.9,
                 prob: 1.0,
                 ratchet: 1,
+                micro: 0,
+                cond: TrigCond::Always,
             }]),
         ];
         let pat = Pattern {
@@ -462,6 +471,7 @@ mod tests {
             length: 3,
             data: PatternData::Melodic(steps),
             id: crate::persist::Id::nil(),
+            cc: Default::default(),
         };
         synth.insert("techno".to_string(), vec![pat]);
         Library {
@@ -653,10 +663,13 @@ mod tests {
                     vel: 127,
                     prob: 1.0,
                     ratchet: 1,
+                    micro: 0,
+                    cond: TrigCond::Always,
                 }];
                 16
             ]),
             id: crate::persist::Id::nil(),
+            cc: Default::default(),
         };
         let pat2 = Pattern {
             name: "Off Beat".to_string(),
@@ -664,6 +677,7 @@ mod tests {
             length: 16,
             data: PatternData::Drums(vec![Vec::new(); 16]),
             id: crate::persist::Id::nil(),
+            cc: Default::default(),
         };
         drums.insert("techno".to_string(), vec![pat1, pat2]);
         let library = Library {
@@ -721,11 +735,14 @@ mod tests {
                     note: 36,
                     vel: 100,
                     prob: 1.0,
-                    ratchet: 1
+                    ratchet: 1,
+                    micro: 0,
+                    cond: TrigCond::Always,
                 }];
                 16
             ]),
             id: crate::persist::Id::nil(),
+            cc: Default::default(),
         };
         drums.insert("techno".to_string(), vec![pat]);
         let library = Library {
@@ -761,6 +778,7 @@ mod tests {
                 length: 16,
                 data: PD::Drums(vec![Vec::new(); 16]),
                 id: crate::persist::Id::nil(),
+                cc: Default::default(),
             },
         });
 

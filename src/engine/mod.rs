@@ -10,6 +10,8 @@ pub mod transport;
 
 use crate::link::LinkClock;
 use crate::midi::ports::{connect, list_output_ports, match_port, MidiSink, NullSink};
+#[cfg(test)]
+use crate::pattern::model::TrigCond;
 use crate::pattern::model::{Lane, LaneRoute, Pattern, Set};
 use clock::ClockGen;
 use scheduler::{LaunchState, Quant, Sequencer};
@@ -1431,6 +1433,8 @@ mod tests {
             len: 4.0, // 4 steps long — much longer than our tick window
             prob: 1.0,
             ratchet: 1,
+            micro: 0,
+            cond: TrigCond::Always,
         }]);
         set.lanes[2].pattern = Pattern {
             name: "test".into(),
@@ -1438,6 +1442,7 @@ mod tests {
             length: 16,
             data: PatternData::Melodic(steps),
             id: crate::persist::Id::nil(),
+            cc: Default::default(),
         };
         set.bpm = 120.0; // step_dur = 125_000 µs
 
@@ -1622,6 +1627,8 @@ mod tests {
             vel: 100,
             prob: 1.0,
             ratchet: 1,
+            micro: 0,
+            cond: TrigCond::Always,
         });
         set.lanes[0].pattern = Pattern {
             name: "test".into(),
@@ -1629,6 +1636,7 @@ mod tests {
             length: 16,
             data: PatternData::Drums(steps),
             id: crate::persist::Id::nil(),
+            cc: Default::default(),
         };
 
         let mut link = FakeLink::new(); // link disabled
@@ -1762,6 +1770,8 @@ mod tests {
             len: 4.0,
             prob: 1.0,
             ratchet: 1,
+            micro: 0,
+            cond: TrigCond::Always,
         }]);
         set.lanes[lane].pattern = Pattern {
             name: "t".into(),
@@ -1769,6 +1779,7 @@ mod tests {
             length: 16,
             data: PatternData::Melodic(steps),
             id: crate::persist::Id::nil(),
+            cc: Default::default(),
         };
     }
 
@@ -1837,6 +1848,8 @@ mod tests {
             len: 4.0,
             prob: 1.0,
             ratchet: 1,
+            micro: 0,
+            cond: TrigCond::Always,
         }]);
         steps[4] = MelodicStep::from(vec![MelodicNote {
             semi: 2,
@@ -1845,6 +1858,8 @@ mod tests {
             len: 1.0,
             prob: 1.0,
             ratchet: 1,
+            micro: 0,
+            cond: TrigCond::Always,
         }]);
         set.lanes[2].pattern = Pattern {
             name: "t".into(),
@@ -1852,6 +1867,7 @@ mod tests {
             length: 16,
             data: PatternData::Melodic(steps),
             id: crate::persist::Id::nil(),
+            cc: Default::default(),
         };
         set.lanes[2].route = Some(route_on(3)); // start on channel 3
 
@@ -2414,6 +2430,8 @@ mod tests {
             vel: 100,
             prob: 1.0,
             ratchet: 1,
+            micro: 0,
+            cond: TrigCond::Always,
         });
         let pattern = Pattern {
             name: "q".into(),
@@ -2421,6 +2439,7 @@ mod tests {
             length: 16,
             data: PatternData::Drums(steps),
             id: crate::persist::Id::nil(),
+            cc: Default::default(),
         };
 
         let mut link = FakeLink::new(); // manual transport
@@ -2470,6 +2489,8 @@ mod tests {
             vel: 100,
             prob: 1.0,
             ratchet: 1,
+            micro: 0,
+            cond: TrigCond::Always,
         });
         let pattern = Pattern {
             name: "q".into(),
@@ -2477,6 +2498,7 @@ mod tests {
             length: 16,
             data: PatternData::Drums(steps),
             id: crate::persist::Id::nil(),
+            cc: Default::default(),
         };
 
         let mut link = FakeLink::new();
@@ -2536,6 +2558,8 @@ mod tests {
                 len: 16.0,
                 prob: 1.0,
                 ratchet: 1,
+                micro: 0,
+                cond: TrigCond::Always,
             }]);
             Pattern {
                 name: "held".into(),
@@ -2543,6 +2567,7 @@ mod tests {
                 length: 16,
                 data: PatternData::Melodic(steps),
                 id: crate::persist::Id::nil(),
+                cc: Default::default(),
             }
         };
         let state = LaunchState {

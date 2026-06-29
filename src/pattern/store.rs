@@ -4,6 +4,8 @@ use anyhow::{anyhow, Context};
 use serde::{Deserialize, Serialize};
 
 use crate::devices::profiles::profile_by_id;
+#[cfg(test)]
+use crate::pattern::model::TrigCond;
 use crate::pattern::model::{Chain, Lane, LaneRoute, Pattern, Scene, Set};
 use crate::pattern::refs::PatternRef;
 use crate::persist;
@@ -65,6 +67,12 @@ struct LaneDto {
     /// Per-lane root note override. Absent in old files → serde default `None`.
     #[serde(default)]
     root: Option<u8>,
+    /// Per-lane swing override. Absent in old files → serde default `None`.
+    #[serde(default)]
+    swing: Option<f32>,
+    /// Per-lane clock divisor override. Absent in old files → serde default `None`.
+    #[serde(default)]
+    clock_div: Option<u8>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -98,6 +106,8 @@ impl From<&Lane> for LaneDto {
             muted_voices: lane.muted_voices.clone(),
             scale: lane.scale,
             root: lane.root,
+            swing: lane.swing,
+            clock_div: lane.clock_div,
         }
     }
 }
@@ -235,6 +245,8 @@ pub fn load_set_with_report(path: &Path) -> anyhow::Result<(Set, Vec<String>)> {
             muted_voices: l.muted_voices,
             scale: l.scale,
             root: l.root,
+            swing: l.swing,
+            clock_div: l.clock_div,
         });
     }
     let mut set = Set {
@@ -809,6 +821,8 @@ mod tests {
                 vel: 200,
                 prob: 5.0,
                 ratchet: 99,
+                micro: 0,
+                cond: TrigCond::Always,
             }];
         }
         let notes = validate_and_repair(&mut set);
@@ -929,6 +943,8 @@ mod tests {
                 len: 0.5,
                 prob: 1.0,
                 ratchet: 1,
+                micro: 0,
+                cond: TrigCond::Always,
             }]);
         }
         set.lanes[0].mute = true;
@@ -1444,6 +1460,8 @@ mod tests {
                     vel: 100,
                     prob: 1.0,
                     ratchet: 1,
+                    micro: 0,
+                    cond: TrigCond::Always,
                 }],
                 vec![],
                 vec![DrumHit {
@@ -1451,10 +1469,13 @@ mod tests {
                     vel: 80,
                     prob: 0.75,
                     ratchet: 2,
+                    micro: 0,
+                    cond: TrigCond::Always,
                 }],
                 vec![],
             ]),
             id: persist::Id::nil(),
+            cc: Default::default(),
         }
     }
 

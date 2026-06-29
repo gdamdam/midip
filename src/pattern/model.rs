@@ -10,6 +10,32 @@ fn default_ratchet() -> u8 {
     1
 }
 
+/// A CC value locked to a single step. `cc` is the MIDI CC number (0–127), `val` the value (0–127).
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct CcLock {
+    pub cc: u8,
+    pub val: u8,
+}
+
+/// Trigger condition controlling whether a step fires on a given playback cycle.
+/// Default is `Always` (unconditional). Serde uses the externally-tagged representation
+/// so every variant round-trips cleanly.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type")]
+pub enum TrigCond {
+    #[default]
+    Always,
+    /// Fire on cycle `x` of every `y` cycles (1-indexed, so x=1,y=2 = every other bar).
+    Ratio {
+        x: u8,
+        y: u8,
+    },
+    Fill,
+    NotFill,
+    First,
+    NotFirst,
+}
+
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct DrumHit {
     pub note: u8,
@@ -18,6 +44,12 @@ pub struct DrumHit {
     pub prob: f32, // 0..1 trigger probability, default 1.0
     #[serde(default = "default_ratchet")]
     pub ratchet: u8, // 1..8 intra-step retriggers, default 1
+    /// Microtiming offset in ticks (-128..=127); positive = later, negative = earlier.
+    #[serde(default)]
+    pub micro: i16,
+    /// Trigger condition for this hit.
+    #[serde(default)]
+    pub cond: TrigCond,
 }
 
 /// 0..N simultaneous hits on a single step (polyphonic).
@@ -33,6 +65,12 @@ pub struct MelodicNote {
     pub prob: f32, // 0..1 trigger probability, default 1.0
     #[serde(default = "default_ratchet")]
     pub ratchet: u8, // 1..8 intra-step retriggers, default 1
+    /// Microtiming offset in ticks (-128..=127); positive = later, negative = earlier.
+    #[serde(default)]
+    pub micro: i16,
+    /// Trigger condition for this note.
+    #[serde(default)]
+    pub cond: TrigCond,
 }
 
 /// A single melodic step: zero notes (rest), one note (mono — today's behavior), or
@@ -125,6 +163,10 @@ pub struct Pattern {
     pub data: PatternData,
     #[serde(default)]
     pub id: persist::Id,
+    /// Per-step CC locks. One slot per step, kept length-synced with `length`.
+    /// Each slot holds 0..N CC locks that fire when that step triggers.
+    #[serde(default)]
+    pub cc: Vec<Vec<CcLock>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -183,6 +225,7 @@ impl Pattern {
             length,
             data: PatternData::Drums(vec![Vec::new(); length]),
             id: persist::Id::nil(),
+            cc: vec![Vec::new(); length],
         }
     }
 
@@ -194,6 +237,7 @@ impl Pattern {
             length,
             data: PatternData::Melodic(vec![MelodicStep::default(); length]),
             id: persist::Id::nil(),
+            cc: vec![Vec::new(); length],
         }
     }
 
@@ -213,6 +257,30 @@ impl Pattern {
 
     pub fn step_count(&self) -> usize {
         self.length
+    }
+
+    /// Returns the CC locks for `step`. Panics in debug if `step >= length`.
+    pub fn step_cc(&self, step: usize) -> &[CcLock] {
+        // Gracefully handle deserialized patterns whose `cc` vec wasn't length-synced
+        // (e.g. old JSON that had no `cc` field → serde default gives empty Vec).
+        self.cc.get(step).map(|v| v.as_slice()).unwrap_or(&[])
+    }
+
+    /// Replace the CC locks for `step`.
+    pub fn set_step_cc(&mut self, step: usize, locks: Vec<CcLock>) {
+        // Grow if needed (handles old-JSON deserialized patterns with empty cc vec).
+        if self.cc.len() < self.length {
+            self.cc.resize(self.length, Vec::new());
+        }
+        if step < self.cc.len() {
+            self.cc[step] = locks;
+        }
+    }
+
+    /// Sync `cc` length to `new_len` after a length change, preserving existing locks.
+    /// Call this whenever `self.length` is changed.
+    pub fn sync_cc_len(&mut self, new_len: usize) {
+        self.cc.resize(new_len, Vec::new());
     }
 }
 
@@ -234,6 +302,10 @@ pub struct Lane {
     pub scale: crate::music::scale::Scale,
     /// Per-lane root note override (MIDI 0–127). `None` → use `profile.root_note`.
     pub root: Option<u8>,
+    /// Per-lane swing amount override (0.0..=1.0). `None` → use global set swing.
+    pub swing: Option<f32>,
+    /// Per-lane clock divisor override. `None` → use default (1 step = 1 tick).
+    pub clock_div: Option<u8>,
 }
 
 impl Lane {
@@ -471,6 +543,8 @@ impl Set {
                     muted_voices: Vec::new(),
                     scale: crate::music::scale::Scale::Chromatic,
                     root: None,
+                    swing: None,
+                    clock_div: None,
                 }
             })
             .collect();
@@ -570,17 +644,22 @@ mod tests {
                         vel: 120,
                         prob: 1.0,
                         ratchet: 1,
+                        micro: 0,
+                        cond: TrigCond::Always,
                     },
                     DrumHit {
                         note: 42,
                         vel: 100,
                         prob: 1.0,
                         ratchet: 1,
+                        micro: 0,
+                        cond: TrigCond::Always,
                     },
                 ],
                 vec![],
             ]),
             id: crate::persist::Id::nil(),
+            cc: vec![Vec::new(); 2],
         };
         let json = serde_json::to_string(&p).unwrap();
         let back: Pattern = serde_json::from_str(&json).unwrap();
@@ -601,10 +680,13 @@ mod tests {
                     len: 0.5,
                     prob: 1.0,
                     ratchet: 1,
+                    micro: 0,
+                    cond: TrigCond::Always,
                 }]),
                 MelodicStep::default(),
             ]),
             id: crate::persist::Id::nil(),
+            cc: vec![Vec::new(); 2],
         };
         let json = serde_json::to_string(&p).unwrap();
         let back: Pattern = serde_json::from_str(&json).unwrap();
@@ -682,6 +764,8 @@ mod tests {
             len: 0.5,
             prob: 1.0,
             ratchet: 1,
+            micro: 0,
+            cond: TrigCond::Always,
         };
         let n2 = MelodicNote {
             semi: 7,
@@ -690,6 +774,8 @@ mod tests {
             len: 1.0,
             prob: 0.8,
             ratchet: 2,
+            micro: 0,
+            cond: TrigCond::Always,
         };
         // Adaptive on-disk shape: rest -> null, one note -> object, chord -> array.
         let rest_json = serde_json::to_string(&MelodicStep::default()).unwrap();
@@ -800,6 +886,8 @@ mod tests {
             muted_voices: Vec::new(),
             scale: crate::music::scale::Scale::Chromatic,
             root: None,
+            swing: None,
+            clock_div: None,
         };
         let r = lane.effective_route();
         assert_eq!(r.channel, profiles[0].channel);
@@ -830,6 +918,8 @@ mod tests {
             muted_voices: Vec::new(),
             scale: crate::music::scale::Scale::Chromatic,
             root: None,
+            swing: None,
+            clock_div: None,
         };
         let r = lane.effective_route();
         assert_eq!(r, explicit);
@@ -850,6 +940,8 @@ mod tests {
             muted_voices: Vec::new(),
             scale: crate::music::scale::Scale::Chromatic,
             root: None,
+            swing: None,
+            clock_div: None,
         };
         assert_eq!(lane.route_channel(), profiles[0].channel);
 
@@ -1005,6 +1097,8 @@ mod tests {
             muted_voices: Vec::new(),
             scale: crate::music::scale::Scale::Chromatic,
             root: None,
+            swing: None,
+            clock_div: None,
         };
         assert_eq!(lane.scale, crate::music::scale::Scale::Chromatic);
         assert_eq!(lane.root, None);
@@ -1029,11 +1123,142 @@ mod tests {
             muted_voices: Vec::new(),
             scale: crate::music::scale::Scale::Major,
             root: Some(50),
+            swing: None,
+            clock_div: None,
         };
         assert_eq!(
             lane.effective_root(),
             50,
             "effective_root must return the override when root is Some"
         );
+    }
+
+    // ── M8 Task 1: CcLock / TrigCond / micro+cond / cc store / lane swing+div ─
+
+    const OLD_DRUM_HIT_JSON: &str = r#"{"note":36,"vel":100,"prob":1.0,"ratchet":1}"#;
+    const OLD_MELODIC_NOTE_JSON: &str =
+        r#"{"semi":0,"vel":1.0,"slide":false,"len":1.0,"prob":1.0,"ratchet":1}"#;
+
+    fn sample_drum_hit() -> DrumHit {
+        DrumHit {
+            note: 36,
+            vel: 100,
+            prob: 1.0,
+            ratchet: 1,
+            micro: 0,
+            cond: TrigCond::Always,
+        }
+    }
+
+    fn sample_melodic_note() -> MelodicNote {
+        MelodicNote {
+            semi: 0,
+            vel: 1.0,
+            slide: false,
+            len: 1.0,
+            prob: 1.0,
+            ratchet: 1,
+            micro: 0,
+            cond: TrigCond::Always,
+        }
+    }
+
+    fn sample_pattern(length: usize) -> Pattern {
+        Pattern::empty_drums(length)
+    }
+
+    fn sample_lane() -> Lane {
+        let profiles = crate::devices::profiles::default_profiles();
+        Lane {
+            profile: profiles[0],
+            pattern: Pattern::empty_drums(16),
+            mute: false,
+            solo: false,
+            transpose: 0,
+            octave: 0,
+            route: None,
+            muted_voices: Vec::new(),
+            scale: crate::music::scale::Scale::Chromatic,
+            root: None,
+            swing: None,
+            clock_div: None,
+        }
+    }
+
+    #[test]
+    fn trigcond_default_is_always() {
+        assert_eq!(TrigCond::default(), TrigCond::Always);
+    }
+
+    #[test]
+    fn drumhit_micro_cond_roundtrip() {
+        let h = DrumHit {
+            micro: -120,
+            cond: TrigCond::Ratio { x: 1, y: 4 },
+            ..sample_drum_hit()
+        };
+        let j = serde_json::to_string(&h).unwrap();
+        let b: DrumHit = serde_json::from_str(&j).unwrap();
+        assert_eq!(b.micro, -120);
+        assert_eq!(b.cond, TrigCond::Ratio { x: 1, y: 4 });
+    }
+
+    #[test]
+    fn melodicnote_micro_cond_roundtrip() {
+        let n = MelodicNote {
+            micro: 50,
+            cond: TrigCond::Fill,
+            ..sample_melodic_note()
+        };
+        let j = serde_json::to_string(&n).unwrap();
+        let b: MelodicNote = serde_json::from_str(&j).unwrap();
+        assert_eq!(b.micro, 50);
+        assert_eq!(b.cond, TrigCond::Fill);
+    }
+
+    #[test]
+    fn old_hit_json_without_m8_fields_defaults() {
+        let b: DrumHit = serde_json::from_str(OLD_DRUM_HIT_JSON).unwrap();
+        assert_eq!(b.micro, 0);
+        assert_eq!(b.cond, TrigCond::Always);
+    }
+
+    #[test]
+    fn old_melodic_note_json_without_m8_fields_defaults() {
+        let b: MelodicNote = serde_json::from_str(OLD_MELODIC_NOTE_JSON).unwrap();
+        assert_eq!(b.micro, 0);
+        assert_eq!(b.cond, TrigCond::Always);
+    }
+
+    #[test]
+    fn pattern_cc_length_syncs_with_length() {
+        let mut p = sample_pattern(16);
+        assert_eq!(p.step_cc(3).len(), 0);
+        p.set_step_cc(3, vec![CcLock { cc: 74, val: 80 }]);
+        assert_eq!(p.step_cc(3), &[CcLock { cc: 74, val: 80 }]);
+        // Shrink: cc stays accessible for all valid indices; no panic
+        p.sync_cc_len(8);
+        p.length = 8;
+        assert!(p.step_cc(7).len() <= 1);
+        // Grow back: new slots are empty
+        p.sync_cc_len(16);
+        p.length = 16;
+        assert_eq!(p.step_cc(15).len(), 0);
+    }
+
+    #[test]
+    fn pattern_cc_empty_on_new_pattern() {
+        let p = sample_pattern(16);
+        assert_eq!(p.cc.len(), 16);
+        for i in 0..16 {
+            assert!(p.step_cc(i).is_empty());
+        }
+    }
+
+    #[test]
+    fn lane_swing_clockdiv_default_none() {
+        let l = sample_lane();
+        assert_eq!(l.swing, None);
+        assert_eq!(l.clock_div, None);
     }
 }

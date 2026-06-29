@@ -27,7 +27,7 @@ use midip::midi::ports::RecordingSink;
 use midip::pattern::library::{GenreMap, Library};
 use midip::pattern::model::{
     DrumHit, DrumStep, Lane, LaneRoute, MelodicNote, MelodicStep, Pattern, PatternData, PortRef,
-    Set,
+    Set, TrigCond,
 };
 use midip::pattern::refs::PatternRef;
 use midip::pattern::store;
@@ -61,6 +61,8 @@ fn three_lane_set() -> Set {
             vel: 100,
             prob: 1.0,
             ratchet: 1,
+            micro: 0,
+            cond: TrigCond::Always,
         });
     }
     for &s in &[2usize, 6, 10, 14] {
@@ -69,6 +71,8 @@ fn three_lane_set() -> Set {
             vel: 100,
             prob: 1.0,
             ratchet: 1,
+            micro: 0,
+            cond: TrigCond::Always,
         });
     }
     let drums = Pattern {
@@ -77,6 +81,7 @@ fn three_lane_set() -> Set {
         length: 16,
         data: PatternData::Drums(drum_steps),
         id: midip::persist::Id::nil(),
+        cc: Default::default(),
     };
 
     let bass = melodic_pattern("bass", &[(0, 0, 0.5), (8, 0, 0.5)]);
@@ -109,6 +114,8 @@ fn lane(profile: profiles::DeviceProfile, pattern: Pattern) -> Lane {
         muted_voices: Vec::new(),
         scale: midip::music::scale::Scale::Chromatic,
         root: None,
+        swing: None,
+        clock_div: None,
     }
 }
 
@@ -123,6 +130,8 @@ fn melodic_pattern(name: &str, notes: &[(usize, i8, f32)]) -> Pattern {
             len,
             prob: 1.0,
             ratchet: 1,
+            micro: 0,
+            cond: TrigCond::Always,
         }]);
     }
     Pattern {
@@ -131,6 +140,7 @@ fn melodic_pattern(name: &str, notes: &[(usize, i8, f32)]) -> Pattern {
         length: 16,
         data: PatternData::Melodic(steps),
         id: midip::persist::Id::nil(),
+        cc: Default::default(),
     }
 }
 
@@ -146,6 +156,8 @@ fn distinct_melodic(name: &str) -> Pattern {
             len: 0.5,
             prob: 1.0,
             ratchet: 1,
+            micro: 0,
+            cond: TrigCond::Always,
         }]);
     }
     Pattern {
@@ -154,6 +166,7 @@ fn distinct_melodic(name: &str) -> Pattern {
         length: 16,
         data: PatternData::Melodic(steps),
         id: midip::persist::Id::nil(),
+        cc: Default::default(),
     }
 }
 
@@ -181,6 +194,8 @@ fn test_library() -> Library {
                     vel: 90,
                     prob: 1.0,
                     ratchet: 1,
+                    micro: 0,
+                    cond: TrigCond::Always,
                 });
             }
             p
@@ -926,6 +941,8 @@ fn chord_step(notes: &[(i8, f32)]) -> MelodicStep {
                 len,
                 prob: 1.0,
                 ratchet: 1,
+                micro: 0,
+                cond: TrigCond::Always,
             })
             .collect::<Vec<_>>(),
     )
@@ -958,6 +975,7 @@ fn chord_survives_save_load_and_plays_with_clean_release() {
         length: 16,
         data: PatternData::Melodic(steps),
         id: midip::persist::Id::nil(),
+        cc: Default::default(),
     };
 
     let set = Set {
@@ -1364,6 +1382,8 @@ fn scene_capture_save_load_recall_roundtrip() {
             vel: 100,
             prob: 1.0,
             ratchet: 1,
+            micro: 0,
+            cond: TrigCond::Always,
         });
         Pattern {
             name: "scene-drums".into(),
@@ -1371,6 +1391,7 @@ fn scene_capture_save_load_recall_roundtrip() {
             length: 16,
             data: PatternData::Drums(steps),
             id: persist::mint_id(),
+            cc: Default::default(),
         }
     };
     let mut bass_pat = melodic_pattern("scene-bass", &[(0, 0, 0.5), (8, 5, 0.5)]);
@@ -1564,6 +1585,8 @@ fn chain_roundtrip_create_save_load_play_advance() {
         vel: 100,
         prob: 1.0,
         ratchet: 1,
+        micro: 0,
+        cond: TrigCond::Always,
     });
     let mut drum_pat = Pattern {
         name: "bd-pattern".into(),
@@ -1571,6 +1594,7 @@ fn chain_roundtrip_create_save_load_play_advance() {
         length: 16,
         data: PatternData::Drums(drum_steps),
         id: midip::persist::Id::nil(),
+        cc: Default::default(),
     };
     drum_pat.ensure_id();
 
@@ -1583,6 +1607,8 @@ fn chain_roundtrip_create_save_load_play_advance() {
         len: 16.0,
         prob: 1.0,
         ratchet: 1,
+        micro: 0,
+        cond: TrigCond::Always,
     }]);
     let mut syn_pat = Pattern {
         name: "held-synth".into(),
@@ -1590,6 +1616,7 @@ fn chain_roundtrip_create_save_load_play_advance() {
         length: 16,
         data: PatternData::Melodic(syn_steps),
         id: midip::persist::Id::nil(),
+        cc: Default::default(),
     };
     syn_pat.ensure_id();
 
@@ -1606,6 +1633,8 @@ fn chain_roundtrip_create_save_load_play_advance() {
             muted_voices: Vec::new(),
             scale: midip::music::scale::Scale::Chromatic,
             root: None,
+            swing: None,
+            clock_div: None,
         }
     };
 

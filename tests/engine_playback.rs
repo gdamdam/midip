@@ -6,7 +6,7 @@ use midip::link::{step_from_beat, FakeLink};
 use midip::midi::message::MidiMessage;
 use midip::midi::ports::RecordingSink;
 use midip::pattern::model::{
-    DrumHit, DrumStep, Lane, MelodicNote, MelodicStep, Pattern, PatternData, Set,
+    DrumHit, DrumStep, Lane, MelodicNote, MelodicStep, Pattern, PatternData, Set, TrigCond,
 };
 
 /// Build a deterministic 3-lane set:
@@ -23,6 +23,8 @@ fn three_lane_set() -> Set {
             vel: 100,
             prob: 1.0,
             ratchet: 1,
+            micro: 0,
+            cond: TrigCond::Always,
         }];
     }
     let drums = Pattern {
@@ -31,6 +33,7 @@ fn three_lane_set() -> Set {
         length: 16,
         data: PatternData::Drums(drum_steps),
         id: midip::persist::Id::nil(),
+        cc: Default::default(),
     };
 
     let mut bass_steps: Vec<MelodicStep> = vec![MelodicStep::default(); 16];
@@ -41,6 +44,8 @@ fn three_lane_set() -> Set {
         len: 0.5,
         prob: 1.0,
         ratchet: 1,
+        micro: 0,
+        cond: TrigCond::Always,
     }]);
     bass_steps[8] = MelodicStep::from(vec![MelodicNote {
         semi: 0,
@@ -49,6 +54,8 @@ fn three_lane_set() -> Set {
         len: 0.5,
         prob: 1.0,
         ratchet: 1,
+        micro: 0,
+        cond: TrigCond::Always,
     }]);
     let bass = Pattern {
         name: "bass".into(),
@@ -56,6 +63,7 @@ fn three_lane_set() -> Set {
         length: 16,
         data: PatternData::Melodic(bass_steps),
         id: midip::persist::Id::nil(),
+        cc: Default::default(),
     };
 
     let mut synth_steps: Vec<MelodicStep> = vec![MelodicStep::default(); 16];
@@ -66,6 +74,8 @@ fn three_lane_set() -> Set {
         len: 0.9,
         prob: 1.0,
         ratchet: 1,
+        micro: 0,
+        cond: TrigCond::Always,
     }]);
     let synth = Pattern {
         name: "synth".into(),
@@ -73,6 +83,7 @@ fn three_lane_set() -> Set {
         length: 16,
         data: PatternData::Melodic(synth_steps),
         id: midip::persist::Id::nil(),
+        cc: Default::default(),
     };
 
     let lanes = vec![
@@ -87,6 +98,8 @@ fn three_lane_set() -> Set {
             muted_voices: Vec::new(),
             scale: midip::music::scale::Scale::Chromatic,
             root: None,
+            swing: None,
+            clock_div: None,
         },
         Lane {
             profile: profs[1],
@@ -99,6 +112,8 @@ fn three_lane_set() -> Set {
             muted_voices: Vec::new(),
             scale: midip::music::scale::Scale::Chromatic,
             root: None,
+            swing: None,
+            clock_div: None,
         },
         Lane {
             profile: profs[2],
@@ -111,6 +126,8 @@ fn three_lane_set() -> Set {
             muted_voices: Vec::new(),
             scale: midip::music::scale::Scale::Chromatic,
             root: None,
+            swing: None,
+            clock_div: None,
         },
     ];
     Set {
@@ -384,6 +401,8 @@ fn undo_synclanes_updates_engine_pattern_without_resetting_playhead() {
             len: 0.5,
             prob: 1.0,
             ratchet: 1,
+            micro: 0,
+            cond: TrigCond::Always,
         }]);
     }
 
