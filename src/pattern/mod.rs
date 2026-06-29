@@ -1,3 +1,4 @@
+pub mod chain;
 pub mod euclid;
 pub mod library;
 pub mod model;
