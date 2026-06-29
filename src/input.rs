@@ -96,7 +96,19 @@ pub fn key_to_action(key: KeyEvent, mode: Mode, kind: LaneKind) -> Action {
                 _ => Action::None,
             };
         }
-        Mode::Help => return Action::Help,
+        Mode::Help => {
+            return match key.code {
+                KeyCode::Char('?') | KeyCode::Char('q') | KeyCode::Esc => Action::Help,
+                KeyCode::Up => Action::HelpScroll(-1),
+                KeyCode::Down => Action::HelpScroll(1),
+                KeyCode::PageUp => Action::HelpScroll(-10),
+                KeyCode::PageDown => Action::HelpScroll(10),
+                KeyCode::Home => Action::HelpScroll(i32::MIN / 2),
+                KeyCode::End => Action::HelpScroll(i32::MAX / 2),
+                // space and ! are already handled before the mode branch
+                _ => Action::None,
+            };
+        }
         Mode::RouteEditor => {
             return match key.code {
                 KeyCode::Esc => Action::CloseRouteEditor,
@@ -1090,5 +1102,55 @@ mod tests {
             assert_ne!(action, Action::None, "'L' must not be unbound in Edit mode");
             assert_eq!(action, Action::DoubleLength);
         }
+    }
+
+    // ── Help mode scroll keys ─────────────────────────────────────────────
+
+    #[test]
+    fn help_mode_down_scrolls() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Down), Mode::Help, LaneKind::Drums),
+            Action::HelpScroll(1)
+        );
+    }
+
+    #[test]
+    fn help_mode_up_scrolls() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Up), Mode::Help, LaneKind::Drums),
+            Action::HelpScroll(-1)
+        );
+    }
+
+    #[test]
+    fn help_mode_question_closes() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('?')), Mode::Help, LaneKind::Drums),
+            Action::Help
+        );
+    }
+
+    #[test]
+    fn help_mode_esc_closes() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Esc), Mode::Help, LaneKind::Drums),
+            Action::Help
+        );
+    }
+
+    #[test]
+    fn help_mode_space_still_plays() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Char(' ')), Mode::Help, LaneKind::Drums),
+            Action::TogglePlay
+        );
+    }
+
+    #[test]
+    fn help_mode_bang_still_panics() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('!')), Mode::Help, LaneKind::Drums),
+            Action::Panic
+        );
     }
 }

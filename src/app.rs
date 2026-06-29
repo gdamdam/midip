@@ -188,6 +188,8 @@ pub enum Action {
     /// existing content cyclically (e.g. 16→32: steps 17–32 mirror 1–16).
     /// Capped at 64. No-op with status toast when already at 64.
     DoubleLength,
+    /// Scroll the help overlay by `delta` lines (positive=down, negative=up).
+    HelpScroll(i32),
     None,
 }
 
@@ -285,6 +287,7 @@ pub struct App {
     /// Cached user patterns loaded from the user patterns dir; injected into the library
     /// as a "User" genre when the library browser opens.
     pub user_patterns: Vec<crate::pattern::model::Pattern>,
+    pub help_scroll: u16,
 }
 
 /// Default melodic velocity multiplier when placing a note (1.0 -> MIDI 100).
@@ -344,6 +347,7 @@ impl App {
             queued: vec![None; n],
             current_set_path: None,
             user_patterns: Vec::new(),
+            help_scroll: 0,
         }
     }
 
@@ -858,11 +862,12 @@ impl App {
                 }
             }
             Action::Help => {
-                self.mode = if self.mode == Mode::Help {
-                    Mode::Edit
+                if self.mode == Mode::Help {
+                    self.mode = Mode::Edit;
                 } else {
-                    Mode::Help
-                };
+                    self.help_scroll = 0;
+                    self.mode = Mode::Help;
+                }
             }
             Action::OpenRouteEditor => {
                 self.route_editor_lane = self.focus;
@@ -1331,6 +1336,13 @@ impl App {
                         cmds.push(self.load_focused());
                     }
                     Err(e) => self.set_status(format!("Load failed: {}", e)),
+                }
+            }
+            Action::HelpScroll(delta) => {
+                if self.mode == Mode::Help {
+                    let d = self.help_scroll as i32 + delta;
+                    self.help_scroll = d.max(0) as u16;
+                    // upper bound is clamped at render time
                 }
             }
             Action::None => {}

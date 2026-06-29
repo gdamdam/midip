@@ -117,7 +117,7 @@ pub fn render(f: &mut Frame, app: &App) {
 
     match &app.mode {
         Mode::Library => library::render_library(f, centered(area, 90, 70), app),
-        Mode::Help => help::render_help(f, centered(area, 60, 70)),
+        Mode::Help => help::render_help(f, centered(area, 60, 70), app.help_scroll),
         Mode::SetBrowser => library::render_set_browser(f, centered(area, 60, 70), app),
         Mode::RouteEditor => route_editor::render_route_editor(f, centered(area, 80, 70), app),
         Mode::RecoveryPrompt => recovery::render_recovery_prompt(f, centered(area, 70, 60)),
