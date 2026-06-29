@@ -9,8 +9,11 @@ pub mod clock_in;
 pub mod scheduler;
 pub mod transport;
 
+use crate::engine::clock_in::ClockInMsg;
 use crate::link::LinkClock;
-use crate::midi::ports::{connect, list_output_ports, match_port, MidiSink, NullSink};
+use crate::midi::ports::{
+    connect, connect_clock_in, list_output_ports, match_port, MidiSink, MidirClockIn, NullSink,
+};
 #[cfg(test)]
 use crate::pattern::model::TrigCond;
 use crate::pattern::model::{Lane, LaneRoute, Pattern, Set};
@@ -854,6 +857,73 @@ fn spawn_watcher(
     (handle, update_rx, request_tx)
 }
 
+// ---------------------------------------------------------------------------
+// MIDI clock-input watcher
+// ---------------------------------------------------------------------------
+
+/// Commands sent from the engine to the clock-input watcher.
+enum ClockInCmd {
+    /// (Re)connect to the given port match string, or disconnect when `None`.
+    SetPort(Option<String>),
+    /// Shut down the watcher thread.
+    Quit,
+}
+
+/// Thread body for the clock-input watcher.
+///
+/// Owns the `MidirClockIn` connection. When `SetPort(Some(name))` arrives it
+/// closes any existing connection and opens a new one; `SetPort(None)` closes
+/// without reopening; `Quit` terminates. The callback of the open connection
+/// forwards `ClockInMsg` values over `msg_tx` to the engine.
+///
+/// All MIDI input enumeration (`list_input_ports`) happens here — NEVER in the
+/// timing loop.
+fn run_clock_in_watcher(
+    initial_port: Option<String>,
+    msg_tx: crossbeam_channel::Sender<ClockInMsg>,
+    cmds: crossbeam_channel::Receiver<ClockInCmd>,
+) {
+    // Attempt an initial connection if a port was specified.
+    let mut _conn: Option<MidirClockIn> = initial_port
+        .as_deref()
+        .and_then(|name| connect_clock_in(name, msg_tx.clone()));
+
+    for cmd in cmds {
+        match cmd {
+            ClockInCmd::SetPort(port_name) => {
+                // Drop the old connection first (closing the port), then open the new one.
+                _conn = None;
+                _conn = port_name
+                    .as_deref()
+                    .and_then(|name| connect_clock_in(name, msg_tx.clone()));
+            }
+            ClockInCmd::Quit => break,
+        }
+    }
+    // `_conn` drops here, closing any open input port.
+}
+
+/// Spawn the clock-input watcher thread.
+///
+/// Returns `(JoinHandle, Sender<ClockInCmd>, Receiver<ClockInMsg>)`.
+/// The engine holds the `Sender` to send `SetPort`/`Quit` commands and holds the
+/// `Receiver` to drain `ClockInMsg` values from the timing loop (T4 will act on them;
+/// for now they are available but not yet consumed by the engine logic).
+fn spawn_clock_in_watcher(
+    initial_port: Option<String>,
+) -> (
+    std::thread::JoinHandle<()>,
+    crossbeam_channel::Sender<ClockInCmd>,
+    crossbeam_channel::Receiver<ClockInMsg>,
+) {
+    let (msg_tx, msg_rx) = crossbeam_channel::unbounded::<ClockInMsg>();
+    let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded::<ClockInCmd>();
+    let handle = std::thread::spawn(move || run_clock_in_watcher(initial_port, msg_tx, cmd_rx));
+    (handle, cmd_tx, msg_rx)
+}
+
+// ---------------------------------------------------------------------------
+
 /// Spawn the real engine on its own thread, driven by a monotonic clock. NOT unit-tested
 /// (non-deterministic timing); shares `step_engine` with the headless driver.
 ///
@@ -893,6 +963,15 @@ pub fn spawn_engine(set: Set, mut link: Box<dyn LinkClock>) -> EngineHandle {
         let mut channel_to_port = plan.channel_to_port;
         let mut clock_ports = plan.clock_ports;
         let mut lane_to_port = plan.lane_to_port;
+
+        // Extract the initial clock-input port key BEFORE `set` is moved into EngineState.
+        let initial_clock_in_key: Option<String> = set.clock_in_port.as_ref().map(|p| {
+            if p.stable_key.is_empty() {
+                p.name.clone()
+            } else {
+                p.stable_key.clone()
+            }
+        });
 
         let mut st = EngineState::new(set);
         let mut pending: Vec<(u64, UiCommand)> = Vec::new();
@@ -935,6 +1014,18 @@ pub fn spawn_engine(set: Set, mut link: Box<dyn LinkClock>) -> EngineHandle {
         let (watcher, mut update_rx, mut request_tx) = spawn_watcher(port_keys.clone());
         let mut watcher = Some(watcher);
 
+        // Spawn the clock-input watcher: opens a MidiInput connection to clock_in_port
+        // (when set) and forwards ClockInMsg values over `clock_in_rx`. The engine loop
+        // can non-blockingly drain `clock_in_rx`; T4 will act on those messages.
+        // Absent/None port → no connection, no panic (watcher starts idle).
+        // `_clock_in_rx` is intentionally unused until T4 wires up engine consumption.
+        // The receiver is held here so the channel stays alive and the watcher can send.
+        let (ci_watcher, ci_cmd_tx, _clock_in_rx) =
+            spawn_clock_in_watcher(initial_clock_in_key.clone());
+        let mut ci_watcher = Some(ci_watcher);
+        // Tracks the currently connected clock-in port key so SetSet reconnects only on change.
+        let mut current_clock_in_key: Option<String> = initial_clock_in_key;
+
         // Emit initial (all-disconnected) per-lane DeviceStatus before the first tick;
         // the watcher's first scan (immediate, no initial sleep) flips present ports shortly.
         emit_lane_status(&port_sinks, &lane_to_port, &mut events);
@@ -942,6 +1033,10 @@ pub fn spawn_engine(set: Set, mut link: Box<dyn LinkClock>) -> EngineHandle {
             if evt_tx.send(ev).is_err() {
                 let _ = request_tx.send(PortRequest::Quit);
                 if let Some(w) = watcher.take() {
+                    let _ = w.join();
+                }
+                let _ = ci_cmd_tx.send(ClockInCmd::Quit);
+                if let Some(w) = ci_watcher.take() {
                     let _ = w.join();
                 }
                 return;
@@ -1072,15 +1167,33 @@ pub fn spawn_engine(set: Set, mut link: Box<dyn LinkClock>) -> EngineHandle {
             }
 
             // Drain command channel into the pending queue (timestamped at `now`).
+            // Intercept SetSet to update the clock-in watcher when clock_in_port changes.
             while let Ok(cmd) = cmd_rx.try_recv() {
+                if let UiCommand::SetSet(ref set) = cmd {
+                    let new_key: Option<String> = set.clock_in_port.as_ref().map(|p| {
+                        if p.stable_key.is_empty() {
+                            p.name.clone()
+                        } else {
+                            p.stable_key.clone()
+                        }
+                    });
+                    if new_key != current_clock_in_key {
+                        current_clock_in_key = new_key.clone();
+                        let _ = ci_cmd_tx.send(ClockInCmd::SetPort(new_key));
+                    }
+                }
                 pending.push((now, cmd));
             }
 
             // Forward any events to the UI.
             if flush_events!() || quit {
-                // Engine stopping (Quit or UI gone): shut the watcher down; don't leak it.
+                // Engine stopping (Quit or UI gone): shut both watchers down; don't leak them.
                 let _ = request_tx.send(PortRequest::Quit);
                 if let Some(w) = watcher.take() {
+                    let _ = w.join();
+                }
+                let _ = ci_cmd_tx.send(ClockInCmd::Quit);
+                if let Some(w) = ci_watcher.take() {
                     let _ = w.join();
                 }
                 return;
@@ -1164,6 +1277,10 @@ pub fn spawn_engine(set: Set, mut link: Box<dyn LinkClock>) -> EngineHandle {
                     if flush_events!() {
                         let _ = request_tx.send(PortRequest::Quit);
                         if let Some(w) = watcher.take() {
+                            let _ = w.join();
+                        }
+                        let _ = ci_cmd_tx.send(ClockInCmd::Quit);
+                        if let Some(w) = ci_watcher.take() {
                             let _ = w.join();
                         }
                         return;
