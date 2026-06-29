@@ -233,6 +233,12 @@ pub fn key_to_action(key: KeyEvent, mode: Mode, kind: LaneKind) -> Action {
                     // 'i' was unbound; chosen for "in-sync" — re-sync the focused lane's
                     // phase at the next bar/beat without changing its pattern.
                     'i' => return Action::RestartLane,
+                    // 'f' was unbound in Edit; chosen for "fill" — toggle a temporary
+                    // deterministic fill on the focused lane (non-destructive, latched).
+                    'f' => return Action::ToggleFill,
+                    // 'F' was unbound in Edit; chosen for "fill commit" — commit the
+                    // active fill, making it permanent and undoable via snapshot.
+                    'F' => return Action::CommitTransform,
                     _ => {}
                 }
 
@@ -1363,5 +1369,55 @@ mod tests {
             Action::Panic,
             "! must remain Panic in CrateView mode"
         );
+    }
+
+    // ── M4b Task 3: fill keys ────────────────────────────────────────────────
+
+    /// 'f' was previously unbound (Action::None) in Edit mode; now ToggleFill.
+    #[test]
+    fn f_key_maps_to_toggle_fill_in_edit_mode() {
+        for kind in [LaneKind::Drums, LaneKind::Melodic] {
+            assert_eq!(
+                key_to_action(k(KeyCode::Char('f')), Mode::Edit, kind),
+                Action::ToggleFill,
+                "'f' in Edit mode must be ToggleFill (was unbound before M4b-T3)"
+            );
+        }
+    }
+
+    /// 'f' was previously Action::None in Edit mode — documents the pre-binding state.
+    #[test]
+    fn f_was_unbound_before_toggle_fill() {
+        for kind in [LaneKind::Drums, LaneKind::Melodic] {
+            assert_ne!(
+                key_to_action(k(KeyCode::Char('f')), Mode::Edit, kind),
+                Action::None,
+                "'f' must not be unbound in Edit mode"
+            );
+        }
+    }
+
+    /// 'F' was previously unbound (Action::None) in Edit mode; now CommitTransform.
+    #[test]
+    fn shift_f_key_maps_to_commit_transform_in_edit_mode() {
+        for kind in [LaneKind::Drums, LaneKind::Melodic] {
+            assert_eq!(
+                key_to_action(k(KeyCode::Char('F')), Mode::Edit, kind),
+                Action::CommitTransform,
+                "'F' in Edit mode must be CommitTransform (was unbound before M4b-T3)"
+            );
+        }
+    }
+
+    /// 'F' was previously Action::None in Edit mode — documents the pre-binding state.
+    #[test]
+    fn shift_f_was_unbound_before_commit_transform() {
+        for kind in [LaneKind::Drums, LaneKind::Melodic] {
+            assert_ne!(
+                key_to_action(k(KeyCode::Char('F')), Mode::Edit, kind),
+                Action::None,
+                "'F' must not be unbound in Edit mode"
+            );
+        }
     }
 }

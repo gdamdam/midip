@@ -140,6 +140,20 @@ fn lane_line(idx: usize, app: &App) -> Line<'static> {
         ));
     }
 
+    // FILL indicator: shown when a temporary fill is active on this lane.
+    // Magenta/bold so it reads clearly as a live, non-committed transformation.
+    let has_fill = app
+        .temp_transform
+        .as_ref()
+        .map(|tt| tt.lane == idx)
+        .unwrap_or(false);
+    if has_fill {
+        let fill_style = Style::default()
+            .fg(Color::Rgb(0xFF, 0x44, 0xCC))
+            .add_modifier(Modifier::BOLD);
+        spans.push(Span::styled("  FILL", fill_style));
+    }
+
     Line::from(spans)
 }
 
@@ -463,5 +477,49 @@ mod tests {
         let colored =
             (area.left()..area.right()).any(|x| buf[(x, bass_y)].style().fg == Some(want));
         assert!(colored, "bass row should use the t8-bass lane color");
+    }
+
+    // --- M4b Task 3: FILL indicator -----------------------------------------
+
+    #[test]
+    fn fill_indicator_shown_when_temp_transform_active_on_lane() {
+        use crate::app::TempTransform;
+        use crate::pattern::model::{Pattern, PatternData};
+
+        let mut app = make_app();
+        // Inject an active temp_transform on lane 0.
+        app.temp_transform = Some(TempTransform {
+            lane: 0,
+            original: Pattern {
+                name: "orig".into(),
+                desc: String::new(),
+                length: 16,
+                data: PatternData::Drums(vec![Vec::new(); 16]),
+                id: crate::persist::Id::nil(),
+            },
+        });
+
+        let (term, area) = render(&app, 100, 5);
+        let buf = term.backend().buffer();
+        let rows = all_rows(buf, area);
+        let drum_row = rows.iter().find(|r| r.contains("DRUM")).expect("DRUM row");
+        assert!(
+            drum_row.contains("FILL"),
+            "lane with active temp_transform must show FILL indicator: {drum_row:?}"
+        );
+    }
+
+    #[test]
+    fn fill_indicator_absent_when_no_temp_transform() {
+        let app = make_app();
+        assert!(app.temp_transform.is_none());
+        let (term, area) = render(&app, 100, 5);
+        let buf = term.backend().buffer();
+        let rows = all_rows(buf, area);
+        let whole: String = rows.join("");
+        assert!(
+            !whole.contains("FILL"),
+            "no FILL indicator should appear when temp_transform is None: {whole:?}"
+        );
     }
 }

@@ -79,6 +79,8 @@ fn right_column_lines() -> Vec<Line<'static>> {
         row("[b]  launch quant: next bar / next beat"),
         row("[C]  cancel queued launch on focused lane"),
         row("[i]  restart lane phase at next bar/beat (re-sync)"),
+        row("[f]  toggle fill on focused lane (non-destructive, latched)"),
+        row("[F]  commit fill — make it permanent (undoable)"),
         blank(),
         // ── Library  [l] ──────────────────────────────────────────────
         header("Library  [l] to open"),
