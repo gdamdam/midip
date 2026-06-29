@@ -560,6 +560,9 @@ fn step_engine(
                 // Release all sounding notes via the existing stop path (M1 note-safety).
                 st.seq.stop(now, sink);
                 events.push(EngineEvent::Stopped);
+                // Clear the lock so the loss-timeout guard does not fire spuriously after a
+                // clean external Stop — a graceful Stop is not a clock loss.
+                st.clock_in_locked = false;
             }
             ClockInMsg::SongPosition(pos) => {
                 // SPP: parse + STORE only. DO NOT reposition (deferred per spec).
@@ -3453,6 +3456,56 @@ mod tests {
             "loss timeout must release all notes; leftover {hung:?}; events {:?}",
             sink.events
         );
+    }
+
+    /// A clean external MIDI Stop must NOT trigger the loss-timeout path afterwards.
+    /// Sequence: SetClockInPort → Start → 6 Ticks (lock acquired) → Stop → silence for >500 ms.
+    /// Expected: NO spurious ClockInStatus{locked:false} emitted after the Stop.
+    #[test]
+    fn clock_in_clean_stop_no_spurious_loss_event() {
+        let set = clock_in_drum_set(120.0);
+        let mut link = FakeLink::new();
+        let mut sink = RecordingSink::new();
+
+        // Build clock-in stream: Start, 6 ticks to acquire lock, then Stop. After Stop: silence.
+        let mut clock_in = vec![(0, ClockInMsg::Start)];
+        let mut t = 10_000u64;
+        for _ in 0..6 {
+            clock_in.push((t, ClockInMsg::Tick));
+            t += 20_000;
+        }
+        // Stop arrives shortly after last tick (~130 000 µs). Silence follows for >500 ms.
+        let stop_at = t + 5_000;
+        clock_in.push((stop_at, ClockInMsg::Stop));
+
+        // Run well past the loss timeout (500 000 µs) with no further ticks.
+        let evs = run_engine_headless_clocked(
+            set,
+            &mut link,
+            &mut sink,
+            vec![(0, UiCommand::SetClockInPort(Some(test_port_ref())))],
+            clock_in,
+            2_000_000,
+            1_000,
+        );
+
+        // The Stop itself may emit Stopped; what must NOT appear is a post-timeout
+        // ClockInStatus{locked:false} (spurious loss event).
+        //
+        // Strategy: collect every ClockInStatus{locked:false} that appears AFTER the Stop
+        // timestamp. A spurious loss would show up here; a clean stop must produce none.
+        let stop_ts_approx = stop_at; // events are ordered; find index of Stopped first.
+                                      // We only care that no ClockInStatus{locked:false} appears more than once
+                                      // (the loss guard would emit it; a normal Stop does not emit it at all).
+        let loss_events: Vec<_> = evs
+            .iter()
+            .filter(|e| matches!(e, EngineEvent::ClockInStatus { locked: false, .. }))
+            .collect();
+        assert!(
+            loss_events.is_empty(),
+            "clean external Stop must not emit ClockInStatus{{locked:false}}; got {loss_events:?}\nall events: {evs:?}"
+        );
+        let _ = stop_ts_approx; // suppress unused warning
     }
 
     /// Switching INTO ClockIn disables Link (3-way exclusivity); switching OUT (clear port)
