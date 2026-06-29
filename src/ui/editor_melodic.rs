@@ -68,8 +68,18 @@ pub fn render_melodic_editor(f: &mut Frame, area: Rect, app: &App) {
         String::new()
     };
 
+    let lane_extras = {
+        let mut extras = String::new();
+        if let Some(sw) = lane.swing {
+            extras.push_str(&format!(" sw{:.2}", sw));
+        }
+        if let Some(d) = lane.clock_div {
+            extras.push_str(&format!(" /{}", d));
+        }
+        extras
+    };
     let title = format!(
-        " EDIT · {} · \"{}\" · {} steps · ch{} · root {} · {} · Oct {:+} · Transp {:+}{} ",
+        " EDIT · {} · \"{}\" · {} steps · ch{} · root {} · {} · Oct {:+} · Transp {:+}{}{} ",
         lane.profile.label,
         pattern.name,
         len,
@@ -78,6 +88,7 @@ pub fn render_melodic_editor(f: &mut Frame, area: Rect, app: &App) {
         lane.scale.name(),
         lane.octave,
         lane.transpose,
+        lane_extras,
         scroll_indicator,
     );
 
@@ -211,8 +222,28 @@ pub fn render_melodic_editor(f: &mut Frame, area: Rect, app: &App) {
             // Show the resolved absolute pitch name and its scale degree.
             let pitch_name = scale_note_name(pitch);
             let degree = degree_label(pitch, root, lane.scale);
+            let micro_str = if note.micro != 0 {
+                format!(" · µ{:+}", note.micro)
+            } else {
+                String::new()
+            };
+            let cond_str = if note.cond != crate::pattern::model::TrigCond::Always {
+                format!(" · cond:{}", crate::app::format_cond(&note.cond))
+            } else {
+                String::new()
+            };
+            let cc_locks = pattern.step_cc(app.cur_col);
+            let cc_str = if !cc_locks.is_empty() {
+                let cc_list: Vec<String> = cc_locks
+                    .iter()
+                    .map(|c| format!("cc{}={}", c.cc, c.val))
+                    .collect();
+                format!(" · {}", cc_list.join(","))
+            } else {
+                String::new()
+            };
             format!(
-                "Step {} · {} ({}) · vel {:.2} · len {:.1}{} · Probability {}% [p/P] · Ratchet x{} [y/Y]",
+                "Step {} · {} ({}) · vel {:.2} · len {:.1}{} · Probability {}% [p/P] · Ratchet x{} [y/Y]{}{}{}",
                 app.cur_col + 1,
                 pitch_name,
                 degree,
@@ -220,7 +251,10 @@ pub fn render_melodic_editor(f: &mut Frame, area: Rect, app: &App) {
                 note.len,
                 slide_indicator,
                 (note.prob * 100.0).round() as i32,
-                note.ratchet
+                note.ratchet,
+                micro_str,
+                cond_str,
+                cc_str,
             )
         }
         n => {

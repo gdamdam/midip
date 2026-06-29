@@ -68,12 +68,23 @@ pub fn render_drum_editor(f: &mut Frame, area: Rect, app: &App) {
         String::new()
     };
 
+    let lane_extras = {
+        let mut extras = String::new();
+        if let Some(sw) = lane.swing {
+            extras.push_str(&format!(" sw{:.2}", sw));
+        }
+        if let Some(d) = lane.clock_div {
+            extras.push_str(&format!(" /{}", d));
+        }
+        extras
+    };
     let title = format!(
-        " EDIT · {} · \"{}\" · {} steps · ch{}{} ",
+        " EDIT · {} · \"{}\" · {} steps · ch{}{}{} ",
         lane.profile.label,
         pattern.name,
         len,
         lane.profile.channel + 1,
+        lane_extras,
         scroll_indicator,
     );
 
@@ -168,14 +179,39 @@ pub fn render_drum_editor(f: &mut Frame, area: Rect, app: &App) {
     // Feature #4: cursor detail line with exact format.
     let focused_voice_label = voices.get(app.cur_row).map(|v| v.label).unwrap_or("?");
     let detail = match hit_at(steps, app.cur_col, focused_note) {
-        Some(h) => format!(
-            "Step {} · {} · Velocity {} [-/+] · Probability {}% [p/P] · Ratchet x{} [y/Y]",
-            app.cur_col + 1,
-            drum_label(&lane.profile, focused_note),
-            h.vel,
-            (h.prob * 100.0).round() as i32,
-            h.ratchet
-        ),
+        Some(h) => {
+            let micro_str = if h.micro != 0 {
+                format!(" · µ{:+}", h.micro)
+            } else {
+                String::new()
+            };
+            let cond_str = if h.cond != crate::pattern::model::TrigCond::Always {
+                format!(" · cond:{}", crate::app::format_cond(&h.cond))
+            } else {
+                String::new()
+            };
+            let cc_locks = pattern.step_cc(app.cur_col);
+            let cc_str = if !cc_locks.is_empty() {
+                let cc_list: Vec<String> = cc_locks
+                    .iter()
+                    .map(|c| format!("cc{}={}", c.cc, c.val))
+                    .collect();
+                format!(" · {}", cc_list.join(","))
+            } else {
+                String::new()
+            };
+            format!(
+                "Step {} · {} · Velocity {} [-/+] · Probability {}% [p/P] · Ratchet x{} [y/Y]{}{}{}",
+                app.cur_col + 1,
+                drum_label(&lane.profile, focused_note),
+                h.vel,
+                (h.prob * 100.0).round() as i32,
+                h.ratchet,
+                micro_str,
+                cond_str,
+                cc_str,
+            )
+        }
         None => format!(
             "Step {} · {} · (empty)",
             app.cur_col + 1,

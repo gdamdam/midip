@@ -453,6 +453,23 @@ pub enum Action {
     /// Cancel: restore the original pattern, clear `temp_transform`, close `Mode::Generative`.
     /// Zero undo entries added.
     GenCancel,
+    // ── M8 Task 8: per-step CC/micro/cond + per-lane swing/div ───────────────
+    /// Nudge microtiming of cursor cell by d ticks, clamped to −128..=127. Snapshot + dirty.
+    AdjustMicro(i8),
+    /// Cycle trig condition of cursor cell through preset sequence. Snapshot + dirty.
+    CycleCond,
+    /// Add a CC lock (cc=0,val=0) to the focused step, or increment the last lock's cc by 1.
+    CcAdd,
+    /// Remove the last CC lock from the focused step's CC list.
+    CcRemove,
+    /// Adjust the val of the last CC lock on the focused step by d, clamped 0..=127.
+    AdjustCcVal(i8),
+    /// Adjust the focused lane's swing override by d*0.05. None→global first. Clamped 0..=1.
+    AdjustLaneSwing(i8),
+    /// Clear the focused lane's swing override (set to None = use global).
+    ClearLaneSwing,
+    /// Cycle the focused lane's clock_div: None→1→2→3→4→None.
+    CycleClockDiv,
     None,
 }
 
@@ -478,6 +495,35 @@ pub const STATUS_TTL_FRAMES: u16 = 188;
 /// At ~16 ms/frame this is 125 × 16 ms ≈ 2 000 ms (2 s). Minimum meaningful value
 /// is ~30 (avoid thrashing); we pick 125 for a comfortable 2-second debounce.
 pub const AUTOSAVE_INTERVAL_FRAMES: u16 = 125;
+
+/// Format a `TrigCond` as a short label for display in editor detail lines.
+pub(crate) fn format_cond(cond: &crate::pattern::model::TrigCond) -> String {
+    use crate::pattern::model::TrigCond;
+    match cond {
+        TrigCond::Always => "ALW".to_string(),
+        TrigCond::Ratio { x, y } => format!("{}:{}", x, y),
+        TrigCond::Fill => "FILL".to_string(),
+        TrigCond::NotFill => "!FILL".to_string(),
+        TrigCond::First => "1st".to_string(),
+        TrigCond::NotFirst => "!1st".to_string(),
+    }
+}
+
+/// Advance a `TrigCond` to the next preset in the cycle:
+/// Always → 1:2 → 1:3 → 1:4 → Fill → NotFill → First → NotFirst → Always
+fn cond_cycle_next(cond: &crate::pattern::model::TrigCond) -> crate::pattern::model::TrigCond {
+    use crate::pattern::model::TrigCond;
+    match cond {
+        TrigCond::Always => TrigCond::Ratio { x: 1, y: 2 },
+        TrigCond::Ratio { x: 1, y: 2 } => TrigCond::Ratio { x: 1, y: 3 },
+        TrigCond::Ratio { x: 1, y: 3 } => TrigCond::Ratio { x: 1, y: 4 },
+        TrigCond::Ratio { .. } => TrigCond::Fill,
+        TrigCond::Fill => TrigCond::NotFill,
+        TrigCond::NotFill => TrigCond::First,
+        TrigCond::First => TrigCond::NotFirst,
+        TrigCond::NotFirst => TrigCond::Always,
+    }
+}
 
 pub struct App {
     pub set: Set,
@@ -1536,6 +1582,75 @@ impl App {
                     }
                     cmds.push(self.load_focused());
                 }
+            }
+            Action::AdjustMicro(d) => {
+                if self.adjust_micro(d) {
+                    let m = self.cursor_micro().unwrap_or(0);
+                    self.set_status(format!("Micro {:+}", m));
+                    cmds.push(self.load_focused());
+                }
+            }
+            Action::CycleCond => {
+                if self.cycle_cond() {
+                    let label = self.cursor_cond_label().unwrap_or_default();
+                    self.set_status(format!("Cond: {}", label));
+                    cmds.push(self.load_focused());
+                }
+            }
+            Action::CcAdd => {
+                if self.add_step_cc() {
+                    let n = self.set.lanes[self.focus]
+                        .pattern
+                        .step_cc(self.cur_col)
+                        .len();
+                    self.set_status(format!("CC locks: {}", n));
+                    cmds.push(self.load_focused());
+                }
+            }
+            Action::CcRemove => {
+                if self.remove_step_cc() {
+                    let n = self.set.lanes[self.focus]
+                        .pattern
+                        .step_cc(self.cur_col)
+                        .len();
+                    self.set_status(format!("CC locks: {}", n));
+                    cmds.push(self.load_focused());
+                }
+            }
+            Action::AdjustCcVal(d) => {
+                if self.adjust_cc_val(d) {
+                    let v = self.set.lanes[self.focus]
+                        .pattern
+                        .step_cc(self.cur_col)
+                        .last()
+                        .map(|c| c.val)
+                        .unwrap_or(0);
+                    self.set_status(format!("CC val: {}", v));
+                    cmds.push(self.load_focused());
+                }
+            }
+            Action::AdjustLaneSwing(d) => {
+                self.adjust_lane_swing(d);
+                let sw = self.set.lanes[self.focus].swing;
+                self.set_status(match sw {
+                    Some(v) => format!("Lane swing {:.2}", v),
+                    None => "Lane swing: global".to_string(),
+                });
+                cmds.push(self.load_focused());
+            }
+            Action::ClearLaneSwing => {
+                self.clear_lane_swing();
+                self.set_status("Lane swing: global".to_string());
+                cmds.push(self.load_focused());
+            }
+            Action::CycleClockDiv => {
+                self.cycle_clock_div();
+                let div = self.set.lanes[self.focus].clock_div;
+                self.set_status(match div {
+                    Some(d) => format!("Clock div: /{}", d),
+                    None => "Clock div: default".to_string(),
+                });
+                cmds.push(self.load_focused());
             }
             Action::Euclid { dp, dr } => {
                 if self.apply_euclid(dp, dr) {
@@ -3604,6 +3719,165 @@ impl App {
                 steps.get(col).and_then(|s| s.first()).map(|n| n.ratchet)
             }
         }
+    }
+
+    // ── M8 Task 8 helpers ────────────────────────────────────────────────────
+
+    fn adjust_micro(&mut self, d: i8) -> bool {
+        let row = self.cur_row;
+        let col = self.cur_col;
+        if !self.cursor_cell_present() {
+            return false;
+        }
+        self.snapshot();
+        let lane = &mut self.set.lanes[self.focus];
+        match &mut lane.pattern.data {
+            PatternData::Drums(steps) => {
+                let note = profiles::DRUM_VOICES[row].note;
+                if let Some(hit) = steps
+                    .get_mut(col)
+                    .and_then(|s| s.iter_mut().find(|h| h.note == note))
+                {
+                    hit.micro = (hit.micro + d as i16).clamp(-128, 127);
+                }
+            }
+            PatternData::Melodic(steps) => {
+                if let Some(n) = steps.get_mut(col).and_then(|s| s.first_mut()) {
+                    n.micro = (n.micro + d as i16).clamp(-128, 127);
+                }
+            }
+        }
+        true
+    }
+
+    fn cursor_micro(&self) -> Option<i16> {
+        let row = self.cur_row;
+        let col = self.cur_col;
+        let lane = &self.set.lanes[self.focus];
+        match &lane.pattern.data {
+            PatternData::Drums(steps) => {
+                let note = profiles::DRUM_VOICES[row].note;
+                steps
+                    .get(col)
+                    .and_then(|s| s.iter().find(|h| h.note == note))
+                    .map(|h| h.micro)
+            }
+            PatternData::Melodic(steps) => steps.get(col).and_then(|s| s.first()).map(|n| n.micro),
+        }
+    }
+
+    fn cycle_cond(&mut self) -> bool {
+        let row = self.cur_row;
+        let col = self.cur_col;
+        if !self.cursor_cell_present() {
+            return false;
+        }
+        self.snapshot();
+        let lane = &mut self.set.lanes[self.focus];
+        match &mut lane.pattern.data {
+            PatternData::Drums(steps) => {
+                let note = profiles::DRUM_VOICES[row].note;
+                if let Some(hit) = steps
+                    .get_mut(col)
+                    .and_then(|s| s.iter_mut().find(|h| h.note == note))
+                {
+                    hit.cond = cond_cycle_next(&hit.cond);
+                }
+            }
+            PatternData::Melodic(steps) => {
+                if let Some(n) = steps.get_mut(col).and_then(|s| s.first_mut()) {
+                    n.cond = cond_cycle_next(&n.cond);
+                }
+            }
+        }
+        true
+    }
+
+    fn cursor_cond_label(&self) -> Option<String> {
+        let row = self.cur_row;
+        let col = self.cur_col;
+        let lane = &self.set.lanes[self.focus];
+        let cond = match &lane.pattern.data {
+            PatternData::Drums(steps) => {
+                let note = profiles::DRUM_VOICES[row].note;
+                steps
+                    .get(col)
+                    .and_then(|s| s.iter().find(|h| h.note == note))
+                    .map(|h| h.cond.clone())
+            }
+            PatternData::Melodic(steps) => steps
+                .get(col)
+                .and_then(|s| s.first())
+                .map(|n| n.cond.clone()),
+        }?;
+        Some(format_cond(&cond))
+    }
+
+    fn add_step_cc(&mut self) -> bool {
+        self.snapshot();
+        let col = self.cur_col;
+        let lane = &mut self.set.lanes[self.focus];
+        let mut locks = lane.pattern.step_cc(col).to_vec();
+        if let Some(last) = locks.last_mut() {
+            last.cc = last.cc.saturating_add(1).min(127);
+        } else {
+            locks.push(crate::pattern::model::CcLock { cc: 0, val: 0 });
+        }
+        lane.pattern.set_step_cc(col, locks);
+        true
+    }
+
+    fn remove_step_cc(&mut self) -> bool {
+        let col = self.cur_col;
+        if self.set.lanes[self.focus].pattern.step_cc(col).is_empty() {
+            return false;
+        }
+        self.snapshot();
+        let lane = &mut self.set.lanes[self.focus];
+        let mut locks = lane.pattern.step_cc(col).to_vec();
+        locks.pop();
+        lane.pattern.set_step_cc(col, locks);
+        true
+    }
+
+    fn adjust_cc_val(&mut self, d: i8) -> bool {
+        let col = self.cur_col;
+        if self.set.lanes[self.focus].pattern.step_cc(col).is_empty() {
+            return false;
+        }
+        self.snapshot();
+        let lane = &mut self.set.lanes[self.focus];
+        let mut locks = lane.pattern.step_cc(col).to_vec();
+        if let Some(last) = locks.last_mut() {
+            last.val = (last.val as i16 + d as i16).clamp(0, 127) as u8;
+        }
+        lane.pattern.set_step_cc(col, locks);
+        true
+    }
+
+    fn adjust_lane_swing(&mut self, d: i8) {
+        self.snapshot();
+        let global = self.set.swing;
+        let lane = &mut self.set.lanes[self.focus];
+        let current = lane.swing.unwrap_or(global);
+        lane.swing = Some((current + d as f32 * 0.05).clamp(0.0, 1.0));
+    }
+
+    fn clear_lane_swing(&mut self) {
+        self.snapshot();
+        self.set.lanes[self.focus].swing = None;
+    }
+
+    fn cycle_clock_div(&mut self) {
+        self.snapshot();
+        let lane = &mut self.set.lanes[self.focus];
+        lane.clock_div = match lane.clock_div {
+            None => Some(1),
+            Some(1) => Some(2),
+            Some(2) => Some(3),
+            Some(3) => Some(4),
+            Some(_) => None,
+        };
     }
 
     /// Count of steps where the focused drum voice's note is present.

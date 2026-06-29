@@ -352,6 +352,23 @@ pub fn key_to_action(key: KeyEvent, mode: Mode, kind: LaneKind) -> Action {
                     // 'F' was unbound in Edit; chosen for "fill commit" — commit the
                     // active fill, making it permanent and undoable via snapshot.
                     'F' => return Action::CommitTransform,
+                    // M8 Task 8: per-step micro/cond/CC and per-lane swing/div
+                    // '\\' / '|' — microtiming nudge (Shift+\\ is '|')
+                    '\\' => return Action::AdjustMicro(-1),
+                    '|' => return Action::AdjustMicro(1),
+                    // 'z' — cycle trig condition (Always→1:2→1:3→1:4→Fill→!Fill→1st→!1st→…)
+                    'z' => return Action::CycleCond,
+                    // 'a' / '_' — per-lane swing override (Shift+-  is '_')
+                    'a' => return Action::AdjustLaneSwing(-1),
+                    '_' => return Action::AdjustLaneSwing(1),
+                    // 'Q' (Shift+q) — cycle per-lane clock divisor; 'q' = Quit
+                    'Q' => return Action::CycleClockDiv,
+                    // '@' / '#' — add/remove CC lock on focused step
+                    '@' => return Action::CcAdd,
+                    '#' => return Action::CcRemove,
+                    // '$' / '^' — adjust CC val +/−
+                    '$' => return Action::AdjustCcVal(1),
+                    '^' => return Action::AdjustCcVal(-1),
                     _ => {}
                 }
 
@@ -2091,5 +2108,87 @@ mod tests {
             },
             "'M' in Generative must increase mutate"
         );
+    }
+
+    // ── M8 Task 8: per-step CC/micro/cond + per-lane swing/div ─────────────
+
+    #[test]
+    fn micro_nudge_keys_dispatch_adjust_micro() {
+        for kind in [LaneKind::Drums, LaneKind::Melodic] {
+            assert_eq!(
+                key_to_action(k(KeyCode::Char('\\')), Mode::Edit, kind),
+                Action::AdjustMicro(-1),
+                "backslash in Edit must be AdjustMicro(-1)"
+            );
+            assert_eq!(
+                key_to_action(k(KeyCode::Char('|')), Mode::Edit, kind),
+                Action::AdjustMicro(1),
+                "pipe in Edit must be AdjustMicro(1)"
+            );
+        }
+    }
+
+    #[test]
+    fn cond_cycle_key_dispatches_cycle_cond() {
+        for kind in [LaneKind::Drums, LaneKind::Melodic] {
+            assert_eq!(
+                key_to_action(k(KeyCode::Char('z')), Mode::Edit, kind),
+                Action::CycleCond,
+                "'z' in Edit must be CycleCond"
+            );
+        }
+    }
+
+    #[test]
+    fn cc_add_remove_keys_dispatch_actions() {
+        for kind in [LaneKind::Drums, LaneKind::Melodic] {
+            assert_eq!(
+                key_to_action(k(KeyCode::Char('@')), Mode::Edit, kind),
+                Action::CcAdd,
+                "'@' in Edit must be CcAdd"
+            );
+            assert_eq!(
+                key_to_action(k(KeyCode::Char('#')), Mode::Edit, kind),
+                Action::CcRemove,
+                "'#' in Edit must be CcRemove"
+            );
+            assert_eq!(
+                key_to_action(k(KeyCode::Char('$')), Mode::Edit, kind),
+                Action::AdjustCcVal(1),
+                "'$' in Edit must be AdjustCcVal(1)"
+            );
+            assert_eq!(
+                key_to_action(k(KeyCode::Char('^')), Mode::Edit, kind),
+                Action::AdjustCcVal(-1),
+                "'^' in Edit must be AdjustCcVal(-1)"
+            );
+        }
+    }
+
+    #[test]
+    fn lane_swing_keys_dispatch_adjust_lane_swing() {
+        for kind in [LaneKind::Drums, LaneKind::Melodic] {
+            assert_eq!(
+                key_to_action(k(KeyCode::Char('a')), Mode::Edit, kind),
+                Action::AdjustLaneSwing(-1),
+                "'a' in Edit must be AdjustLaneSwing(-1)"
+            );
+            assert_eq!(
+                key_to_action(k(KeyCode::Char('_')), Mode::Edit, kind),
+                Action::AdjustLaneSwing(1),
+                "'_' in Edit must be AdjustLaneSwing(1)"
+            );
+        }
+    }
+
+    #[test]
+    fn clock_div_key_dispatches_cycle_clock_div() {
+        for kind in [LaneKind::Drums, LaneKind::Melodic] {
+            assert_eq!(
+                key_to_action(k(KeyCode::Char('Q')), Mode::Edit, kind),
+                Action::CycleClockDiv,
+                "'Q' in Edit must be CycleClockDiv"
+            );
+        }
     }
 }

@@ -82,6 +82,13 @@ fn left_column_lines() -> Vec<Line<'static>> {
         header("Per-step"),
         row("[p / P]  probability up / down"),
         row("[y / Y]  ratchet up / down"),
+        row("[\\ / |]  micro timing − / +   [z]  cycle trig cond"),
+        row("[@]  add CC lock   [#]  remove   [$]  CC val +   [^]  CC val −"),
+        blank(),
+        // ── Per-lane ──────────────────────────────────────────────────
+        header("Per-lane"),
+        row("[a / _]  lane swing override − / +"),
+        row("[Q]  cycle lane clock divisor (None / /1 / /2 / /3 / /4)"),
     ]
 }
 
