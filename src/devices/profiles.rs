@@ -18,6 +18,12 @@ pub struct DeviceProfile {
     pub drum_gate_fraction: f32,           // 0.1 for drums; 0 for melodic
     pub send_clock: bool,                  // true for all three
     pub drum_voices: &'static [DrumVoice], // non-empty for drums, empty for melodic
+    /// Whether this lane can hold more than one note per step (chord-capable).
+    /// false → mono: the edit layer enforces at most one note per step.
+    /// true  → poly: stacking is allowed (chord entry added in M5b Task 4).
+    /// Drum profiles: always false here — drum steps are already poly via
+    /// Vec<DrumHit> and this field is irrelevant for drum lanes.
+    pub poly: bool,
 }
 
 /// Standard T-8 kit voices, in editor-row order, derived from notes present in the library.
@@ -75,6 +81,8 @@ pub const T8_DRUMS: DeviceProfile = DeviceProfile {
     drum_gate_fraction: 0.1,
     send_clock: true,
     drum_voices: DRUM_VOICES,
+    // Irrelevant for drum lanes — drum steps are poly via Vec<DrumHit>.
+    poly: false,
 };
 
 pub const T8_BASS: DeviceProfile = DeviceProfile {
@@ -88,6 +96,8 @@ pub const T8_BASS: DeviceProfile = DeviceProfile {
     drum_gate_fraction: 0.0,
     send_clock: true,
     drum_voices: &[],
+    // Mono: T-8 BASS has slide and is always single-note per step.
+    poly: false,
 };
 
 pub const S1: DeviceProfile = DeviceProfile {
@@ -101,6 +111,8 @@ pub const S1: DeviceProfile = DeviceProfile {
     drum_gate_fraction: 0.0,
     send_clock: true,
     drum_voices: &[],
+    // Poly: S-1 SYNTH supports chords (chord-stacking added in M5b Task 4).
+    poly: true,
 };
 
 pub fn default_profiles() -> [DeviceProfile; 3] {
@@ -209,5 +221,20 @@ mod tests {
         assert_eq!(drum_label(&T8_DRUMS, 99), "N99");
         // melodic profile has no voices -> always fallback
         assert_eq!(drum_label(&T8_BASS, 36), "N36");
+    }
+
+    #[test]
+    fn bass_profile_is_mono_s1_is_poly() {
+        // T-8 BASS has slide; it is a mono lane (one note per step).
+        // S-1 SYNTH supports chords. T-8 DRUMS: poly is irrelevant for drum
+        // lanes (drum steps are already poly via Vec<DrumHit>); value is false.
+        const {
+            assert!(!T8_BASS.poly, "T-8 BASS must be mono (poly == false)");
+            assert!(S1.poly, "S-1 SYNTH must be poly (poly == true)");
+            assert!(
+                !T8_DRUMS.poly,
+                "T-8 DRUMS poly is false (irrelevant for drum lanes)"
+            );
+        }
     }
 }

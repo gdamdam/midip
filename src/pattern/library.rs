@@ -6,7 +6,7 @@ use indexmap::IndexMap;
 use serde::Deserialize;
 
 use crate::devices::profiles::{S1, T8_BASS};
-use crate::pattern::model::{DrumHit, MelodicNote, Pattern, PatternData};
+use crate::pattern::model::{DrumHit, MelodicNote, MelodicStep, Pattern, PatternData};
 
 /// genre name -> patterns, preserving the file's genre order.
 pub type GenreMap = IndexMap<String, Vec<Pattern>>;
@@ -87,17 +87,23 @@ pub fn parse_melodic_file(json: &str, gate_fraction: f32) -> anyhow::Result<Genr
         let mut parsed = Vec::with_capacity(patterns.len());
         for (idx, steps) in patterns.into_iter().enumerate() {
             let length = steps.len();
+            // Old per-step shape: `null` (rest) -> empty step; an object -> one-note step
+            // (mono). Multi-note steps come from set/user JSON via the deserialize shim.
             let data = steps
                 .into_iter()
                 .map(|step| {
-                    step.map(|n| MelodicNote {
-                        semi: n.semi,
-                        vel: n.vel,
-                        slide: n.slide,
-                        len: gate_fraction,
-                        prob: 1.0,
-                        ratchet: 1,
-                    })
+                    MelodicStep::from(
+                        step.map(|n| MelodicNote {
+                            semi: n.semi,
+                            vel: n.vel,
+                            slide: n.slide,
+                            len: gate_fraction,
+                            prob: 1.0,
+                            ratchet: 1,
+                        })
+                        .into_iter()
+                        .collect::<Vec<_>>(),
+                    )
                 })
                 .collect();
             parsed.push(Pattern {
@@ -346,13 +352,13 @@ mod tests {
         match &p.data {
             PatternData::Melodic(steps) => {
                 assert_eq!(steps.len(), 3);
-                let n0 = steps[0].as_ref().unwrap();
+                let n0 = steps[0].first().unwrap();
                 assert_eq!(n0.semi, 0);
                 assert_eq!(n0.vel, 1.0);
                 assert!(!n0.slide);
                 assert_eq!(n0.len, 0.5); // T8_BASS.gate_fraction
-                assert!(steps[1].is_none());
-                let n2 = steps[2].as_ref().unwrap();
+                assert!(steps[1].is_empty());
+                let n2 = steps[2].first().unwrap();
                 assert_eq!(n2.semi, 7);
                 assert_eq!(n2.vel, 1.3);
                 assert!(n2.slide);
@@ -365,7 +371,7 @@ mod tests {
         let map_s = parse_melodic_file(json, S1.gate_fraction).unwrap();
         let n = map_s["techno"][0].data.clone();
         if let PatternData::Melodic(steps) = n {
-            assert_eq!(steps[0].as_ref().unwrap().len, 0.9);
+            assert_eq!(steps[0].first().unwrap().len, 0.9);
         } else {
             panic!("expected melodic");
         }

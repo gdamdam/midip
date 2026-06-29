@@ -115,9 +115,10 @@ fn build_preview_lines(pattern: &Pattern, width: usize, max_height: usize) -> Ve
             let strip_len = pattern.length.min(16);
             let mut strip = String::new();
             for i in 0..strip_len {
-                match steps.get(i) {
-                    Some(Some(n)) if n.slide => strip.push('~'),
-                    Some(Some(_)) => strip.push('●'),
+                // Mono preview: read the step's primary note for the on/off+slide strip.
+                match steps.get(i).and_then(|s| s.first()) {
+                    Some(n) if n.slide => strip.push('~'),
+                    Some(_) => strip.push('●'),
                     _ => strip.push('·'),
                 }
             }
@@ -126,7 +127,7 @@ fn build_preview_lines(pattern: &Pattern, width: usize, max_height: usize) -> Ve
             // Note names for active steps (root=45, semi from step, no transpose/octave).
             let notes: Vec<String> = steps
                 .iter()
-                .filter_map(|s| s.as_ref())
+                .filter_map(|s| s.first())
                 .map(|n| theme::note_name(resolve_melodic_pitch(45, n.semi, 0, 0)))
                 .collect();
             // Fit as many as available width allows (space-separated).
@@ -405,7 +406,7 @@ mod tests {
     use crate::app::App;
     use crate::devices::profiles::default_profiles;
     use crate::pattern::library::{GenreMap, LibRole, Library};
-    use crate::pattern::model::{DrumHit, MelodicNote, Pattern, PatternData, Set};
+    use crate::pattern::model::{DrumHit, MelodicNote, MelodicStep, Pattern, PatternData, Set};
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
 
@@ -437,23 +438,23 @@ mod tests {
     fn library_with_melodic() -> Library {
         let mut synth = GenreMap::new();
         let steps = vec![
-            Some(MelodicNote {
+            MelodicStep::from(vec![MelodicNote {
                 semi: 0,
                 vel: 1.0,
                 slide: false,
                 len: 0.9,
                 prob: 1.0,
                 ratchet: 1,
-            }),
-            None,
-            Some(MelodicNote {
+            }]),
+            MelodicStep::default(),
+            MelodicStep::from(vec![MelodicNote {
                 semi: 7,
                 vel: 1.0,
                 slide: true,
                 len: 0.9,
                 prob: 1.0,
                 ratchet: 1,
-            }),
+            }]),
         ];
         let pat = Pattern {
             name: "Iron Grid".to_string(),

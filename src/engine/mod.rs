@@ -1402,20 +1402,20 @@ mod tests {
     #[test]
     fn setset_releases_sounding_notes_before_swap() {
         use crate::midi::MidiMessage;
-        use crate::pattern::model::{MelodicNote, Pattern, PatternData};
+        use crate::pattern::model::{MelodicNote, MelodicStep, Pattern, PatternData};
 
         // Build a set whose lane 2 (S-1, melodic) has a single long note on step 0.
         let mut set = default_set();
         // 16-step melodic pattern: step 0 has a long (full-bar) note, rest silent.
-        let mut steps = vec![None; 16];
-        steps[0] = Some(MelodicNote {
+        let mut steps = vec![MelodicStep::default(); 16];
+        steps[0] = MelodicStep::from(vec![MelodicNote {
             semi: 0,
             vel: 1.0,
             slide: false,
             len: 4.0, // 4 steps long — much longer than our tick window
             prob: 1.0,
             ratchet: 1,
-        });
+        }]);
         set.lanes[2].pattern = Pattern {
             name: "test".into(),
             desc: String::new(),
@@ -1732,19 +1732,21 @@ mod tests {
 
     // --- Task 7: route channel emission + SetRoute -------------------------
 
-    use crate::pattern::model::{LaneRoute, MelodicNote, Pattern, PatternData, PortRef};
+    use crate::pattern::model::{
+        LaneRoute, MelodicNote, MelodicStep, Pattern, PatternData, PortRef,
+    };
 
     /// A melodic note on step 0 of the given lane (full-bar length so it stays sounding).
     fn put_long_note(set: &mut Set, lane: usize, semi: i8) {
-        let mut steps = vec![None; 16];
-        steps[0] = Some(MelodicNote {
+        let mut steps = vec![MelodicStep::default(); 16];
+        steps[0] = MelodicStep::from(vec![MelodicNote {
             semi,
             vel: 1.0,
             slide: false,
             len: 4.0,
             prob: 1.0,
             ratchet: 1,
-        });
+        }]);
         set.lanes[lane].pattern = Pattern {
             name: "t".into(),
             desc: String::new(),
@@ -1811,23 +1813,23 @@ mod tests {
         set.bpm = 120.0; // step_dur 125_000 µs
                          // Step 0: a long note (still sounding at the switch). Step 4: another
                          // note that lands AFTER the switch (so a post-switch NoteOn exists).
-        let mut steps = vec![None; 16];
-        steps[0] = Some(MelodicNote {
+        let mut steps = vec![MelodicStep::default(); 16];
+        steps[0] = MelodicStep::from(vec![MelodicNote {
             semi: 0,
             vel: 1.0,
             slide: false,
             len: 4.0,
             prob: 1.0,
             ratchet: 1,
-        });
-        steps[4] = Some(MelodicNote {
+        }]);
+        steps[4] = MelodicStep::from(vec![MelodicNote {
             semi: 2,
             vel: 1.0,
             slide: false,
             len: 1.0,
             prob: 1.0,
             ratchet: 1,
-        });
+        }]);
         set.lanes[2].pattern = Pattern {
             name: "t".into(),
             desc: String::new(),

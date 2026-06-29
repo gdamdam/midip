@@ -302,6 +302,16 @@ pub enum Action {
     NoteInputOctave(i8),
     /// Clear the cursor step and step back one (Backspace/Delete in NoteInput).
     NoteInputBackspace,
+    // ── M5b Task 4: chord entry on poly lanes ────────────────────────────────
+    /// Build a scale-aware triad on the cursor step (Edit mode, key `'j'`, was unbound).
+    /// From the step's root note (its first note) add a 3rd (+2 scale degrees) and a 5th
+    /// (+4 scale degrees), folded to the lane's scale. No-op with a status message if the
+    /// step is empty or the lane is mono (`poly == false`). Snapshots for undo.
+    BuildTriad,
+    /// Remove the LAST note from the cursor step (Edit mode, key `'J'`/Shift+j, was unbound).
+    /// On a single-note step this clears it (becomes a rest). No-op on an empty step.
+    /// Snapshots for undo.
+    RemoveChordNote,
     None,
 }
 
@@ -1074,7 +1084,7 @@ impl App {
                 let new_len = (lane.pattern.length as i32 + d as i32).clamp(1, 64) as usize;
                 match &mut lane.pattern.data {
                     PatternData::Drums(steps) => steps.resize(new_len, Vec::new()),
-                    PatternData::Melodic(steps) => steps.resize(new_len, Option::None),
+                    PatternData::Melodic(steps) => steps.resize(new_len, MelodicStep::default()),
                 }
                 lane.pattern.length = new_len;
                 self.clamp_cursor();
@@ -1096,7 +1106,7 @@ impl App {
                             }
                         }
                         PatternData::Melodic(steps) => {
-                            steps.resize(new_len, Option::None);
+                            steps.resize(new_len, MelodicStep::default());
                             for i in len..new_len {
                                 steps[i] = steps[i % len].clone();
                             }
@@ -1791,7 +1801,7 @@ impl App {
                         PatternData::Melodic(steps) => steps
                             .iter()
                             .filter(|s| {
-                                if let Some(note) = s {
+                                if let Some(note) = s.first() {
                                     fold_to_scale(note.semi as i32, lane.scale) != note.semi as i32
                                 } else {
                                     false
@@ -1818,7 +1828,7 @@ impl App {
                     let lane = &mut self.set.lanes[self.focus];
                     let mut count = 0usize;
                     if let PatternData::Melodic(steps) = &mut lane.pattern.data {
-                        for note in steps.iter_mut().flatten() {
+                        for note in steps.iter_mut().flat_map(|s| s.iter_mut()) {
                             let folded =
                                 fold_to_scale(note.semi as i32, scale).clamp(-128, 127) as i8;
                             if folded != note.semi {
@@ -2055,10 +2065,16 @@ impl App {
                     // Snapshot ONCE on entry — the whole session is one undo unit.
                     self.snapshot();
                     self.note_input_octave = 0;
+                    let is_poly = self.set.lanes[self.focus].profile.poly;
                     self.mode = Mode::NoteInput;
-                    self.set_status(
-                        "NOTE INPUT  [a-k]notes [w/e/t/y/u]black [z/x]octave [bksp]del [esc]exit",
-                    );
+                    // Poly lanes STACK keys into a chord on one step (press the same key
+                    // again to toggle it off); mono lanes replace+advance like typing a
+                    // melody. Reflect that distinction in the entry banner.
+                    self.set_status(if is_poly {
+                        "NOTE INPUT (poly: keys STACK a chord; repeat=off) [a-k]/[w/e/t/y/u] [z/x]oct [bksp]del [esc]exit"
+                    } else {
+                        "NOTE INPUT  [a-k]notes [w/e/t/y/u]black [z/x]octave [bksp]del [esc]exit"
+                    });
                 }
             }
             Action::CloseNoteInput => {
@@ -2073,23 +2089,47 @@ impl App {
                     let semi_folded = fold_to_scale(semi_raw, lane_scale).clamp(-128, 127) as i8;
                     let col = self.cur_col;
                     let lane = &mut self.set.lanes[self.focus];
+                    let is_poly = lane.profile.poly;
+                    let gate = lane.profile.gate_fraction;
                     if let PatternData::Melodic(steps) = &mut lane.pattern.data {
                         if let Some(slot) = steps.get_mut(col) {
-                            let gate = lane.profile.gate_fraction;
-                            *slot = Some(MelodicNote {
+                            let new_note = MelodicNote {
                                 semi: semi_folded,
                                 vel: MEL_DEFAULT_VEL,
                                 slide: false,
                                 len: gate,
                                 prob: 1.0,
                                 ratchet: 1,
-                            });
+                            };
+                            if is_poly {
+                                // Poly lane (M5b Task 4): STACK the pressed pitch onto the
+                                // cursor step to build a chord, and do NOT advance — so
+                                // several key presses build a chord on one step. The cursor
+                                // advances only via the arrow/step keys. Duplicate-pitch
+                                // rule: pressing a pitch already in the step TOGGLES it off
+                                // (so a key acts as a per-pitch on/off), never duplicating.
+                                if let Some(pos) = slot.iter().position(|n| n.semi == semi_folded) {
+                                    slot.remove(pos);
+                                } else {
+                                    slot.push(new_note);
+                                }
+                            } else {
+                                // Mono enforcement (M5b Task 2): a mono lane holds AT
+                                // MOST ONE note. Placing a note always replaces any
+                                // existing note, preserving the step's single-note
+                                // invariant. Slide and other per-step fields come from
+                                // the new note (identical to today's mono behaviour).
+                                *slot = MelodicStep::from(vec![new_note]);
+                            }
                         }
                     }
-                    // Advance cursor one step, wrapping within the pattern length.
-                    let pat_len = self.set.lanes[self.focus].pattern.length;
-                    self.cur_col = (self.cur_col + 1) % pat_len.max(1);
-                    self.step_scroll = (self.cur_col / VISIBLE_STEPS) * VISIBLE_STEPS;
+                    // Mono lanes advance one step (melody-typing); poly lanes stay on the
+                    // step so successive presses stack into a chord.
+                    if !is_poly {
+                        let pat_len = self.set.lanes[self.focus].pattern.length;
+                        self.cur_col = (self.cur_col + 1) % pat_len.max(1);
+                        self.step_scroll = (self.cur_col / VISIBLE_STEPS) * VISIBLE_STEPS;
+                    }
                     self.dirty = true;
                     cmds.push(self.load_focused());
                 }
@@ -2109,6 +2149,80 @@ impl App {
                     let col = self.cur_col as isize - 1;
                     self.cur_col = col.rem_euclid(pat_len.max(1) as isize) as usize;
                     self.step_scroll = (self.cur_col / VISIBLE_STEPS) * VISIBLE_STEPS;
+                    self.dirty = true;
+                    cmds.push(self.load_focused());
+                }
+            }
+            Action::BuildTriad => {
+                // Build a scale-aware triad on the cursor step (poly lanes only). From the
+                // step's ROOT note (its first note) add a 3rd and 5th by stepping +2 and +4
+                // scale degrees via `step_by_degree`, folded to the lane's scale. In a Major
+                // scale this yields a major triad (root, M3, P5); in a Minor scale a minor
+                // triad — the interval quality follows the scale automatically. Duplicate
+                // semis are not added (a unison degree, e.g. on some pentatonic folds, is
+                // skipped). No-op with a status message on an empty step or a mono lane.
+                let col = self.cur_col;
+                let scale = self.set.lanes[self.focus].scale;
+                let is_poly = self.set.lanes[self.focus].profile.poly;
+                let root_semi =
+                    if let PatternData::Melodic(steps) = &self.set.lanes[self.focus].pattern.data {
+                        steps.get(col).and_then(|s| s.first()).map(|n| n.semi)
+                    } else {
+                        Option::None
+                    };
+                match (is_poly, root_semi) {
+                    (true, Some(root)) => {
+                        self.snapshot();
+                        let third = step_by_degree(root as i32, 2, scale).clamp(-48, 48) as i8;
+                        let fifth = step_by_degree(root as i32, 4, scale).clamp(-48, 48) as i8;
+                        let lane = &mut self.set.lanes[self.focus];
+                        let gate = lane.profile.gate_fraction;
+                        if let PatternData::Melodic(steps) = &mut lane.pattern.data {
+                            if let Some(slot) = steps.get_mut(col) {
+                                for s in [third, fifth] {
+                                    if !slot.iter().any(|n| n.semi == s) {
+                                        slot.push(MelodicNote {
+                                            semi: s,
+                                            vel: MEL_DEFAULT_VEL,
+                                            slide: false,
+                                            len: gate,
+                                            prob: 1.0,
+                                            ratchet: 1,
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                        self.dirty = true;
+                        self.set_status("Built triad (root + 3rd + 5th)");
+                        cmds.push(self.load_focused());
+                    }
+                    _ => {
+                        self.set_status("Triad needs a poly lane with a root note");
+                    }
+                }
+            }
+            Action::RemoveChordNote => {
+                // Remove the LAST note from the cursor step. On a single-note step this
+                // clears it (becomes a rest). No-op on an empty step. Only snapshot (and
+                // mark dirty) when there is actually a note to remove, so a no-op press
+                // does not create an empty undo step.
+                let col = self.cur_col;
+                let has_note =
+                    if let PatternData::Melodic(steps) = &self.set.lanes[self.focus].pattern.data {
+                        steps.get(col).map(|s| !s.is_empty()).unwrap_or(false)
+                    } else {
+                        false
+                    };
+                if has_note {
+                    self.snapshot();
+                    if let PatternData::Melodic(steps) =
+                        &mut self.set.lanes[self.focus].pattern.data
+                    {
+                        if let Some(slot) = steps.get_mut(col) {
+                            slot.pop();
+                        }
+                    }
                     self.dirty = true;
                     cmds.push(self.load_focused());
                 }
@@ -2383,22 +2497,26 @@ impl App {
             }
             PatternData::Melodic(steps) => {
                 if let Some(slot) = steps.get_mut(col) {
-                    if slot.is_some() {
-                        *slot = Option::None;
+                    // Toggle: a non-empty step toggles off to a rest; an empty step
+                    // toggles on to a single default note (mono for all lanes here —
+                    // chord stacking via ToggleStep is not supported; poly lanes get
+                    // chord entry via dedicated Actions in M5b Task 4).
+                    if !slot.is_empty() {
+                        *slot = MelodicStep::default();
                     } else {
                         let gate = lane.profile.gate_fraction;
                         // Fold the default semi=0 to the nearest in-scale degree when
                         // the lane has a non-Chromatic scale. Existing notes are never
                         // rewritten — folding only applies at placement time.
                         let semi = fold_to_scale(0, lane_scale) as i8;
-                        *slot = Some(MelodicNote {
+                        *slot = MelodicStep::from(vec![MelodicNote {
                             semi,
                             vel: MEL_DEFAULT_VEL,
                             slide: false,
                             len: gate,
                             prob: 1.0,
                             ratchet: 1,
-                        });
+                        }]);
                     }
                 }
             }
@@ -2428,7 +2546,7 @@ impl App {
                 }
             }
             PatternData::Melodic(steps) => {
-                if let Some(Some(n)) = steps.get_mut(col) {
+                if let Some(n) = steps.get_mut(col).and_then(|s| s.first_mut()) {
                     n.prob = (n.prob + d as f32 * 0.1).clamp(0.0, 1.0);
                 }
             }
@@ -2457,7 +2575,7 @@ impl App {
                 }
             }
             PatternData::Melodic(steps) => {
-                if let Some(Some(n)) = steps.get_mut(col) {
+                if let Some(n) = steps.get_mut(col).and_then(|s| s.first_mut()) {
                     n.ratchet = (n.ratchet as i16 + d as i16).clamp(1, 8) as u8;
                 }
             }
@@ -2478,9 +2596,7 @@ impl App {
                     .map(|s| s.iter().any(|h| h.note == note))
                     .unwrap_or(false)
             }
-            PatternData::Melodic(steps) => {
-                matches!(steps.get(col), Some(Some(_)))
-            }
+            PatternData::Melodic(steps) => steps.get(col).map(|s| !s.is_empty()).unwrap_or(false),
         }
     }
 
@@ -2498,7 +2614,7 @@ impl App {
             }
             PatternData::Melodic(steps) => steps
                 .get(col)
-                .and_then(|s| s.as_ref())
+                .and_then(|s| s.first())
                 .map(|n| (n.vel.clamp(0.0, 1.3) * 97.0) as u8),
         }
     }
@@ -2517,7 +2633,7 @@ impl App {
             }
             PatternData::Melodic(steps) => steps
                 .get(col)
-                .and_then(|s| s.as_ref())
+                .and_then(|s| s.first())
                 .map(|n| (n.prob * 100.0).round() as u32),
         }
     }
@@ -2535,7 +2651,7 @@ impl App {
                     .map(|h| h.ratchet)
             }
             PatternData::Melodic(steps) => {
-                steps.get(col).and_then(|s| s.as_ref()).map(|n| n.ratchet)
+                steps.get(col).and_then(|s| s.first()).map(|n| n.ratchet)
             }
         }
     }
@@ -2608,7 +2724,7 @@ impl App {
                 }
             }
             PatternData::Melodic(steps) => {
-                if let Some(Some(n)) = steps.get_mut(col) {
+                if let Some(n) = steps.get_mut(col).and_then(|s| s.first_mut()) {
                     n.vel = (b as f32 / 9.0) * 1.3;
                 }
             }
@@ -2630,7 +2746,7 @@ impl App {
                 }
             }
             PatternData::Melodic(steps) => {
-                if let Some(Some(n)) = steps.get_mut(col) {
+                if let Some(n) = steps.get_mut(col).and_then(|s| s.first_mut()) {
                     n.vel = (n.vel + d as f32 * 0.05).clamp(0.0, 1.3);
                 }
             }
@@ -2643,7 +2759,7 @@ impl App {
         let col = self.cur_col;
         let scale = self.set.lanes[self.focus].scale;
         if let PatternData::Melodic(steps) = &mut self.set.lanes[self.focus].pattern.data {
-            if let Some(Some(n)) = steps.get_mut(col) {
+            if let Some(n) = steps.get_mut(col).and_then(|s| s.first_mut()) {
                 let new_semi = step_by_degree(n.semi as i32, dir, scale);
                 n.semi = new_semi.clamp(-48, 48) as i8;
             }
@@ -2654,7 +2770,7 @@ impl App {
         let col = self.cur_col;
         let lane = &mut self.set.lanes[self.focus];
         if let PatternData::Melodic(steps) = &mut lane.pattern.data {
-            if let Some(Some(n)) = steps.get_mut(col) {
+            if let Some(n) = steps.get_mut(col).and_then(|s| s.first_mut()) {
                 n.len = (n.len + d as f32 * 0.25).clamp(0.25, 64.0);
             }
         }
@@ -2664,7 +2780,7 @@ impl App {
         let col = self.cur_col;
         let lane = &mut self.set.lanes[self.focus];
         if let PatternData::Melodic(steps) = &mut lane.pattern.data {
-            if let Some(Some(n)) = steps.get_mut(col) {
+            if let Some(n) = steps.get_mut(col).and_then(|s| s.first_mut()) {
                 n.slide = !n.slide;
             }
         }
@@ -2681,7 +2797,7 @@ impl App {
             }
             PatternData::Melodic(steps) => {
                 if let Some(slot) = steps.get_mut(col) {
-                    *slot = Option::None;
+                    *slot = MelodicStep::default();
                 }
             }
         }
@@ -2696,7 +2812,7 @@ impl App {
                 PatternData::Drums(vec![s])
             }
             PatternData::Melodic(steps) => {
-                let s: MelodicStep = steps.get(col).cloned().unwrap_or(Option::None);
+                let s: MelodicStep = steps.get(col).cloned().unwrap_or_default();
                 PatternData::Melodic(vec![s])
             }
         };
@@ -2754,7 +2870,7 @@ impl App {
         let lane = &self.set.lanes[self.focus];
         match &lane.pattern.data {
             PatternData::Drums(steps) => steps.iter().any(|s| !s.is_empty()),
-            PatternData::Melodic(steps) => steps.iter().any(|s| s.is_some()),
+            PatternData::Melodic(steps) => steps.iter().any(|s| !s.is_empty()),
         }
     }
 
@@ -2937,7 +3053,11 @@ pub fn apply_fill(p: &mut Pattern) {
             }
         }
         PatternData::Melodic(steps) => {
-            for note in steps.iter_mut().skip(last_beat_start).flatten() {
+            for note in steps
+                .iter_mut()
+                .skip(last_beat_start)
+                .flat_map(|s| s.iter_mut())
+            {
                 note.ratchet = (note.ratchet * 2).min(8);
             }
         }
@@ -2988,15 +3108,15 @@ mod tests {
         );
 
         let mut bass: GenreMap = GenreMap::new();
-        let mut bsteps = vec![None; 16];
-        bsteps[0] = Some(MelodicNote {
+        let mut bsteps = vec![MelodicStep::default(); 16];
+        bsteps[0] = MelodicStep::from(vec![MelodicNote {
             semi: 3,
             vel: 1.0,
             slide: false,
             len: 0.5,
             prob: 1.0,
             ratchet: 1,
-        });
+        }]);
         bass.insert(
             "acid".into(),
             vec![Pattern {
@@ -3015,7 +3135,7 @@ mod tests {
                 name: "lib-synth".into(),
                 desc: String::new(),
                 length: 16,
-                data: PatternData::Melodic(vec![None; 16]),
+                data: PatternData::Melodic(vec![MelodicStep::default(); 16]),
                 id: crate::persist::Id::nil(),
             }],
         );
@@ -3097,7 +3217,7 @@ mod tests {
         app.apply(Action::MoveCursor(0, 5));
         app.apply(Action::ToggleStep);
         if let PatternData::Melodic(steps) = &app.focused_lane().pattern.data {
-            let n = steps[5].as_ref().expect("note placed");
+            let n = steps[5].first().expect("note placed");
             assert_eq!(n.semi, 0);
             assert_eq!(n.vel, 1.0);
         } else {
@@ -3105,7 +3225,7 @@ mod tests {
         }
         app.apply(Action::ToggleStep); // remove
         if let PatternData::Melodic(steps) = &app.focused_lane().pattern.data {
-            assert!(steps[5].is_none());
+            assert!(steps[5].is_empty());
         } else {
             panic!("expected melodic");
         }
@@ -6454,7 +6574,7 @@ mod tests {
             name: "bass line".to_string(),
             desc: String::new(),
             length: 16,
-            data: PatternData::Melodic(vec![None; 16]),
+            data: PatternData::Melodic(vec![MelodicStep::default(); 16]),
             id: crate::persist::Id::nil(),
         };
         bass.insert("techno".to_string(), vec![pat]);
@@ -6505,7 +6625,7 @@ mod tests {
             name: "synth line".to_string(),
             desc: String::new(),
             length: 16,
-            data: PatternData::Melodic(vec![None; 16]),
+            data: PatternData::Melodic(vec![MelodicStep::default(); 16]),
             id: crate::persist::Id::nil(),
         };
         synth.insert("techno".to_string(), vec![pat]);
@@ -7011,16 +7131,16 @@ mod tests {
 
     /// Helper: a melodic pattern with a note in the last beat so ratchet doubling fires.
     fn melodic_pattern_with_note() -> Pattern {
-        let mut steps: Vec<Option<MelodicNote>> = vec![None; 16];
+        let mut steps: Vec<MelodicStep> = vec![MelodicStep::default(); 16];
         // Put a note at step 13 (last beat = steps 12-15 for a 16-step pattern).
-        steps[13] = Some(MelodicNote {
+        steps[13] = MelodicStep::from(vec![MelodicNote {
             semi: 0,
             vel: 1.0,
             slide: false,
             len: 0.5,
             prob: 1.0,
             ratchet: 1,
-        });
+        }]);
         Pattern {
             name: "bass-note".into(),
             desc: String::new(),
@@ -7155,7 +7275,7 @@ mod tests {
         let mut p = melodic_pattern_with_note();
         crate::app::apply_fill(&mut p);
         if let PatternData::Melodic(steps) = &p.data {
-            let note = steps[13].as_ref().expect("step 13 must have a note");
+            let note = steps[13].first().expect("step 13 must have a note");
             assert_eq!(
                 note.ratchet, 2,
                 "ratchet must be doubled (1 → 2) on last-beat note"
@@ -7402,7 +7522,7 @@ mod tests {
         app.apply(Action::ToggleStep);
         // Directly set the semi to the desired value for test setup.
         if let PatternData::Melodic(steps) = &mut app.set.lanes[app.focus].pattern.data {
-            if let Some(Some(n)) = steps.get_mut(0) {
+            if let Some(n) = steps.get_mut(0).and_then(|s| s.first_mut()) {
                 n.semi = semi;
             }
         }
@@ -7419,7 +7539,7 @@ mod tests {
         app.apply(Action::NoteUp);
         if let PatternData::Melodic(steps) = &app.focused_lane().pattern.data {
             assert_eq!(
-                steps[0].as_ref().unwrap().semi,
+                steps[0].first().unwrap().semi,
                 1,
                 "Chromatic: NoteUp should add 1 semitone"
             );
@@ -7431,7 +7551,7 @@ mod tests {
         app2.apply(Action::NoteUp);
         if let PatternData::Melodic(steps) = &app2.focused_lane().pattern.data {
             assert_eq!(
-                steps[0].as_ref().unwrap().semi,
+                steps[0].first().unwrap().semi,
                 2,
                 "Major: NoteUp at 0 should reach 2"
             );
@@ -7447,7 +7567,7 @@ mod tests {
         app.apply(Action::NoteDown);
         if let PatternData::Melodic(steps) = &app.focused_lane().pattern.data {
             assert_eq!(
-                steps[0].as_ref().unwrap().semi,
+                steps[0].first().unwrap().semi,
                 1,
                 "Chromatic: NoteDown should subtract 1"
             );
@@ -7459,7 +7579,7 @@ mod tests {
         app2.apply(Action::NoteDown);
         if let PatternData::Melodic(steps) = &app2.focused_lane().pattern.data {
             assert_eq!(
-                steps[0].as_ref().unwrap().semi,
+                steps[0].first().unwrap().semi,
                 0,
                 "Major: NoteDown at 2 should reach 0"
             );
@@ -7478,7 +7598,7 @@ mod tests {
         app.set.lanes[app.focus].scale = Scale::Major;
         app.apply(Action::ToggleStep);
         if let PatternData::Melodic(steps) = &app.focused_lane().pattern.data {
-            let note = steps[0].as_ref().expect("note should be placed");
+            let note = steps[0].first().expect("note should be placed");
             let expected = fold_to_scale(0, Scale::Major) as i8;
             assert_eq!(
                 note.semi, expected,
@@ -7518,7 +7638,7 @@ mod tests {
         // Existing note semi must be unchanged.
         if let PatternData::Melodic(steps) = &app.focused_lane().pattern.data {
             assert_eq!(
-                steps[0].as_ref().unwrap().semi,
+                steps[0].first().unwrap().semi,
                 5,
                 "CycleScale must not rewrite existing note semis"
             );
@@ -7592,7 +7712,7 @@ mod tests {
             app.cur_col = col;
             app.apply(Action::ToggleStep);
             if let PatternData::Melodic(steps) = &mut app.set.lanes[app.focus].pattern.data {
-                if let Some(Some(n)) = steps.get_mut(col) {
+                if let Some(n) = steps.get_mut(col).and_then(|s| s.first_mut()) {
                     n.semi = semi;
                 }
             }
@@ -7617,7 +7737,7 @@ mod tests {
             let semis: Vec<i8> = steps
                 .iter()
                 .take(4)
-                .filter_map(|s| s.as_ref().map(|n| n.semi))
+                .filter_map(|s| s.first().map(|n| n.semi))
                 .collect();
             // Every semi must be in the Major scale degrees (mod 12).
             for &s in &semis {
@@ -7647,7 +7767,7 @@ mod tests {
                 steps
                     .iter()
                     .take(2)
-                    .filter_map(|s| s.as_ref().map(|n| n.semi))
+                    .filter_map(|s| s.first().map(|n| n.semi))
                     .collect()
             } else {
                 panic!("expected Melodic");
@@ -7661,7 +7781,7 @@ mod tests {
                 steps
                     .iter()
                     .take(2)
-                    .filter_map(|s| s.as_ref().map(|n| n.semi))
+                    .filter_map(|s| s.first().map(|n| n.semi))
                     .collect()
             } else {
                 panic!("expected Melodic");
@@ -7675,7 +7795,7 @@ mod tests {
                 steps
                     .iter()
                     .take(2)
-                    .filter_map(|s| s.as_ref().map(|n| n.semi))
+                    .filter_map(|s| s.first().map(|n| n.semi))
                     .collect()
             } else {
                 panic!("expected Melodic");
@@ -7695,7 +7815,7 @@ mod tests {
                 steps
                     .iter()
                     .take(3)
-                    .filter_map(|s| s.as_ref().map(|n| n.semi))
+                    .filter_map(|s| s.first().map(|n| n.semi))
                     .collect()
             } else {
                 panic!("expected Melodic");
@@ -7721,7 +7841,7 @@ mod tests {
                 steps
                     .iter()
                     .take(3)
-                    .filter_map(|s| s.as_ref().map(|n| n.semi))
+                    .filter_map(|s| s.first().map(|n| n.semi))
                     .collect()
             } else {
                 panic!("expected Melodic");
@@ -7833,7 +7953,7 @@ mod tests {
         app.apply(Action::NoteInputPlace(0)); // C = offset 0
 
         if let PatternData::Melodic(steps) = &app.set.lanes[app.focus].pattern.data {
-            let note = steps[0].as_ref().expect("note must be placed at col 0");
+            let note = steps[0].first().expect("note must be placed at col 0");
             assert_eq!(
                 note.semi, 0,
                 "semi must be 0 (C) for offset 0, chromatic lane"
@@ -7860,7 +7980,7 @@ mod tests {
         app.apply(Action::NoteInputPlace(1)); // C# = offset 1
 
         if let PatternData::Melodic(steps) = &app.set.lanes[app.focus].pattern.data {
-            let note = steps[2].as_ref().expect("note must be placed at col 2");
+            let note = steps[2].first().expect("note must be placed at col 2");
             assert_eq!(
                 note.semi, 1,
                 "semi must be 1 (C#) for offset 1, chromatic lane"
@@ -7884,7 +8004,7 @@ mod tests {
         app.apply(Action::NoteInputPlace(1)); // offset 1 = C#, out of Major
 
         if let PatternData::Melodic(steps) = &app.set.lanes[app.focus].pattern.data {
-            let note = steps[0].as_ref().expect("note placed");
+            let note = steps[0].first().expect("note placed");
             let major_degrees: &[i8] = &[0, 2, 4, 5, 7, 9, 11];
             let semi_mod = ((note.semi % 12) + 12) as u8 % 12;
             assert!(
@@ -7936,7 +8056,7 @@ mod tests {
         app.apply(Action::NoteInputPlace(0)); // C in oct+1 = semi 12
 
         if let PatternData::Melodic(steps) = &app.set.lanes[app.focus].pattern.data {
-            let note = steps[0].as_ref().expect("note placed");
+            let note = steps[0].first().expect("note placed");
             assert_eq!(note.semi, 12, "oct+1 offset 0 → semi 12");
         } else {
             panic!("expected melodic");
@@ -7962,7 +8082,7 @@ mod tests {
         assert_eq!(app.cur_col, 2, "cursor must step back to 2");
         if let PatternData::Melodic(steps) = &app.set.lanes[app.focus].pattern.data {
             assert!(
-                steps[3].is_none(),
+                steps[3].is_empty(),
                 "col 3 must be cleared by backspace (was empty but backspace sets it None)"
             );
         } else {
@@ -8004,7 +8124,7 @@ mod tests {
         // One Undo restores the pre-session state (all three placements gone).
         app.apply(Action::Undo);
         if let PatternData::Melodic(steps) = &app.set.lanes[app.focus].pattern.data {
-            let placed: Vec<_> = steps.iter().take(3).filter(|s| s.is_some()).collect();
+            let placed: Vec<_> = steps.iter().take(3).filter(|s| !s.is_empty()).collect();
             assert!(
                 placed.is_empty(),
                 "Undo after NoteInput session must restore pre-session state (no placed notes)"
@@ -8021,5 +8141,329 @@ mod tests {
         app.apply(Action::FocusLane(1));
         app.apply(Action::OpenNoteInput);
         assert_eq!(app.context_label(), "NOTE INPUT");
+    }
+
+    // ── M5b Task 2: poly profile flag + mono enforcement ─────────────────────
+
+    /// Placing a second note on a mono lane (poly == false) replaces the first,
+    /// leaving exactly one note in the step (not two).
+    ///
+    /// Lane 1 = T-8 BASS (poly == false).
+    ///
+    /// Note: T4 will add chord-stacking Actions for poly lanes. Here we verify
+    /// only the mono enforcement guard in NoteInputPlace. For poly lanes, the
+    /// guard is absent — chord-stacking path doesn't exist yet (Task 4), so we
+    /// assert poly simply via the profile flag, not via stacking behaviour.
+    #[test]
+    fn mono_lane_step_holds_one_note() {
+        // ── Mono lane (T-8 BASS, lane 1) ──────────────────────────────────
+        let mut app = new_app();
+        app.apply(Action::FocusLane(1));
+        assert!(
+            !app.set.lanes[app.focus].profile.poly,
+            "lane 1 must have poly == false"
+        );
+        app.cur_col = 0;
+        app.apply(Action::OpenNoteInput);
+
+        // Place first note (semi 0 → C).
+        app.apply(Action::NoteInputPlace(0));
+        // Move cursor back to col 0 to place a second note on the same step.
+        app.cur_col = 0;
+        // Place second note (semi 2 → D, chromatic offset 2).
+        app.apply(Action::NoteInputPlace(2));
+
+        if let PatternData::Melodic(steps) = &app.set.lanes[app.focus].pattern.data {
+            let step = &steps[0];
+            assert_eq!(
+                step.len(),
+                1,
+                "mono lane: second note must REPLACE the first (step must hold exactly 1 note)"
+            );
+            assert_eq!(
+                step[0].semi, 2,
+                "mono lane: the surviving note must be the most-recently placed one"
+            );
+        } else {
+            panic!("expected melodic data on lane 1");
+        }
+
+        // ── Poly lane (S-1 SYNTH, lane 2) — verify flag only ──────────────
+        let app2 = new_app();
+        assert!(
+            app2.set.lanes[2].profile.poly,
+            "lane 2 must have poly == true"
+        );
+    }
+
+    // ── M5b Task 4: chord entry on poly lanes ────────────────────────────────
+
+    /// On a poly lane in note-input sub-mode, two different piano-key presses on the
+    /// same step STACK into a 2-note chord, and the cursor does NOT advance. Drives the
+    /// real Action path. Lane 2 = S-1 SYNTH (poly == true).
+    #[test]
+    fn add_chord_note_stacks_on_poly_lane() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(2));
+        assert!(app.set.lanes[app.focus].profile.poly, "lane 2 must be poly");
+        app.cur_col = 0;
+        app.apply(Action::OpenNoteInput);
+
+        // Press two DIFFERENT piano keys on the same step.
+        app.apply(Action::NoteInputPlace(0)); // root
+        app.apply(Action::NoteInputPlace(7)); // a fifth above
+
+        assert_eq!(
+            app.cur_col, 0,
+            "poly lane: cursor must NOT advance when stacking a chord"
+        );
+        if let PatternData::Melodic(steps) = &app.set.lanes[app.focus].pattern.data {
+            assert_eq!(
+                steps[0].len(),
+                2,
+                "poly lane: two presses must stack into a 2-note chord"
+            );
+            let semis: Vec<i8> = steps[0].iter().map(|n| n.semi).collect();
+            assert!(
+                semis.contains(&0) && semis.contains(&7),
+                "chord must hold both pitches, got {semis:?}"
+            );
+        } else {
+            panic!("expected melodic");
+        }
+        assert!(app.dirty, "dirty must be set after stacking");
+    }
+
+    /// Duplicate-pitch rule on a poly lane: pressing the SAME pitch again toggles it
+    /// off (no duplication).
+    #[test]
+    fn add_chord_note_toggles_off_duplicate_pitch_on_poly_lane() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(2));
+        app.cur_col = 0;
+        app.apply(Action::OpenNoteInput);
+
+        app.apply(Action::NoteInputPlace(0)); // add C
+        app.apply(Action::NoteInputPlace(4)); // add E
+        app.apply(Action::NoteInputPlace(0)); // press C again → toggles off
+
+        if let PatternData::Melodic(steps) = &app.set.lanes[app.focus].pattern.data {
+            let semis: Vec<i8> = steps[0].iter().map(|n| n.semi).collect();
+            assert_eq!(
+                semis,
+                vec![4],
+                "repeating a pitch must toggle it off (only E remains)"
+            );
+        } else {
+            panic!("expected melodic");
+        }
+    }
+
+    /// Regression guard: on a MONO lane, a note-input key press REPLACES (step holds 1)
+    /// AND advances the cursor (today's melody-typing behaviour). Lane 1 = T-8 BASS.
+    #[test]
+    fn note_input_replaces_and_advances_on_mono_lane() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(1));
+        assert!(
+            !app.set.lanes[app.focus].profile.poly,
+            "lane 1 must be mono"
+        );
+        app.cur_col = 0;
+        app.apply(Action::OpenNoteInput);
+
+        app.apply(Action::NoteInputPlace(0));
+        assert_eq!(
+            app.cur_col, 1,
+            "mono lane: cursor must advance after a placement"
+        );
+
+        if let PatternData::Melodic(steps) = &app.set.lanes[app.focus].pattern.data {
+            assert_eq!(steps[0].len(), 1, "mono lane: step holds exactly one note");
+        } else {
+            panic!("expected melodic");
+        }
+    }
+
+    /// BuildTriad on a poly Major lane adds a scale-aware 3rd (+2 degrees) and 5th
+    /// (+4 degrees): root 0 → {0, 4, 7} (major triad).
+    #[test]
+    fn build_triad_adds_scale_aware_third_and_fifth() {
+        use crate::music::scale::Scale;
+        let mut app = new_app();
+        app.apply(Action::FocusLane(2)); // poly
+        app.set.lanes[app.focus].scale = Scale::Major;
+        app.cur_col = 0;
+        // Seed a root note at semi 0.
+        if let PatternData::Melodic(steps) = &mut app.set.lanes[app.focus].pattern.data {
+            steps[0] = MelodicStep::from(vec![MelodicNote {
+                semi: 0,
+                vel: MEL_DEFAULT_VEL,
+                slide: false,
+                len: 0.9,
+                prob: 1.0,
+                ratchet: 1,
+            }]);
+        }
+
+        app.apply(Action::BuildTriad);
+
+        if let PatternData::Melodic(steps) = &app.set.lanes[app.focus].pattern.data {
+            let mut semis: Vec<i8> = steps[0].iter().map(|n| n.semi).collect();
+            semis.sort_unstable();
+            assert_eq!(
+                semis,
+                vec![0, 4, 7],
+                "Major triad from root 0 must be {{0, 4, 7}}"
+            );
+        } else {
+            panic!("expected melodic");
+        }
+        assert!(app.dirty, "dirty must be set after BuildTriad");
+
+        // Natural Minor: root 0 → {0, 3, 7} (minor third).
+        let mut app2 = new_app();
+        app2.apply(Action::FocusLane(2));
+        app2.set.lanes[app2.focus].scale = Scale::NaturalMinor;
+        app2.cur_col = 0;
+        if let PatternData::Melodic(steps) = &mut app2.set.lanes[app2.focus].pattern.data {
+            steps[0] = MelodicStep::from(vec![MelodicNote {
+                semi: 0,
+                vel: MEL_DEFAULT_VEL,
+                slide: false,
+                len: 0.9,
+                prob: 1.0,
+                ratchet: 1,
+            }]);
+        }
+        app2.apply(Action::BuildTriad);
+        if let PatternData::Melodic(steps) = &app2.set.lanes[app2.focus].pattern.data {
+            let mut semis: Vec<i8> = steps[0].iter().map(|n| n.semi).collect();
+            semis.sort_unstable();
+            assert_eq!(
+                semis,
+                vec![0, 3, 7],
+                "Minor triad from root 0 must be {{0, 3, 7}}"
+            );
+        } else {
+            panic!("expected melodic");
+        }
+    }
+
+    /// BuildTriad is a no-op on a mono lane (poly == false) and on an empty step,
+    /// with a status message.
+    #[test]
+    fn build_triad_noop_on_mono_lane() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(1)); // mono (T-8 BASS)
+        app.cur_col = 0;
+        if let PatternData::Melodic(steps) = &mut app.set.lanes[app.focus].pattern.data {
+            steps[0] = MelodicStep::from(vec![MelodicNote {
+                semi: 0,
+                vel: MEL_DEFAULT_VEL,
+                slide: false,
+                len: 0.5,
+                prob: 1.0,
+                ratchet: 1,
+            }]);
+        }
+        app.apply(Action::BuildTriad);
+        if let PatternData::Melodic(steps) = &app.set.lanes[app.focus].pattern.data {
+            assert_eq!(
+                steps[0].len(),
+                1,
+                "mono lane: BuildTriad must not add notes"
+            );
+        } else {
+            panic!("expected melodic");
+        }
+        assert!(
+            app.status.to_lowercase().contains("poly"),
+            "status must mention poly requirement, got: {:?}",
+            app.status
+        );
+
+        // Empty step on a poly lane is also a no-op with a status.
+        let mut app2 = new_app();
+        app2.apply(Action::FocusLane(2)); // poly
+        app2.cur_col = 0; // step 0 is a rest by default
+        app2.apply(Action::BuildTriad);
+        if let PatternData::Melodic(steps) = &app2.set.lanes[app2.focus].pattern.data {
+            assert!(
+                steps[0].is_empty(),
+                "empty step: BuildTriad must remain a rest"
+            );
+        } else {
+            panic!("expected melodic");
+        }
+    }
+
+    /// RemoveChordNote removes the LAST note from the cursor step.
+    #[test]
+    fn remove_chord_note_removes_last() {
+        let mut app = new_app();
+        app.apply(Action::FocusLane(2)); // poly
+        app.cur_col = 0;
+        if let PatternData::Melodic(steps) = &mut app.set.lanes[app.focus].pattern.data {
+            steps[0] = MelodicStep::from(vec![
+                MelodicNote {
+                    semi: 0,
+                    vel: 1.0,
+                    slide: false,
+                    len: 0.9,
+                    prob: 1.0,
+                    ratchet: 1,
+                },
+                MelodicNote {
+                    semi: 4,
+                    vel: 1.0,
+                    slide: false,
+                    len: 0.9,
+                    prob: 1.0,
+                    ratchet: 1,
+                },
+                MelodicNote {
+                    semi: 7,
+                    vel: 1.0,
+                    slide: false,
+                    len: 0.9,
+                    prob: 1.0,
+                    ratchet: 1,
+                },
+            ]);
+        }
+
+        app.apply(Action::RemoveChordNote);
+
+        if let PatternData::Melodic(steps) = &app.set.lanes[app.focus].pattern.data {
+            let semis: Vec<i8> = steps[0].iter().map(|n| n.semi).collect();
+            assert_eq!(
+                semis,
+                vec![0, 4],
+                "RemoveChordNote must drop the last note (7)"
+            );
+        } else {
+            panic!("expected melodic");
+        }
+        assert!(app.dirty, "dirty must be set after RemoveChordNote");
+
+        // Removing on a single-note step clears it (becomes a rest); empty step is a no-op.
+        app.apply(Action::RemoveChordNote); // now [0]
+        app.apply(Action::RemoveChordNote); // now [] (rest)
+        let depth = app.undo.len();
+        app.apply(Action::RemoveChordNote); // no-op on empty step
+        if let PatternData::Melodic(steps) = &app.set.lanes[app.focus].pattern.data {
+            assert!(
+                steps[0].is_empty(),
+                "step must be a rest after removing all notes"
+            );
+        } else {
+            panic!("expected melodic");
+        }
+        assert_eq!(
+            app.undo.len(),
+            depth,
+            "RemoveChordNote on an empty step must not snapshot"
+        );
     }
 }

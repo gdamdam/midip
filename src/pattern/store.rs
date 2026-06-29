@@ -291,11 +291,11 @@ pub fn validate_and_repair_pattern(p: &mut Pattern) -> Vec<String> {
         }
         crate::pattern::model::PatternData::Melodic(steps) => {
             if steps.len() != target {
-                steps.resize_with(target, || None);
+                steps.resize_with(target, crate::pattern::model::MelodicStep::default);
                 notes.push(format!("data resized to {}", target));
             }
             let mut note_repaired = false;
-            for step in steps.iter_mut().flatten() {
+            for step in steps.iter_mut().flat_map(|s| s.iter_mut()) {
                 let orig_vel = step.vel;
                 step.vel = step.vel.clamp(0.5, 1.3);
                 let orig_len = step.len;
@@ -847,14 +847,14 @@ mod tests {
         set.swing = 0.56;
         // Make lane 1 (melodic) non-trivial so we exercise note serialization.
         if let PatternData::Melodic(steps) = &mut set.lanes[1].pattern.data {
-            steps[0] = Some(MelodicNote {
+            steps[0] = crate::pattern::model::MelodicStep::from(vec![MelodicNote {
                 semi: 7,
                 vel: 1.3,
                 slide: true,
                 len: 0.5,
                 prob: 1.0,
                 ratchet: 1,
-            });
+            }]);
         }
         set.lanes[0].mute = true;
         set.lanes[2].transpose = 3;

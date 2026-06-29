@@ -34,8 +34,80 @@ pub struct MelodicNote {
     pub ratchet: u8, // 1..8 intra-step retriggers, default 1
 }
 
-/// Monophonic: a rest (None) or exactly one note.
-pub type MelodicStep = Option<MelodicNote>;
+/// A single melodic step: zero notes (rest), one note (mono — today's behavior), or
+/// many notes (a chord — used by poly lanes in later M5b tasks). Stored as a `Vec`.
+///
+/// Backward-compat (M5b Task 1): old data serialized each step as `null` (rest) or a
+/// single `MelodicNote` object; the new format is a JSON array. A custom `Deserialize`
+/// accepts ALL THREE shapes — `null` → `[]`, a single object → `[note]`, an array →
+/// as-is — so every existing pattern (vendored library + user/set JSON) loads unchanged.
+/// `Serialize` is adaptive for backward compatibility: a rest emits `null`, a single
+/// note emits a bare object (the legacy mono shape), and a chord (2+ notes) emits an
+/// array. So mono patterns written by this version still load in pre-chord builds; only
+/// chord-containing patterns become this-version-only. The shim lives here, in one place,
+/// so it applies everywhere serde reads a step. A `Deref`/`DerefMut` to `Vec<MelodicNote>`
+/// keeps call sites ergonomic (they use plain `Vec` methods); the wrapper only intercepts
+/// (de)serde.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct MelodicStep(pub Vec<MelodicNote>);
+
+impl std::ops::Deref for MelodicStep {
+    type Target = Vec<MelodicNote>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for MelodicStep {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl From<Vec<MelodicNote>> for MelodicStep {
+    fn from(v: Vec<MelodicNote>) -> Self {
+        MelodicStep(v)
+    }
+}
+
+impl serde::Serialize for MelodicStep {
+    /// Adaptive on-disk shape for backward compatibility: a rest serializes as `null`,
+    /// a single note as a bare object (the legacy mono shape), and a chord (2+ notes) as
+    /// an array. The `Deserialize` shim above accepts all three, so this round-trips while
+    /// keeping mono patterns readable by pre-chord builds.
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self.0.as_slice() {
+            [] => serializer.serialize_none(),
+            [one] => one.serialize(serializer),
+            many => many.serialize(serializer),
+        }
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for MelodicStep {
+    /// Accept the OLD shapes (`null` → rest, single object → one note) and the NEW
+    /// shape (array). An untagged helper enum dispatches on the JSON value.
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(serde::Deserialize)]
+        #[serde(untagged)]
+        enum Shim {
+            // `null` maps here: `Option<()>` deserializes JSON null to `None`. The payload
+            // is intentionally ignored (we only need to know the step is a rest), hence the
+            // `dead_code` allow on the unread field.
+            Rest(#[allow(dead_code)] Option<()>),
+            // A bare array of notes (new format). Must precede `One` so `[]`/`[..]`
+            // is not misread as a single (struct) note.
+            Many(Vec<MelodicNote>),
+            // A single note object (old mono format).
+            One(MelodicNote),
+        }
+        Ok(match Shim::deserialize(deserializer)? {
+            Shim::Rest(_) => MelodicStep(Vec::new()),
+            Shim::Many(v) => MelodicStep(v),
+            Shim::One(n) => MelodicStep(vec![n]),
+        })
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum PatternData {
@@ -119,7 +191,7 @@ impl Pattern {
             name: "init".to_string(),
             desc: String::new(),
             length,
-            data: PatternData::Melodic(vec![None; length]),
+            data: PatternData::Melodic(vec![MelodicStep::default(); length]),
             id: persist::Id::nil(),
         }
     }
@@ -283,7 +355,7 @@ mod tests {
         match &p.data {
             PatternData::Melodic(steps) => {
                 assert_eq!(steps.len(), 16);
-                assert!(steps.iter().all(|s| s.is_none()));
+                assert!(steps.iter().all(|s| s.is_empty()));
             }
             _ => panic!("expected melodic"),
         }
@@ -356,21 +428,173 @@ mod tests {
             desc: "another pattern".to_string(),
             length: 2,
             data: PatternData::Melodic(vec![
-                Some(MelodicNote {
+                MelodicStep::from(vec![MelodicNote {
                     semi: 0,
                     vel: 1.0,
                     slide: false,
                     len: 0.5,
                     prob: 1.0,
                     ratchet: 1,
-                }),
-                None,
+                }]),
+                MelodicStep::default(),
             ]),
             id: crate::persist::Id::nil(),
         };
         let json = serde_json::to_string(&p).unwrap();
         let back: Pattern = serde_json::from_str(&json).unwrap();
         assert_eq!(p, back);
+    }
+
+    // ── M5b Task 1: MelodicStep -> Vec<MelodicNote> backward-compat shim ─────
+
+    #[test]
+    fn old_melodic_json_with_null_and_object_steps_loads() {
+        // OLD per-step shape: a step is `null` (rest) or a single MelodicNote object.
+        // The deserialize shim must map null -> empty step ([]) and object -> [note].
+        let json = r#"{
+            "name":"old-mono #01",
+            "length":2,
+            "data":{"Melodic":[null,{"semi":0,"vel":1.0,"slide":false,"len":0.5}]}
+        }"#;
+        let p: Pattern = serde_json::from_str(json).unwrap();
+        match &p.data {
+            PatternData::Melodic(steps) => {
+                assert_eq!(steps.len(), 2);
+                // null -> empty (rest)
+                assert!(steps[0].is_empty(), "null step must map to an empty step");
+                // object -> one-note step
+                assert_eq!(steps[1].len(), 1, "object step must map to a one-note step");
+                assert_eq!(steps[1][0].semi, 0);
+                assert_eq!(steps[1][0].vel, 1.0);
+                // missing prob/ratchet default in via MelodicNote serde defaults.
+                assert_eq!(steps[1][0].prob, 1.0);
+                assert_eq!(steps[1][0].ratchet, 1);
+            }
+            _ => panic!("expected melodic"),
+        }
+    }
+
+    #[test]
+    fn vendored_library_still_loads() {
+        // The real vendored library uses the OLD object/null per-step shape. It must
+        // load through the real loader unchanged, and a known melodic pattern (bass)
+        // must carry its expected notes (mono: one note per active step).
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/patterns");
+        let lib = crate::pattern::library::Library::load(&dir).expect("vendored library loads");
+        let bass = lib.bass.values().next().expect("bass genre present");
+        let pat = bass.first().expect("a bass pattern present");
+        match &pat.data {
+            PatternData::Melodic(steps) => {
+                // First step in the vendored bass file is an object -> one-note step.
+                assert_eq!(steps[0].len(), 1, "vendored object step -> one-note step");
+                // The vendored file mixes object steps (notes) and null steps (rests):
+                // notes map to one-note steps, nulls to empty steps, and (being old mono
+                // data) NO step holds more than one note.
+                assert!(
+                    steps.iter().any(|s| s.is_empty()),
+                    "vendored null steps must map to empty (rest) steps"
+                );
+                assert!(
+                    steps.iter().any(|s| s.len() == 1),
+                    "vendored object steps must map to one-note steps"
+                );
+                assert!(
+                    steps.iter().all(|s| s.len() <= 1),
+                    "vendored mono data must never produce multi-note steps"
+                );
+            }
+            _ => panic!("expected melodic bass pattern"),
+        }
+    }
+
+    #[test]
+    fn melodic_step_serde_roundtrips_empty_one_and_many() {
+        let n1 = MelodicNote {
+            semi: 0,
+            vel: 1.0,
+            slide: false,
+            len: 0.5,
+            prob: 1.0,
+            ratchet: 1,
+        };
+        let n2 = MelodicNote {
+            semi: 7,
+            vel: 1.1,
+            slide: true,
+            len: 1.0,
+            prob: 0.8,
+            ratchet: 2,
+        };
+        // Adaptive on-disk shape: rest -> null, one note -> object, chord -> array.
+        let rest_json = serde_json::to_string(&MelodicStep::default()).unwrap();
+        assert_eq!(
+            rest_json, "null",
+            "a rest serializes as null, got {rest_json}"
+        );
+
+        let one_json = serde_json::to_string(&MelodicStep::from(vec![n1.clone()])).unwrap();
+        assert!(
+            one_json.starts_with('{'),
+            "a single note serializes as an object, got {one_json}"
+        );
+
+        let many_json =
+            serde_json::to_string(&MelodicStep::from(vec![n1.clone(), n2.clone()])).unwrap();
+        assert!(
+            many_json.starts_with('['),
+            "a chord serializes as an array, got {many_json}"
+        );
+
+        // All three shapes round-trip losslessly through the shim.
+        for step in [
+            MelodicStep::default(),                  // null  rest
+            MelodicStep::from(vec![n1.clone()]),     // {..}  mono
+            MelodicStep::from(vec![n1.clone(), n2]), // [..]  chord
+        ] {
+            let json = serde_json::to_string(&step).unwrap();
+            let back: MelodicStep = serde_json::from_str(&json).unwrap();
+            assert_eq!(step, back, "round-trip must be lossless for {json}");
+        }
+    }
+
+    #[test]
+    fn melodic_step_deserialize_accepts_null_object_and_array() {
+        // null -> empty
+        let rest: MelodicStep = serde_json::from_str("null").unwrap();
+        assert!(rest.is_empty());
+        // single object -> one note
+        let one: MelodicStep =
+            serde_json::from_str(r#"{"semi":3,"vel":1.0,"slide":false,"len":0.5}"#).unwrap();
+        assert_eq!(one.len(), 1);
+        assert_eq!(one[0].semi, 3);
+        // array -> as-is
+        let many: MelodicStep = serde_json::from_str(
+            r#"[{"semi":0,"vel":1.0,"slide":false,"len":0.5},{"semi":4,"vel":1.0,"slide":false,"len":0.5}]"#,
+        )
+        .unwrap();
+        assert_eq!(many.len(), 2);
+        assert_eq!(many[1].semi, 4);
+    }
+
+    #[test]
+    fn mono_pattern_reserializes_to_legacy_shape() {
+        // The backward-compat guarantee of adaptive serialize: a pattern containing only
+        // rests and single notes must re-serialize with NO array-shaped steps (rests ->
+        // null, notes -> objects), so a pre-chord build can still read what we wrote.
+        let json = r#"{"name":"m #01","length":2,"data":{"Melodic":[null,{"semi":0,"vel":1.0,"slide":false,"len":0.5}]}}"#;
+        let p: Pattern = serde_json::from_str(json).unwrap();
+        let v: serde_json::Value = serde_json::to_value(&p).unwrap();
+        let steps = v["data"]["Melodic"].as_array().unwrap();
+        assert!(
+            steps[0].is_null(),
+            "rest must re-serialize as null, got {}",
+            steps[0]
+        );
+        assert!(
+            steps[1].is_object(),
+            "a single note must re-serialize as a bare object (legacy shape), got {}",
+            steps[1]
+        );
     }
 
     #[test]
