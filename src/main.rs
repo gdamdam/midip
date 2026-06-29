@@ -114,6 +114,9 @@ fn run(mut terminal: Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
         );
     }
 
+    // Load persisted favorites.
+    app.favorites = midip::pattern::store::load_favorites(&midip::config::data_dir());
+
     app.set_status(lib_status);
 
     // Crash detection: if a recovery file exists with no clean-shutdown marker,

@@ -62,6 +62,8 @@ pub fn key_to_action(key: KeyEvent, mode: Mode, kind: LaneKind) -> Action {
             KeyCode::Char('a') => return Action::Audition, // cue/audition selected pattern
             KeyCode::Char('b') => return Action::ToggleLaunchQuant, // toggle bar/beat quant
             KeyCode::Char('C') => return Action::CancelQueue, // cancel pending queued launch
+            KeyCode::Char('f') => return Action::ToggleFavorite, // toggle favorite
+            KeyCode::Char('F') => return Action::ToggleFavFilter, // toggle favorites-only filter
             KeyCode::Char('l') | KeyCode::Esc => return Action::CloseLibrary,
             _ => {}
         },
@@ -1151,6 +1153,41 @@ mod tests {
         assert_eq!(
             key_to_action(k(KeyCode::Char('!')), Mode::Help, LaneKind::Drums),
             Action::Panic
+        );
+    }
+
+    // ── M4a Task 3: favorites key bindings in Library mode ───────────────────
+
+    #[test]
+    fn f_key_maps_to_toggle_favorite_in_library_mode() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('f')), Mode::Library, LaneKind::Drums),
+            Action::ToggleFavorite,
+            "'f' in Library mode must be ToggleFavorite"
+        );
+    }
+
+    #[test]
+    fn shift_f_key_maps_to_toggle_fav_filter_in_library_mode() {
+        let shift_f = KeyEvent::new(KeyCode::Char('F'), KeyModifiers::SHIFT);
+        assert_eq!(
+            key_to_action(shift_f, Mode::Library, LaneKind::Drums),
+            Action::ToggleFavFilter,
+            "'F' in Library mode must be ToggleFavFilter"
+        );
+    }
+
+    #[test]
+    fn space_and_bang_still_global_in_library_mode_after_favorites() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Char(' ')), Mode::Library, LaneKind::Drums),
+            Action::TogglePlay,
+            "space must remain TogglePlay in Library mode"
+        );
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('!')), Mode::Library, LaneKind::Drums),
+            Action::Panic,
+            "! must remain Panic in Library mode"
         );
     }
 }

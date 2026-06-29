@@ -13,6 +13,8 @@ use crate::pattern::model::{
     DrumHit, DrumStep, Lane, LaneKind, LaneRoute, MelodicNote, MelodicStep, Pattern, PatternData,
     PortRef, Set,
 };
+use crate::pattern::refs::PatternRef;
+use crate::pattern::store::Favorites;
 
 /// Purpose of a pending name-entry dialog.
 #[derive(Clone, Debug, PartialEq)]
@@ -190,6 +192,10 @@ pub enum Action {
     DoubleLength,
     /// Scroll the help overlay by `delta` lines (positive=down, negative=up).
     HelpScroll(i32),
+    /// Toggle the currently-selected library entry in/out of favorites. Library mode only.
+    ToggleFavorite,
+    /// Toggle favorites-only filter in the library browser. Library mode only.
+    ToggleFavFilter,
     None,
 }
 
@@ -288,6 +294,12 @@ pub struct App {
     /// as a "User" genre when the library browser opens.
     pub user_patterns: Vec<crate::pattern::model::Pattern>,
     pub help_scroll: u16,
+
+    // --- M4a Task 3: favorites ---
+    /// Persisted set of favorited pattern refs, loaded at startup.
+    pub favorites: Favorites,
+    /// When true, the library browser shows only favorited patterns.
+    pub fav_filter: bool,
 }
 
 /// Default melodic velocity multiplier when placing a note (1.0 -> MIDI 100).
@@ -348,6 +360,8 @@ impl App {
             current_set_path: None,
             user_patterns: Vec::new(),
             help_scroll: 0,
+            favorites: Favorites::default(),
+            fav_filter: false,
         }
     }
 
@@ -1345,6 +1359,32 @@ impl App {
                     // upper bound is clamped at render time
                 }
             }
+            Action::ToggleFavorite => {
+                if let Some(r) = self.selected_pattern_ref() {
+                    let name = r.display_name();
+                    let added = self.favorites.toggle(r);
+                    // Best-effort persist; ignore errors so a missing data dir never crashes.
+                    let _ = crate::pattern::store::save_favorites(
+                        &crate::config::data_dir(),
+                        &self.favorites,
+                    );
+                    if added {
+                        self.set_status(format!("\u{2605} favorited {}", name));
+                    } else {
+                        self.set_status(format!("unfavorited {}", name));
+                    }
+                }
+            }
+            Action::ToggleFavFilter => {
+                self.fav_filter = !self.fav_filter;
+                // Clamp lib_genre / lib_pattern so navigation stays sane after filter change.
+                self.clamp_lib_selection();
+                if self.fav_filter {
+                    self.set_status("Favorites only");
+                } else {
+                    self.set_status("All patterns");
+                }
+            }
             Action::None => {}
         }
         cmds
@@ -1993,6 +2033,31 @@ impl App {
         }
     }
 
+    /// Clamp lib_genre and lib_pattern to valid indices so that toggling the
+    /// favorites filter (which may shrink the visible list) never leaves a
+    /// selection pointing past the end of the filtered lists.
+    fn clamp_lib_selection(&mut self) {
+        let genre_count = self.current_genre_map().len();
+        if genre_count == 0 {
+            self.lib_genre = 0;
+            self.lib_pattern = 0;
+            return;
+        }
+        if self.lib_genre >= genre_count {
+            self.lib_genre = genre_count - 1;
+        }
+        let pat_count = self
+            .current_genre_map()
+            .get_index(self.lib_genre)
+            .map(|(_, v)| v.len())
+            .unwrap_or(0);
+        if pat_count == 0 {
+            self.lib_pattern = 0;
+        } else if self.lib_pattern >= pat_count {
+            self.lib_pattern = pat_count - 1;
+        }
+    }
+
     fn lib_nav(&mut self, dx: i32, dy: i32) {
         // dx: column switch (Left=-1 → Genre, Right=+1 → Pattern)
         // dy: move selection within the focused column
@@ -2040,6 +2105,31 @@ impl App {
         let map = self.current_genre_map();
         map.get_index(self.lib_genre)
             .and_then(|(_, v)| v.get(self.lib_pattern))
+    }
+
+    /// Build a `PatternRef` for the currently-selected library entry.
+    /// Returns `None` when there is no selection.
+    ///
+    /// Vendored entries (any genre other than "User") produce `PatternRef::Vendored`.
+    /// Entries in the "User" genre produce `PatternRef::User(pattern.id)`.
+    pub fn selected_pattern_ref(&self) -> Option<PatternRef> {
+        let map = self.current_genre_map();
+        let (genre, patterns) = map.get_index(self.lib_genre)?;
+        let pat = patterns.get(self.lib_pattern)?;
+        if genre == "User" {
+            Some(PatternRef::User(pat.id.clone()))
+        } else {
+            let role = match self.lib_role {
+                LibRole::Drums => "drums",
+                LibRole::Bass => "bass",
+                LibRole::Synth => "synth",
+            };
+            Some(PatternRef::Vendored {
+                role: role.to_string(),
+                genre: genre.clone(),
+                name: pat.name.clone(),
+            })
+        }
     }
 }
 
@@ -5020,5 +5110,144 @@ mod tests {
             assert!(!steps[0].is_empty(), "step 0 hit restored after undo");
             assert!(!steps[4].is_empty(), "step 4 hit restored after undo");
         }
+    }
+
+    // ── M4a Task 3: favorites ──────────────────────────────────────────────
+
+    /// Build a minimal library with one vendored pattern in drums/techno and
+    /// a User genre with one user pattern.
+    fn library_for_fav_tests() -> (crate::pattern::library::Library, crate::persist::Id) {
+        use crate::pattern::library::{GenreMap, Library};
+        use crate::pattern::model::{DrumHit, Pattern, PatternData};
+        use crate::persist;
+
+        let mut drums = GenreMap::new();
+        let vendored = Pattern {
+            name: "Four on Floor".to_string(),
+            desc: String::new(),
+            length: 16,
+            data: PatternData::Drums(vec![
+                vec![DrumHit {
+                    note: 36,
+                    vel: 100,
+                    prob: 1.0,
+                    ratchet: 1,
+                }];
+                16
+            ]),
+            id: persist::Id::nil(),
+        };
+        drums.insert("techno".to_string(), vec![vendored]);
+
+        // User pattern with a real (non-nil) id so PatternRef::User carries it.
+        let user_id = persist::mint_id();
+        let user_pat = Pattern {
+            name: "My Beat".to_string(),
+            desc: String::new(),
+            length: 16,
+            data: PatternData::Drums(vec![Vec::new(); 16]),
+            id: user_id.clone(),
+        };
+        drums.insert("User".to_string(), vec![user_pat]);
+
+        let lib = Library {
+            drums,
+            bass: GenreMap::new(),
+            synth: GenreMap::new(),
+        };
+        (lib, user_id)
+    }
+
+    #[test]
+    fn selected_pattern_ref_builds_vendored_and_user() {
+        use crate::app::Mode;
+        use crate::devices::profiles::default_profiles;
+        use crate::pattern::library::LibRole;
+        use crate::pattern::model::Set;
+        use crate::pattern::refs::PatternRef;
+
+        let (lib, user_id) = library_for_fav_tests();
+        let set = Set::default_set(default_profiles());
+        let mut app = App::new(set, lib);
+        app.mode = Mode::Library;
+        app.lib_role = LibRole::Drums;
+
+        // Genre 0 = "techno" (inserted first), pattern 0 = "Four on Floor"
+        app.lib_genre = 0;
+        app.lib_pattern = 0;
+        let r = app.selected_pattern_ref().expect("should have a ref");
+        assert_eq!(
+            r,
+            PatternRef::Vendored {
+                role: "drums".to_string(),
+                genre: "techno".to_string(),
+                name: "Four on Floor".to_string(),
+            },
+            "vendored selection must produce Vendored ref"
+        );
+
+        // Genre 1 = "User", pattern 0 = user pattern
+        app.lib_genre = 1;
+        app.lib_pattern = 0;
+        let r2 = app.selected_pattern_ref().expect("should have user ref");
+        assert_eq!(
+            r2,
+            PatternRef::User(user_id),
+            "User-genre selection must produce User(id) ref"
+        );
+    }
+
+    #[test]
+    fn toggle_favorite_adds_and_removes() {
+        use crate::app::Mode;
+        use crate::devices::profiles::default_profiles;
+        use crate::pattern::library::LibRole;
+        use crate::pattern::model::Set;
+
+        let (lib, _) = library_for_fav_tests();
+        let set = Set::default_set(default_profiles());
+        let mut app = App::new(set, lib);
+        app.mode = Mode::Library;
+        app.lib_role = LibRole::Drums;
+        app.lib_genre = 0;
+        app.lib_pattern = 0;
+
+        // First toggle: should add to favorites.
+        app.apply(Action::ToggleFavorite);
+        let r = app.selected_pattern_ref().unwrap();
+        assert!(
+            app.favorites.contains(&r),
+            "after first ToggleFavorite the pattern must be in favorites"
+        );
+
+        // Second toggle: should remove from favorites.
+        app.apply(Action::ToggleFavorite);
+        assert!(
+            !app.favorites.contains(&r),
+            "after second ToggleFavorite the pattern must be removed from favorites"
+        );
+    }
+
+    #[test]
+    fn fav_filter_toggles() {
+        use crate::devices::profiles::default_profiles;
+        use crate::pattern::library::Library;
+        use crate::pattern::model::Set;
+
+        let set = Set::default_set(default_profiles());
+        let mut app = App::new(set, Library::empty());
+        assert!(!app.fav_filter, "fav_filter starts false");
+
+        app.apply(Action::ToggleFavFilter);
+        assert!(
+            app.fav_filter,
+            "after first ToggleFavFilter it must be true"
+        );
+
+        app.apply(Action::ToggleFavFilter);
+        assert!(
+            !app.fav_filter,
+            "after second ToggleFavFilter it must be false"
+        );
     }
 }
