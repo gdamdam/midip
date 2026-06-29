@@ -1066,3 +1066,204 @@ fn chord_survives_save_load_and_plays_with_clean_release() {
     // Clean up.
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 9. Scene lifecycle: capture → save → load → recall (M6 close-out).
+//    Features combined: Scene::capture_scene × set save/load (serde + validate/
+//    repair) × stopped-transport RecallScene (immediate apply) × per-lane
+//    performance state (mute + transpose + octave).
+//
+//    Playback after recall is NOT exercised here: the inline-pattern ids produced
+//    by capture_scene are PatternRef::User(id), which resolve correctly via the
+//    in-memory inline list but would require wiring a headless engine with a full
+//    UiCommand::QueueScene consumer to observe NoteOn output — that coupling is
+//    out of scope for a stopped-transport acceptance test. The recall-state
+//    assertions (lane fields) are the definitive M6 acceptance gate.
+// ═════════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn scene_capture_save_load_recall_roundtrip() {
+    use midip::app::{Action, App};
+    use midip::persist;
+
+    let dir = unique_dir("scene-roundtrip");
+
+    // ── 1. Build a set with DISTINCT per-lane performance state ──────────────
+    // Patterns must have non-nil ids so PatternRef::User resolution works after
+    // capture_scene snapshots lane.pattern.id into each assignment.
+    let profs = profiles::default_profiles();
+
+    let drums_pat = {
+        let mut steps: Vec<DrumStep> = vec![Vec::new(); 16];
+        steps[0].push(DrumHit {
+            note: 36,
+            vel: 100,
+            prob: 1.0,
+            ratchet: 1,
+        });
+        Pattern {
+            name: "scene-drums".into(),
+            desc: String::new(),
+            length: 16,
+            data: PatternData::Drums(steps),
+            id: persist::mint_id(),
+        }
+    };
+    let mut bass_pat = melodic_pattern("scene-bass", &[(0, 0, 0.5), (8, 5, 0.5)]);
+    bass_pat.id = persist::mint_id();
+    let mut synth_pat = melodic_pattern("scene-synth", &[(4, 12, 0.9)]);
+    synth_pat.id = persist::mint_id();
+
+    let mut set = Set {
+        name: "scene-test".into(),
+        bpm: 120.0,
+        swing: 0.5,
+        lanes: vec![
+            lane(profs[0], drums_pat.clone()),
+            lane(profs[1], bass_pat.clone()),
+            lane(profs[2], synth_pat.clone()),
+        ],
+        id: persist::mint_id(),
+        scenes: Vec::new(),
+    };
+
+    // Give each lane a DISTINCT non-default performance state.
+    set.lanes[0].mute = true; // drums: muted
+    set.lanes[1].transpose = 5; // bass: transposed up 5 semitones
+    set.lanes[2].octave = -1; // synth: one octave down
+
+    // ── 2. Capture scene; assert assignments match captured state ─────────────
+    let scene = set.capture_scene("M6-Scene".to_string());
+
+    assert!(
+        !scene.id.is_nil(),
+        "capture_scene must mint a non-nil scene id"
+    );
+    assert_eq!(scene.name, "M6-Scene");
+    assert_eq!(scene.assignments.len(), 3, "one assignment per lane");
+
+    // Lane 0: muted, pattern id matches drums
+    assert_eq!(
+        scene.assignments[0].pattern,
+        PatternRef::User(drums_pat.id.clone())
+    );
+    assert!(scene.assignments[0].mute, "lane 0 mute must be captured");
+    assert_eq!(scene.assignments[0].transpose, 0);
+    assert_eq!(scene.assignments[0].octave, 0);
+
+    // Lane 1: transposed
+    assert_eq!(
+        scene.assignments[1].pattern,
+        PatternRef::User(bass_pat.id.clone())
+    );
+    assert!(!scene.assignments[1].mute);
+    assert_eq!(
+        scene.assignments[1].transpose, 5,
+        "lane 1 transpose must be captured"
+    );
+    assert_eq!(scene.assignments[1].octave, 0);
+
+    // Lane 2: octave shifted
+    assert_eq!(
+        scene.assignments[2].pattern,
+        PatternRef::User(synth_pat.id.clone())
+    );
+    assert!(!scene.assignments[2].mute);
+    assert_eq!(scene.assignments[2].transpose, 0);
+    assert_eq!(
+        scene.assignments[2].octave, -1,
+        "lane 2 octave must be captured"
+    );
+
+    // Push scene into set before saving.
+    set.scenes.push(scene.clone());
+
+    // ── 3. Save → load round-trip; assert scene survives persistence ──────────
+    let saved_path = store::save_set(&dir, &mut set).unwrap();
+    let loaded_set = store::load_set(&saved_path).unwrap();
+
+    assert_eq!(loaded_set.scenes.len(), 1, "scene must survive save/load");
+    let loaded_scene = &loaded_set.scenes[0];
+    assert_eq!(
+        loaded_scene.id, scene.id,
+        "scene id must be stable across serde"
+    );
+    assert_eq!(loaded_scene.name, "M6-Scene");
+    assert_eq!(loaded_scene.assignments.len(), 3);
+    assert_eq!(loaded_scene.assignments[0], scene.assignments[0]);
+    assert_eq!(loaded_scene.assignments[1], scene.assignments[1]);
+    assert_eq!(loaded_scene.assignments[2], scene.assignments[2]);
+
+    // ── 4. Recall: mutate live lanes, dispatch RecallScene(0), assert restore ──
+    let mut app = App::new(loaded_set, test_library());
+    // engine_playing defaults to false → stopped transport → immediate apply.
+    assert!(
+        !app.engine_playing,
+        "transport must be stopped for deterministic recall"
+    );
+
+    // Corrupt lane state so recall is observable.
+    app.set.lanes[0].mute = false; // was true in captured scene
+    app.set.lanes[1].transpose = 0; // was 5 in captured scene
+    app.set.lanes[2].octave = 1; // was -1 in captured scene
+
+    let cmds = app.apply(Action::RecallScene(0));
+
+    // Stopped recall emits LoadPattern + Mute + Solo + Transpose + SetOctave per lane.
+    assert!(
+        cmds.iter()
+            .any(|c| matches!(c, UiCommand::LoadPattern { lane: 0, .. })),
+        "RecallScene must emit LoadPattern for lane 0"
+    );
+    assert!(
+        cmds.iter()
+            .any(|c| matches!(c, UiCommand::Mute { lane: 0, on: true })),
+        "RecallScene must restore mute=true on lane 0"
+    );
+    assert!(
+        cmds.iter()
+            .any(|c| matches!(c, UiCommand::Transpose { lane: 1, semis: 5 })),
+        "RecallScene must restore transpose=5 on lane 1"
+    );
+    assert!(
+        cmds.iter().any(|c| matches!(
+            c,
+            UiCommand::SetOctave {
+                lane: 2,
+                octave: -1
+            }
+        )),
+        "RecallScene must restore octave=-1 on lane 2"
+    );
+
+    // Assert the live lane fields were actually written (not just commands emitted).
+    assert!(
+        app.set.lanes[0].mute,
+        "lane 0 mute must be restored to true"
+    );
+    assert_eq!(
+        app.set.lanes[0].pattern.id, drums_pat.id,
+        "lane 0 pattern id must match captured"
+    );
+    assert_eq!(
+        app.set.lanes[1].transpose, 5,
+        "lane 1 transpose must be restored to 5"
+    );
+    assert_eq!(
+        app.set.lanes[1].pattern.id, bass_pat.id,
+        "lane 1 pattern id must match captured"
+    );
+    assert_eq!(
+        app.set.lanes[2].octave, -1,
+        "lane 2 octave must be restored to -1"
+    );
+    assert_eq!(
+        app.set.lanes[2].pattern.id, synth_pat.id,
+        "lane 2 pattern id must match captured"
+    );
+
+    // ── 5. Playback: out of scope (see block comment above). ──────────────────
+
+    // Clean up.
+    let _ = std::fs::remove_dir_all(&dir);
+}
