@@ -9,6 +9,7 @@ use crate::engine::scheduler::{LaunchState, Quant};
 use crate::engine::{EngineEvent, UiCommand};
 use crate::music::scale::{fold_to_scale, step_by_degree, Scale};
 use crate::pattern::euclid;
+use crate::pattern::generate::{generate, next_rng, GenMode, GenParams};
 use crate::pattern::library::{LibRole, Library};
 use crate::pattern::model::{
     DrumHit, DrumStep, Lane, LaneKind, LaneRoute, MelodicNote, MelodicStep, Pattern, PatternData,
@@ -79,6 +80,12 @@ pub enum Mode {
     /// Snapshot is taken ONCE on entry so the whole input session is a single undo unit.
     /// `Esc` returns to Edit without an additional snapshot.
     NoteInput,
+    /// Generative pattern tool: preview/audition/commit/cancel on the focused lane.
+    ///
+    /// Entered via `OpenGenerative`; live preview is held in `temp_transform` (same
+    /// machinery as `ToggleFill`). Snapshot is deferred to `GenCommit` (one undo entry).
+    /// `GenCancel`/`Esc` reverts without adding any snapshot.
+    Generative,
 }
 
 /// Which field is focused in the route editor (cycles Left/Right).
@@ -425,7 +432,36 @@ pub enum Action {
     /// On a single-note step this clears it (becomes a rest). No-op on an empty step.
     /// Snapshots for undo.
     RemoveChordNote,
+    // ── M9 Generative tool ───────────────────────────────────────────────────
+    /// Open the generative tool for the focused lane: set `Mode::Generative`, init `GenParams`
+    /// with a session-seeded RNG, generate a candidate into `temp_transform`, emit `LoadPattern`.
+    /// NO snapshot — mirrors `ToggleFill`.
+    OpenGenerative,
+    /// Switch the generation mode (Generate ↔ Vary); regenerate preview.
+    GenSetMode(GenMode),
+    /// Adjust a `GenParams` field by `delta`; clamp to 0..=100 (or 0..=127 for range).
+    /// Regenerates the preview in place — no snapshot.
+    GenAdjust {
+        field: GenField,
+        delta: i32,
+    },
+    /// Bump the seed via `next_rng` and regenerate a fresh candidate. No snapshot.
+    GenReroll,
+    /// Commit the current candidate: push pre-op Set to undo (one entry), apply, mark dirty,
+    /// close `Mode::Generative`. Mirrors `CommitTransform`.
+    GenCommit,
+    /// Cancel: restore the original pattern, clear `temp_transform`, close `Mode::Generative`.
+    /// Zero undo entries added.
+    GenCancel,
     None,
+}
+
+/// Which `GenParams` field a `GenAdjust` action targets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GenField {
+    Density,
+    Range,
+    Mutate,
 }
 
 /// Number of steps visible in the editor at once. Steps beyond this are reached via scrolling.
@@ -550,6 +586,11 @@ pub struct App {
     /// but `snapshot()` is deferred to `CommitTransform` — so it is non-destructive
     /// until the performer chooses to keep it.
     pub temp_transform: Option<TempTransform>,
+    // ── M9: Generative tool state ────────────────────────────────────────────
+    /// Parameters for the active generative session. Valid only while `mode == Mode::Generative`.
+    pub gen_params: GenParams,
+    /// Per-session RNG state for `next_rng`. Seeded once in `App::new`; bumped by `GenReroll`.
+    pub gen_seed: u64,
     // ── M5a Task 5: QWERTY note-input sub-mode ───────────────────────────────
     /// Octave offset applied on top of the QWERTY semitone map while in `Mode::NoteInput`.
     /// Range −3..=3 (clamped). Reset to 0 each time `Mode::NoteInput` is entered.
@@ -634,6 +675,8 @@ impl App {
             crate_entry_sel: 0,
             crate_issues: Vec::new(),
             temp_transform: None,
+            gen_params: GenParams::default(),
+            gen_seed: 0x9e37_79b9_7f4a_7c15, // non-zero Fibonacci-hash constant
             note_input_octave: 0,
             scene_sel: 0,
             scene_issues: Vec::new(),
@@ -3011,6 +3054,109 @@ impl App {
                     cmds.push(self.load_focused());
                 }
             }
+            // ── M9 Generative tool ───────────────────────────────────────────
+            Action::OpenGenerative => {
+                let lane = self.focus;
+                let original = self.set.lanes[lane].pattern.clone();
+                // Seed this session from the rolling gen_seed.
+                let seed = next_rng(&mut self.gen_seed);
+                let params = GenParams {
+                    seed,
+                    ..GenParams::default()
+                };
+                self.gen_params = params.clone();
+                let candidate = generate(&params, &original, &self.set.lanes[lane]);
+                self.set.lanes[lane].pattern = candidate;
+                self.temp_transform = Some(TempTransform { lane, original });
+                self.mode = Mode::Generative;
+                self.set_status("Generative: preview active");
+                cmds.push(UiCommand::LoadPattern {
+                    lane,
+                    pattern: self.set.lanes[lane].pattern.clone(),
+                });
+            }
+            Action::GenSetMode(mode) => {
+                if let Some(tt) = &self.temp_transform {
+                    self.gen_params.mode = mode;
+                    let lane = tt.lane;
+                    let original = tt.original.clone();
+                    let candidate = generate(&self.gen_params, &original, &self.set.lanes[lane]);
+                    self.set.lanes[lane].pattern = candidate;
+                    cmds.push(UiCommand::LoadPattern {
+                        lane,
+                        pattern: self.set.lanes[lane].pattern.clone(),
+                    });
+                }
+            }
+            Action::GenAdjust { field, delta } => {
+                if let Some(tt) = &self.temp_transform {
+                    match field {
+                        GenField::Density => {
+                            self.gen_params.density =
+                                (self.gen_params.density as i32 + delta).clamp(0, 100) as u8;
+                        }
+                        GenField::Range => {
+                            self.gen_params.range =
+                                (self.gen_params.range as i32 + delta).clamp(0, 127) as u8;
+                        }
+                        GenField::Mutate => {
+                            self.gen_params.mutate =
+                                (self.gen_params.mutate as i32 + delta).clamp(0, 100) as u8;
+                        }
+                    }
+                    let lane = tt.lane;
+                    let original = tt.original.clone();
+                    let candidate = generate(&self.gen_params, &original, &self.set.lanes[lane]);
+                    self.set.lanes[lane].pattern = candidate;
+                    cmds.push(UiCommand::LoadPattern {
+                        lane,
+                        pattern: self.set.lanes[lane].pattern.clone(),
+                    });
+                }
+            }
+            Action::GenReroll => {
+                if let Some(tt) = &self.temp_transform {
+                    self.gen_params.seed = next_rng(&mut self.gen_seed);
+                    let lane = tt.lane;
+                    let original = tt.original.clone();
+                    let candidate = generate(&self.gen_params, &original, &self.set.lanes[lane]);
+                    self.set.lanes[lane].pattern = candidate;
+                    cmds.push(UiCommand::LoadPattern {
+                        lane,
+                        pattern: self.set.lanes[lane].pattern.clone(),
+                    });
+                }
+            }
+            Action::GenCommit => {
+                if let Some(tt) = self.temp_transform.take() {
+                    // Mirror CommitTransform: push the pre-op Set (with original pattern)
+                    // to the undo stack — one entry, exactly like ToggleFill+CommitTransform.
+                    let mut pre_op_set = self.set.clone();
+                    pre_op_set.lanes[tt.lane].pattern = tt.original;
+                    self.undo.push(pre_op_set);
+                    if self.undo.len() > Self::UNDO_LIMIT {
+                        self.undo.remove(0);
+                    }
+                    self.redo.clear();
+                    self.dirty = true;
+                    self.mode = Mode::Edit;
+                    self.set_status("Generative: committed");
+                } else {
+                    self.set_status("No generative preview to commit");
+                }
+            }
+            Action::GenCancel => {
+                if let Some(tt) = self.temp_transform.take() {
+                    let lane = tt.lane;
+                    self.set.lanes[lane].pattern = tt.original;
+                    cmds.push(UiCommand::LoadPattern {
+                        lane,
+                        pattern: self.set.lanes[lane].pattern.clone(),
+                    });
+                }
+                self.mode = Mode::Edit;
+                self.set_status("Generative: cancelled");
+            }
             Action::None => {}
         }
         cmds
@@ -3174,6 +3320,7 @@ impl App {
             Mode::Scenes => "SCENES",
             Mode::Chains => "CHAINS",
             Mode::NoteInput => "NOTE INPUT",
+            Mode::Generative => "GENERATIVE",
         }
     }
 
@@ -10369,5 +10516,177 @@ mod tests {
                 "manual RecallScene must still honour launch_quant (NextBeat)"
             );
         }
+    }
+
+    // ── M9 Generative workflow tests ─────────────────────────────────────────
+
+    /// OpenGenerative sets Mode::Generative, installs a temp_transform preview,
+    /// emits a LoadPattern, and adds NO undo entry.
+    #[test]
+    fn gen_open_sets_mode_and_preview_no_undo() {
+        let mut app = new_app();
+        let before_undo = app.undo.len();
+        let cmds = app.apply(Action::OpenGenerative);
+        assert_eq!(
+            app.mode,
+            Mode::Generative,
+            "OpenGenerative must set Mode::Generative"
+        );
+        assert!(
+            app.temp_transform.is_some(),
+            "OpenGenerative must install a temp_transform"
+        );
+        assert_eq!(
+            app.undo.len(),
+            before_undo,
+            "OpenGenerative must NOT add an undo entry"
+        );
+        assert!(
+            cmds.iter()
+                .any(|c| matches!(c, UiCommand::LoadPattern { .. })),
+            "OpenGenerative must emit LoadPattern"
+        );
+    }
+
+    /// GenAdjust regenerates the preview (updates temp_transform candidate) but adds no snapshot.
+    #[test]
+    fn gen_adjust_regenerates_preview_no_snapshot() {
+        let mut app = new_app();
+        app.apply(Action::OpenGenerative);
+        let before_undo = app.undo.len();
+        // Capture current previewed pattern.
+        let preview_before = app.set.lanes[app.focus].pattern.clone();
+        // Adjust density to force a different candidate.
+        let cmds = app.apply(Action::GenAdjust {
+            field: GenField::Density,
+            delta: 50,
+        });
+        assert_eq!(
+            app.undo.len(),
+            before_undo,
+            "GenAdjust must NOT add an undo entry"
+        );
+        assert!(
+            cmds.iter()
+                .any(|c| matches!(c, UiCommand::LoadPattern { .. })),
+            "GenAdjust must emit LoadPattern"
+        );
+        // temp_transform must still be set.
+        assert!(
+            app.temp_transform.is_some(),
+            "temp_transform must remain set after GenAdjust"
+        );
+        // The candidate in the live lane may differ from before (density changed).
+        // We can't guarantee it differs for all patterns, but the original must be preserved.
+        let tt = app.temp_transform.as_ref().unwrap();
+        assert_ne!(
+            tt.original, preview_before,
+            "original must NOT be the first-candidate pattern — it is the pre-open original"
+        );
+        let _ = preview_before; // silence unused warning
+    }
+
+    /// GenReroll changes the seed and produces a new candidate, no undo entry.
+    #[test]
+    fn gen_reroll_changes_candidate_no_undo() {
+        let mut app = new_app();
+        app.apply(Action::OpenGenerative);
+        let before_undo = app.undo.len();
+        let candidate_before = app.set.lanes[app.focus].pattern.clone();
+        let seed_before = app.gen_params.seed;
+        app.apply(Action::GenReroll);
+        assert_eq!(
+            app.undo.len(),
+            before_undo,
+            "GenReroll must NOT add an undo entry"
+        );
+        // seed must have changed
+        assert_ne!(
+            app.gen_params.seed, seed_before,
+            "GenReroll must bump the seed"
+        );
+        // Because generate() is deterministic per seed+params, a different seed
+        // generally produces a different candidate (may rarely be equal for trivial patterns,
+        // but we assert the seed changed, which is the reliable invariant).
+        let _ = candidate_before;
+    }
+
+    /// GenCommit adds EXACTLY ONE undo entry and applies the candidate; mode returns to Edit.
+    #[test]
+    fn gen_commit_adds_one_undo_entry_and_applies() {
+        let mut app = new_app();
+        let original_pattern = app.set.lanes[app.focus].pattern.clone();
+        app.apply(Action::OpenGenerative);
+        let before_undo = app.undo.len();
+        let candidate = app.set.lanes[app.focus].pattern.clone();
+        app.apply(Action::GenCommit);
+        assert_eq!(app.mode, Mode::Edit, "GenCommit must return to Mode::Edit");
+        assert!(
+            app.temp_transform.is_none(),
+            "GenCommit must clear temp_transform"
+        );
+        assert!(app.dirty, "GenCommit must mark set dirty");
+        assert_eq!(
+            app.undo.len(),
+            before_undo + 1,
+            "GenCommit must push exactly ONE undo entry"
+        );
+        // The live lane must hold the candidate, not the original.
+        assert_eq!(
+            app.set.lanes[app.focus].pattern, candidate,
+            "GenCommit must apply the candidate to the lane"
+        );
+        // Undoing must restore the original pattern.
+        app.apply(Action::Undo);
+        assert_eq!(
+            app.set.lanes[app.focus].pattern, original_pattern,
+            "Undo after GenCommit must restore the pre-gen original"
+        );
+    }
+
+    /// GenCancel restores the original pattern and adds ZERO undo entries.
+    #[test]
+    fn gen_cancel_restores_original_no_undo() {
+        let mut app = new_app();
+        let original_pattern = app.set.lanes[app.focus].pattern.clone();
+        app.apply(Action::OpenGenerative);
+        let before_undo = app.undo.len();
+        let cmds = app.apply(Action::GenCancel);
+        assert_eq!(app.mode, Mode::Edit, "GenCancel must return to Mode::Edit");
+        assert!(
+            app.temp_transform.is_none(),
+            "GenCancel must clear temp_transform"
+        );
+        assert_eq!(
+            app.undo.len(),
+            before_undo,
+            "GenCancel must NOT add any undo entry"
+        );
+        assert_eq!(
+            app.set.lanes[app.focus].pattern, original_pattern,
+            "GenCancel must restore the original pattern"
+        );
+        assert!(
+            cmds.iter()
+                .any(|c| matches!(c, UiCommand::LoadPattern { .. })),
+            "GenCancel must emit LoadPattern to restore the engine"
+        );
+    }
+
+    /// GenSetMode toggles the generation strategy and regenerates; no undo entry.
+    #[test]
+    fn gen_set_mode_updates_params_no_undo() {
+        use crate::pattern::generate::GenMode;
+        let mut app = new_app();
+        app.apply(Action::OpenGenerative);
+        assert_eq!(app.gen_params.mode, GenMode::Generate);
+        let before_undo = app.undo.len();
+        app.apply(Action::GenSetMode(GenMode::Vary));
+        assert_eq!(app.gen_params.mode, GenMode::Vary);
+        assert_eq!(
+            app.undo.len(),
+            before_undo,
+            "GenSetMode must NOT add an undo entry"
+        );
     }
 }

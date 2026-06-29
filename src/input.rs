@@ -224,6 +224,13 @@ pub fn key_to_action(key: KeyEvent, mode: Mode, kind: LaneKind) -> Action {
             };
         }
         Mode::Edit => {}
+        // Generative panel keybindings are wired in Task 6; Esc cancels for safety.
+        Mode::Generative => {
+            return match key.code {
+                KeyCode::Esc => Action::GenCancel,
+                _ => Action::None,
+            };
+        }
     }
 
     // '?' works in any non-Library mode.

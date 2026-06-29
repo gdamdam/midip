@@ -45,8 +45,6 @@ impl Default for GenParams {
 ///
 /// The all-zero state would cycle forever producing zeros, so callers should
 /// seed with a non-zero value (GenParams::seed defaults to 1).
-// Tasks 2–4 will call this; allow dead_code until then.
-#[allow(dead_code)]
 pub(crate) fn next_rng(state: &mut u64) -> u64 {
     let mut x = *state;
     x ^= x << 13;
@@ -108,7 +106,12 @@ fn generate_drums(params: &GenParams, source: &Pattern) -> Pattern {
                         .unwrap_or(36),
                     _ => 36,
                 };
-                vec![DrumHit { note, vel, prob: 1.0, ratchet: 1 }]
+                vec![DrumHit {
+                    note,
+                    vel,
+                    prob: 1.0,
+                    ratchet: 1,
+                }]
             } else {
                 vec![]
             }
@@ -171,7 +174,8 @@ fn generate_melodic(params: &GenParams, source: &Pattern, lane: &Lane) -> Patter
 
                 // Seeded velocity multiplier in [MEL_VEL_BASE, MEL_VEL_BASE + MEL_VEL_SPREAD).
                 let v = next_rng(&mut rng);
-                let vel = MEL_VEL_BASE + (v % MEL_VEL_DENOM) as f32 / MEL_VEL_DENOM as f32 * MEL_VEL_SPREAD;
+                let vel = MEL_VEL_BASE
+                    + (v % MEL_VEL_DENOM) as f32 / MEL_VEL_DENOM as f32 * MEL_VEL_SPREAD;
 
                 MelodicStep::from(vec![MelodicNote {
                     semi,
@@ -223,7 +227,12 @@ fn vary_drums(params: &GenParams, source: &Pattern) -> Pattern {
                     // add a hit
                     let v = next_rng(&mut rng);
                     let vel = (VEL_MIN + v % VEL_RANGE) as u8;
-                    step.push(DrumHit { note: fallback_note, vel, prob: 1.0, ratchet: 1 });
+                    step.push(DrumHit {
+                        note: fallback_note,
+                        vel,
+                        prob: 1.0,
+                        ratchet: 1,
+                    });
                 } else {
                     // remove hits (toggle off)
                     step.clear();
@@ -303,9 +312,7 @@ pub fn generate(params: &GenParams, source: &Pattern, lane: &Lane) -> Pattern {
     use crate::pattern::model::LaneKind;
     match (&params.mode, source.kind()) {
         (GenMode::Generate, LaneKind::Drums) => generate_drums(params, source),
-        (GenMode::Generate, LaneKind::Melodic) => {
-            generate_melodic(params, source, lane)
-        }
+        (GenMode::Generate, LaneKind::Melodic) => generate_melodic(params, source, lane),
         (GenMode::Vary, LaneKind::Drums) => vary_drums(params, source),
         (GenMode::Vary, LaneKind::Melodic) => vary_melodic(params, source, lane),
     }
@@ -408,7 +415,10 @@ mod gen_core_tests {
                 root: None,
             }
         };
-        let params = GenParams { density: 50, ..GenParams::default() };
+        let params = GenParams {
+            density: 50,
+            ..GenParams::default()
+        };
         let out = generate(&params, &src, &lane);
         assert_eq!(active_count(&out), 8);
     }
@@ -440,12 +450,23 @@ mod gen_core_tests {
                 root: None,
             }
         };
-        let p1 = GenParams { seed: 1, density: 50, ..GenParams::default() };
-        let p2 = GenParams { seed: 99999, density: 50, ..GenParams::default() };
+        let p1 = GenParams {
+            seed: 1,
+            density: 50,
+            ..GenParams::default()
+        };
+        let p2 = GenParams {
+            seed: 99999,
+            density: 50,
+            ..GenParams::default()
+        };
         // Velocities are seeded so at least one step will differ.
         let a = generate(&p1, &src, &lane);
         let b = generate(&p2, &src, &lane);
-        assert_ne!(a, b, "different seeds must (almost certainly) produce different velocities");
+        assert_ne!(
+            a, b,
+            "different seeds must (almost certainly) produce different velocities"
+        );
     }
 
     #[test]
@@ -467,7 +488,10 @@ mod gen_core_tests {
                 root: None,
             }
         };
-        let params = GenParams { density: 100, ..GenParams::default() };
+        let params = GenParams {
+            density: 100,
+            ..GenParams::default()
+        };
         let out = generate(&params, &src, &lane);
         match &out.data {
             crate::pattern::model::PatternData::Drums(steps) => {
@@ -508,7 +532,11 @@ mod gen_core_tests {
             scale,
             root: None,
         };
-        let params = GenParams { density: 75, range: 12, ..GenParams::default() };
+        let params = GenParams {
+            density: 75,
+            range: 12,
+            ..GenParams::default()
+        };
         (params, src, lane)
     }
 
@@ -535,7 +563,11 @@ mod gen_core_tests {
         let (mut p, src, lane) = melodic_fixture(Scale::Chromatic);
         p.density = 0;
         let out = generate(&p, &src, &lane);
-        assert_eq!(melodic_active_count(&out), 0, "density=0 must produce no notes");
+        assert_eq!(
+            melodic_active_count(&out),
+            0,
+            "density=0 must produce no notes"
+        );
     }
 
     #[test]
@@ -561,7 +593,10 @@ mod gen_core_tests {
     #[test]
     fn melodic_generate_different_seeds_differ() {
         let (p, src, lane) = melodic_fixture(Scale::Major);
-        let p2 = GenParams { seed: 99999, ..p.clone() };
+        let p2 = GenParams {
+            seed: 99999,
+            ..p.clone()
+        };
         let a = generate(&p, &src, &lane);
         let b = generate(&p2, &src, &lane);
         assert_ne!(a, b, "different seeds must produce different patterns");
@@ -577,7 +612,10 @@ mod gen_core_tests {
         let notes = melodic_notes(&out);
         assert!(!notes.is_empty(), "density=100 must produce notes");
         for semi in &notes {
-            assert_eq!(*semi, 0, "range=0 must produce only root-degree (semi=0) notes");
+            assert_eq!(
+                *semi, 0,
+                "range=0 must produce only root-degree (semi=0) notes"
+            );
         }
     }
 
@@ -686,7 +724,12 @@ mod gen_core_tests {
         if let crate::pattern::model::PatternData::Drums(ref mut steps) = src.data {
             for (i, step) in steps.iter_mut().enumerate() {
                 if i % 2 == 0 {
-                    step.push(DrumHit { note: 36, vel: 100, prob: 1.0, ratchet: 1 });
+                    step.push(DrumHit {
+                        note: 36,
+                        vel: 100,
+                        prob: 1.0,
+                        ratchet: 1,
+                    });
                 }
             }
         }
@@ -712,14 +755,16 @@ mod gen_core_tests {
     /// Build a non-trivial melodic pattern for Vary tests.
     fn vary_melodic_fixture(scale: Scale) -> (Pattern, Lane) {
         let notes: Vec<MelodicStep> = (0i8..8)
-            .map(|i| MelodicStep::from(vec![MelodicNote {
-                semi: i * 2,
-                vel: 1.0,
-                slide: false,
-                len: 0.5,
-                prob: 1.0,
-                ratchet: 1,
-            }]))
+            .map(|i| {
+                MelodicStep::from(vec![MelodicNote {
+                    semi: i * 2,
+                    vel: 1.0,
+                    slide: false,
+                    len: 0.5,
+                    prob: 1.0,
+                    ratchet: 1,
+                }])
+            })
             .collect();
         let src = Pattern {
             length: 8,
@@ -762,7 +807,11 @@ mod gen_core_tests {
     #[test]
     fn vary_drums_mutate_0_is_identity() {
         let (src, lane) = vary_drums_fixture();
-        let params = GenParams { mode: GenMode::Vary, mutate: 0, ..GenParams::default() };
+        let params = GenParams {
+            mode: GenMode::Vary,
+            mutate: 0,
+            ..GenParams::default()
+        };
         let out = generate(&params, &src, &lane);
         assert_eq!(out, src, "mutate=0 must leave source unchanged");
     }
@@ -770,7 +819,11 @@ mod gen_core_tests {
     #[test]
     fn vary_drums_is_deterministic() {
         let (src, lane) = vary_drums_fixture();
-        let params = GenParams { mode: GenMode::Vary, mutate: 50, ..GenParams::default() };
+        let params = GenParams {
+            mode: GenMode::Vary,
+            mutate: 50,
+            ..GenParams::default()
+        };
         let a = generate(&params, &src, &lane);
         let b = generate(&params, &src, &lane);
         assert_eq!(a, b, "same seed must produce identical vary output");
@@ -779,8 +832,18 @@ mod gen_core_tests {
     #[test]
     fn vary_drums_different_seeds_differ() {
         let (src, lane) = vary_drums_fixture();
-        let p1 = GenParams { mode: GenMode::Vary, mutate: 50, seed: 1, ..GenParams::default() };
-        let p2 = GenParams { mode: GenMode::Vary, mutate: 50, seed: 77777, ..GenParams::default() };
+        let p1 = GenParams {
+            mode: GenMode::Vary,
+            mutate: 50,
+            seed: 1,
+            ..GenParams::default()
+        };
+        let p2 = GenParams {
+            mode: GenMode::Vary,
+            mutate: 50,
+            seed: 77777,
+            ..GenParams::default()
+        };
         let a = generate(&p1, &src, &lane);
         let b = generate(&p2, &src, &lane);
         assert_ne!(a, b, "different seeds must produce different vary output");
@@ -789,21 +852,36 @@ mod gen_core_tests {
     #[test]
     fn vary_drums_higher_mutate_changes_more_steps() {
         let (src, lane) = vary_drums_fixture();
-        let p_low = GenParams { mode: GenMode::Vary, mutate: 10, seed: 42, ..GenParams::default() };
-        let p_high = GenParams { mode: GenMode::Vary, mutate: 90, seed: 42, ..GenParams::default() };
+        let p_low = GenParams {
+            mode: GenMode::Vary,
+            mutate: 10,
+            seed: 42,
+            ..GenParams::default()
+        };
+        let p_high = GenParams {
+            mode: GenMode::Vary,
+            mutate: 90,
+            seed: 42,
+            ..GenParams::default()
+        };
         let low_changes = count_changed_drum_steps(&src, &generate(&p_low, &src, &lane));
         let high_changes = count_changed_drum_steps(&src, &generate(&p_high, &src, &lane));
         assert!(
             high_changes >= low_changes,
             "mutate=90 ({} changes) should change >= mutate=10 ({} changes)",
-            high_changes, low_changes
+            high_changes,
+            low_changes
         );
     }
 
     #[test]
     fn vary_melodic_mutate_0_is_identity() {
         let (src, lane) = vary_melodic_fixture(Scale::Major);
-        let params = GenParams { mode: GenMode::Vary, mutate: 0, ..GenParams::default() };
+        let params = GenParams {
+            mode: GenMode::Vary,
+            mutate: 0,
+            ..GenParams::default()
+        };
         let out = generate(&params, &src, &lane);
         assert_eq!(out, src, "mutate=0 must leave melodic source unchanged");
     }
@@ -811,7 +889,11 @@ mod gen_core_tests {
     #[test]
     fn vary_melodic_is_deterministic() {
         let (src, lane) = vary_melodic_fixture(Scale::Major);
-        let params = GenParams { mode: GenMode::Vary, mutate: 50, ..GenParams::default() };
+        let params = GenParams {
+            mode: GenMode::Vary,
+            mutate: 50,
+            ..GenParams::default()
+        };
         let a = generate(&params, &src, &lane);
         let b = generate(&params, &src, &lane);
         assert_eq!(a, b, "same seed must produce identical melodic vary output");
@@ -820,31 +902,62 @@ mod gen_core_tests {
     #[test]
     fn vary_melodic_different_seeds_differ() {
         let (src, lane) = vary_melodic_fixture(Scale::Major);
-        let p1 = GenParams { mode: GenMode::Vary, mutate: 50, seed: 1, ..GenParams::default() };
-        let p2 = GenParams { mode: GenMode::Vary, mutate: 50, seed: 77777, ..GenParams::default() };
+        let p1 = GenParams {
+            mode: GenMode::Vary,
+            mutate: 50,
+            seed: 1,
+            ..GenParams::default()
+        };
+        let p2 = GenParams {
+            mode: GenMode::Vary,
+            mutate: 50,
+            seed: 77777,
+            ..GenParams::default()
+        };
         let a = generate(&p1, &src, &lane);
         let b = generate(&p2, &src, &lane);
-        assert_ne!(a, b, "different seeds must produce different melodic vary output");
+        assert_ne!(
+            a, b,
+            "different seeds must produce different melodic vary output"
+        );
     }
 
     #[test]
     fn vary_melodic_higher_mutate_changes_more_steps() {
         let (src, lane) = vary_melodic_fixture(Scale::Chromatic);
-        let p_low = GenParams { mode: GenMode::Vary, mutate: 10, seed: 42, range: 4, ..GenParams::default() };
-        let p_high = GenParams { mode: GenMode::Vary, mutate: 90, seed: 42, range: 4, ..GenParams::default() };
+        let p_low = GenParams {
+            mode: GenMode::Vary,
+            mutate: 10,
+            seed: 42,
+            range: 4,
+            ..GenParams::default()
+        };
+        let p_high = GenParams {
+            mode: GenMode::Vary,
+            mutate: 90,
+            seed: 42,
+            range: 4,
+            ..GenParams::default()
+        };
         let low_changes = count_changed_melodic_steps(&src, &generate(&p_low, &src, &lane));
         let high_changes = count_changed_melodic_steps(&src, &generate(&p_high, &src, &lane));
         assert!(
             high_changes >= low_changes,
             "mutate=90 ({} changes) should change >= mutate=10 ({} changes)",
-            high_changes, low_changes
+            high_changes,
+            low_changes
         );
     }
 
     #[test]
     fn vary_melodic_pitches_stay_in_major_scale() {
         let (src, lane) = vary_melodic_fixture(Scale::Major);
-        let params = GenParams { mode: GenMode::Vary, mutate: 100, range: 12, ..GenParams::default() };
+        let params = GenParams {
+            mode: GenMode::Vary,
+            mutate: 100,
+            range: 12,
+            ..GenParams::default()
+        };
         let out = generate(&params, &src, &lane);
         let major_degrees: &[u8] = &[0, 2, 4, 5, 7, 9, 11];
         match &out.data {
@@ -855,7 +968,8 @@ mod gen_core_tests {
                         assert!(
                             major_degrees.contains(&pc),
                             "varied semi {} (pc={}) not in Major scale",
-                            note.semi, pc
+                            note.semi,
+                            pc
                         );
                     }
                 }
@@ -867,7 +981,12 @@ mod gen_core_tests {
     #[test]
     fn vary_melodic_velocity_in_band_after_vary() {
         let (src, lane) = vary_melodic_fixture(Scale::Chromatic);
-        let params = GenParams { mode: GenMode::Vary, mutate: 100, range: 4, ..GenParams::default() };
+        let params = GenParams {
+            mode: GenMode::Vary,
+            mutate: 100,
+            range: 4,
+            ..GenParams::default()
+        };
         let out = generate(&params, &src, &lane);
         match &out.data {
             PatternData::Melodic(steps) => {
