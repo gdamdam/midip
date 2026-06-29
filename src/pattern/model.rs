@@ -259,7 +259,8 @@ impl Pattern {
         self.length
     }
 
-    /// Returns the CC locks for `step`. Panics in debug if `step >= length`.
+    /// Returns the CC locks for `step`. Returns `&[]` when `step` is out of bounds
+    /// (e.g. a deserialized pattern whose `cc` vec was not length-synced).
     pub fn step_cc(&self, step: usize) -> &[CcLock] {
         // Gracefully handle deserialized patterns whose `cc` vec wasn't length-synced
         // (e.g. old JSON that had no `cc` field → serde default gives empty Vec).

@@ -5,7 +5,8 @@ use crate::midi::ports::MidiSink;
 use crate::midi::MidiMessage;
 #[cfg(test)]
 use crate::pattern::model::TrigCond;
-use crate::pattern::model::{Lane, MelodicNote, Pattern, PatternData, Set};
+use crate::pattern::model::{CcLock, Lane, MelodicNote, Pattern, PatternData, Set};
+use std::collections::HashMap;
 
 /// Ownership domain of a sounding note (design §3.1). M1 only produces Playback;
 /// the field + release_domain exist so M3 audition / M15 preview can reuse the registry.
@@ -164,6 +165,11 @@ pub struct Sequencer {
     /// Scratch: lanes that launched during the most recent `tick`. Drained by
     /// `take_launched` so the engine can emit one `Launched` event per lane.
     just_launched: Vec<usize>,
+    /// Per-route CC cache: suppresses redundant CC resends within a play session.
+    /// Key: `(port_stable_key, channel, cc_number)`. Value: last sent value.
+    /// Cleared on Stop, panic, route change, and Set-swap (the latter replaces the
+    /// whole `Sequencer`, so the new instance starts with an empty map).
+    cc_cache: HashMap<(String, u8, u8), u8>,
 }
 
 /// Default PRNG seed (a fixed nonzero constant so playback is reproducible).
@@ -186,6 +192,7 @@ impl Sequencer {
             queued: vec![None; n],
             launch_offset: vec![0; n],
             just_launched: Vec::new(),
+            cc_cache: HashMap::new(),
         }
     }
 
@@ -431,6 +438,8 @@ impl Sequencer {
         for q in self.queued.iter_mut() {
             *q = None;
         }
+        // Clear CC cache so the next play re-sends all CC locks unconditionally.
+        self.cc_cache.clear();
     }
 
     /// All-notes-off / all-sound-off live recovery. Releases every sounding note via
@@ -441,6 +450,9 @@ impl Sequencer {
         // + clears active[]. playing is intentionally left unchanged.
         self.release_all(at_micros, sink);
         // Note: `playing` is intentionally left unchanged.
+        // Clear CC cache: a panic resets hardware controller state, so the cache must
+        // not suppress a re-send of any CC on the next played step.
+        self.cc_cache.clear();
     }
 
     pub fn is_playing(&self) -> bool {
@@ -528,6 +540,9 @@ impl Sequencer {
         if let Some(l) = self.set.lanes.get_mut(lane) {
             l.route = route;
         }
+        // Clear CC cache: the port/channel mapping may have changed, so cached values
+        // keyed on the old route could suppress a needed CC on the new route.
+        self.cc_cache.clear();
     }
 
     /// Read accessor for a lane by index (the Sequencer owns `set: Set`).
@@ -743,11 +758,15 @@ impl Sequencer {
         // Emit on the route channel (route override else profile) so the channel the
         // scheduler emits on matches the channel the route plan keys on (no mis-route).
         let channel = lane.route_channel();
+        let port_stable_key = lane.effective_route().port.stable_key;
         let gate_fraction = lane.profile.drum_gate_fraction;
+        let cc_locks: Vec<CcLock> = lane.pattern.step_cc(local).to_vec();
         let hits = match &lane.pattern.data {
             PatternData::Drums(steps) => steps.get(local).cloned().unwrap_or_default(),
             PatternData::Melodic(_) => Vec::new(),
         };
+        // Track the earliest NoteOn time across all firing hits so CC lands just before.
+        let mut earliest_on_at: Option<u64> = None;
         for hit in hits {
             // Per-voice mute: skip this hit entirely when the voice is silenced.
             if self.set.lanes[lane_idx].is_voice_muted(hit.note) {
@@ -766,6 +785,11 @@ impl Sequencer {
             // Absolute time is also clamped to 0 (can't schedule before epoch).
             let micro = (hit.micro as i64).clamp(-(dur as i64 / 2), dur as i64 / 2);
             let base_on = (swung as i64 + micro).max(0) as u64;
+            // Record the earliest NoteOn for CC placement.
+            earliest_on_at = Some(match earliest_on_at {
+                Some(prev) => prev.min(base_on),
+                None => base_on,
+            });
             for i in 0..r {
                 let on_at = base_on + i * sub;
                 Self::enqueue(
@@ -793,6 +817,21 @@ impl Sequencer {
                 );
             }
         }
+        // Emit CC locks just before the earliest NoteOn, but only when at least one
+        // hit fired (CC-only steps with no note do not send CC).
+        if let Some(on_at) = earliest_on_at {
+            if !cc_locks.is_empty() {
+                Self::enqueue_cc_locks(
+                    &mut self.queue,
+                    &mut self.cc_cache,
+                    &cc_locks,
+                    lane_idx,
+                    channel,
+                    &port_stable_key,
+                    on_at,
+                );
+            }
+        }
     }
 
     fn materialize_melodic_step(&mut self, lane_idx: usize, step: usize, swung: u64, dur: u64) {
@@ -804,9 +843,11 @@ impl Sequencer {
         // Emit on the route channel (route override else profile) so emission and the
         // route plan agree on the channel (no mis-route / dropped notes).
         let channel = lane.route_channel();
+        let port_stable_key = lane.effective_route().port.stable_key;
         let root = lane.profile.root_note;
         let transpose = lane.transpose;
         let octave = lane.octave;
+        let cc_locks: Vec<CcLock> = lane.pattern.step_cc(local).to_vec();
 
         // M5b Task 3: read the step's full note Vec. 0 notes = rest, 1 = mono
         // (today's behavior, byte-identical), >=2 = chord (poly).
@@ -821,7 +862,14 @@ impl Sequencer {
         // at its own gate. This keeps mono playback exactly as today and gives sane
         // chord behavior. The mono lane (<=1 note) never reaches this branch.
         if step_notes.len() >= 2 {
-            self.materialize_chord_step(lane_idx, &step_notes, channel, swung, dur);
+            self.materialize_chord_step(
+                lane_idx,
+                &step_notes,
+                channel,
+                (&port_stable_key, &cc_locks),
+                swung,
+                dur,
+            );
             return;
         }
 
@@ -844,6 +892,19 @@ impl Sequencer {
         // clamped to ±(dur/2) so the note can't reorder into a neighbouring step.
         let micro = (note.micro as i64).clamp(-(dur as i64 / 2), dur as i64 / 2);
         let on_at = (swung as i64 + micro).max(0) as u64;
+
+        // Emit CC locks just before the NoteOn (this step fires at least one note).
+        if !cc_locks.is_empty() {
+            Self::enqueue_cc_locks(
+                &mut self.queue,
+                &mut self.cc_cache,
+                &cc_locks,
+                lane_idx,
+                channel,
+                &port_stable_key,
+                on_at,
+            );
+        }
 
         // Ratchet: R evenly-spaced retriggers across the step. Slide governs legato into
         // the FIRST retrigger only; the remaining pairs are independent gated hits whose
@@ -1005,9 +1066,11 @@ impl Sequencer {
         lane_idx: usize,
         notes: &[MelodicNote],
         channel: u8,
+        route_cc: (&str, &[CcLock]),
         swung: u64,
         dur: u64,
     ) {
+        let (port_stable_key, cc_locks) = route_cc;
         use crate::devices::profiles::{melodic_velocity, resolve_melodic_pitch};
 
         let lane = &self.set.lanes[lane_idx];
@@ -1036,6 +1099,7 @@ impl Sequencer {
         // No active note tracked for a chord; the registry owns release.
         self.active[lane_idx] = None;
 
+        let mut earliest_on_at: Option<u64> = None;
         for note in notes {
             // Probability is rolled per note (a failed roll skips just that note).
             if !self.rolls_fire(note.prob) {
@@ -1047,6 +1111,11 @@ impl Sequencer {
             // ±(dur/2) so it can't reorder into a neighbouring step.
             let micro = (note.micro as i64).clamp(-(dur as i64 / 2), dur as i64 / 2);
             let on_at = (swung as i64 + micro).max(0) as u64;
+            // Track earliest NoteOn across all firing chord notes for CC placement.
+            earliest_on_at = Some(match earliest_on_at {
+                Some(prev) => prev.min(on_at),
+                None => on_at,
+            });
             // Ratchet: R evenly-spaced gated retriggers across the step, per note.
             let r = note.ratchet.max(1) as u64;
             let sub = dur / r;
@@ -1105,6 +1174,59 @@ impl Sequencer {
                     },
                 );
             }
+        }
+        // Emit CC locks just before the earliest NoteOn, only when at least one chord
+        // note fired (CC-only steps with no note do not send CC).
+        if let Some(on_at) = earliest_on_at {
+            if !cc_locks.is_empty() {
+                Self::enqueue_cc_locks(
+                    &mut self.queue,
+                    &mut self.cc_cache,
+                    cc_locks,
+                    lane_idx,
+                    channel,
+                    port_stable_key,
+                    on_at,
+                );
+            }
+        }
+    }
+
+    /// Enqueue CC locks for a step that fires at least one note.
+    ///
+    /// For each `CcLock` in `locks`, checks the per-route cache keyed by
+    /// `(port_stable_key, channel, cc_number)`. If the cached value equals the new
+    /// value, the CC is suppressed (no-op). Otherwise the CC is enqueued at
+    /// `earliest_on_at.saturating_sub(1)` (just before the NoteOn) and the cache is
+    /// updated. CC events do not touch the note-ownership registry.
+    fn enqueue_cc_locks(
+        queue: &mut Vec<ScheduledEvent>,
+        cc_cache: &mut HashMap<(String, u8, u8), u8>,
+        locks: &[CcLock],
+        lane_idx: usize,
+        channel: u8,
+        port_stable_key: &str,
+        earliest_on_at: u64,
+    ) {
+        let cc_at = earliest_on_at.saturating_sub(1);
+        for lock in locks {
+            let key = (port_stable_key.to_string(), channel, lock.cc);
+            if cc_cache.get(&key) == Some(&lock.val) {
+                continue; // suppress redundant resend
+            }
+            cc_cache.insert(key, lock.val);
+            Self::enqueue(
+                queue,
+                ScheduledEvent {
+                    at_micros: cc_at,
+                    lane: lane_idx,
+                    msg: MidiMessage::ControlChange {
+                        channel,
+                        controller: lock.cc,
+                        value: lock.val,
+                    },
+                },
+            );
         }
     }
 
@@ -4409,5 +4531,328 @@ mod sequencer_tests {
             .collect();
         // Both notes at t=0
         assert_eq!(on_times, vec![0, 0], "chord micro=0 must not shift timing");
+    }
+
+    // ── M8 Task 5: per-step CC locks ─────────────────────────────────────────
+
+    use crate::pattern::model::CcLock;
+
+    /// Build a drum lane whose step 0 has a single kick hit AND a CC74=64 lock.
+    fn drum_lane_cc(cc: u8, val: u8) -> Lane {
+        let mut steps: Vec<Vec<DrumHit>> = vec![Vec::new(); 1];
+        steps[0].push(DrumHit {
+            note: 36,
+            vel: 100,
+            prob: 1.0,
+            ratchet: 1,
+            micro: 0,
+            cond: TrigCond::Always,
+        });
+        let pattern = Pattern {
+            name: "cc_drum".to_string(),
+            desc: String::new(),
+            length: 1,
+            data: PatternData::Drums(steps),
+            id: crate::persist::Id::nil(),
+            cc: vec![vec![CcLock { cc, val }]],
+        };
+        // make sure step_cc is consistent
+        assert_eq!(pattern.step_cc(0), &[CcLock { cc, val }]);
+        Lane {
+            profile: T8_DRUMS,
+            pattern,
+            mute: false,
+            solo: false,
+            transpose: 0,
+            octave: 0,
+            route: None,
+            muted_voices: Vec::new(),
+            scale: crate::music::scale::Scale::Chromatic,
+            root: None,
+            swing: None,
+            clock_div: None,
+        }
+    }
+
+    /// Build a melodic lane whose step 0 has a note AND a CC74=64 lock.
+    fn melodic_lane_cc(cc: u8, val: u8) -> Lane {
+        let note = MelodicNote {
+            semi: 0,
+            vel: 1.0,
+            prob: 1.0,
+            ratchet: 1,
+            len: 0.5,
+            slide: false,
+            micro: 0,
+            cond: TrigCond::Always,
+        };
+        let steps = vec![MelodicStep::from(vec![note])];
+        Lane {
+            profile: S1,
+            pattern: Pattern {
+                name: "cc_mel".to_string(),
+                desc: String::new(),
+                length: 1,
+                data: PatternData::Melodic(steps),
+                id: crate::persist::Id::nil(),
+                cc: vec![vec![CcLock { cc, val }]],
+            },
+            mute: false,
+            solo: false,
+            transpose: 0,
+            octave: 0,
+            route: None,
+            muted_voices: Vec::new(),
+            scale: crate::music::scale::Scale::Chromatic,
+            root: None,
+            swing: None,
+            clock_div: None,
+        }
+    }
+
+    /// CC is enqueued just before the step's NoteOn (at_micros < NoteOn time or == 0).
+    #[test]
+    fn cc_lock_enqueued_before_noteon_drum() {
+        let dur = step_dur_micros(120.0);
+        let mut seq = Sequencer::new(set_with(vec![drum_lane_cc(74, 64)]));
+        let mut sink = RecordingSink::new();
+        seq.play(0);
+        run(&mut seq, &mut sink, dur - 1, 500);
+
+        let cc_times: Vec<u64> = sink
+            .events
+            .iter()
+            .filter(|(_, m)| matches!(m, MidiMessage::ControlChange { controller: 74, .. }))
+            .map(|(t, _)| *t)
+            .collect();
+        let note_on_times: Vec<u64> = sink
+            .events
+            .iter()
+            .filter(|(_, m)| matches!(m, MidiMessage::NoteOn { note: 36, .. }))
+            .map(|(t, _)| *t)
+            .collect();
+
+        assert_eq!(cc_times.len(), 1, "exactly one CC74 should be sent");
+        assert_eq!(note_on_times.len(), 1, "exactly one NoteOn for kick");
+        // CC must arrive at or before the NoteOn (saturating_sub(1) at t=0 stays 0).
+        assert!(cc_times[0] <= note_on_times[0], "CC must be <= NoteOn time");
+    }
+
+    /// CC is enqueued just before the step's NoteOn for a melodic lane.
+    #[test]
+    fn cc_lock_enqueued_before_noteon_melodic() {
+        let dur = step_dur_micros(120.0);
+        let mut seq = Sequencer::new(set_with(vec![melodic_lane_cc(74, 64)]));
+        let mut sink = RecordingSink::new();
+        seq.play(0);
+        run(&mut seq, &mut sink, dur - 1, 500);
+
+        let cc_times: Vec<u64> = sink
+            .events
+            .iter()
+            .filter(|(_, m)| matches!(m, MidiMessage::ControlChange { controller: 74, .. }))
+            .map(|(t, _)| *t)
+            .collect();
+        let note_on_times: Vec<u64> = sink
+            .events
+            .iter()
+            .filter(|(_, m)| matches!(m, MidiMessage::NoteOn { .. }))
+            .map(|(t, _)| *t)
+            .collect();
+
+        assert_eq!(cc_times.len(), 1, "exactly one CC74 should be sent");
+        assert_eq!(note_on_times.len(), 1, "exactly one NoteOn");
+        assert!(cc_times[0] <= note_on_times[0], "CC must be <= NoteOn time");
+    }
+
+    /// Identical consecutive CC value to the same route is suppressed (only one send).
+    #[test]
+    fn cc_lock_identical_value_suppressed_on_repeat() {
+        let dur = step_dur_micros(120.0);
+        // 2-step pattern: both steps have CC74=64 and a kick.
+        let mut steps: Vec<Vec<DrumHit>> = vec![Vec::new(); 2];
+        for s in &[0usize, 1] {
+            steps[*s].push(DrumHit {
+                note: 36,
+                vel: 100,
+                prob: 1.0,
+                ratchet: 1,
+                micro: 0,
+                cond: TrigCond::Always,
+            });
+        }
+        let lane = Lane {
+            profile: T8_DRUMS,
+            pattern: Pattern {
+                name: "cc_repeat".to_string(),
+                desc: String::new(),
+                length: 2,
+                data: PatternData::Drums(steps),
+                id: crate::persist::Id::nil(),
+                // Both steps: CC74=64
+                cc: vec![
+                    vec![CcLock { cc: 74, val: 64 }],
+                    vec![CcLock { cc: 74, val: 64 }],
+                ],
+            },
+            mute: false,
+            solo: false,
+            transpose: 0,
+            octave: 0,
+            route: None,
+            muted_voices: Vec::new(),
+            scale: crate::music::scale::Scale::Chromatic,
+            root: None,
+            swing: None,
+            clock_div: None,
+        };
+        let mut seq = Sequencer::new(set_with(vec![lane]));
+        let mut sink = RecordingSink::new();
+        seq.play(0);
+        // Run for 2 full steps.
+        run(&mut seq, &mut sink, dur * 2 + 1, 500);
+
+        let cc_events: Vec<_> = sink
+            .events
+            .iter()
+            .filter(|(_, m)| {
+                matches!(
+                    m,
+                    MidiMessage::ControlChange {
+                        controller: 74,
+                        value: 64,
+                        ..
+                    }
+                )
+            })
+            .collect();
+        assert_eq!(
+            cc_events.len(),
+            1,
+            "identical consecutive CC value must be suppressed — only 1 send expected, got {}: {:?}",
+            cc_events.len(),
+            cc_events
+        );
+    }
+
+    /// A value change on the same CC/route re-sends.
+    #[test]
+    fn cc_lock_value_change_resends() {
+        let dur = step_dur_micros(120.0);
+        // 2-step pattern: step 0 CC74=64, step 1 CC74=80.
+        // Run for exactly 2 steps (0 and 1) — stop before step 2 (the loop-back).
+        let mut steps: Vec<Vec<DrumHit>> = vec![Vec::new(); 2];
+        for s in &[0usize, 1] {
+            steps[*s].push(DrumHit {
+                note: 36,
+                vel: 100,
+                prob: 1.0,
+                ratchet: 1,
+                micro: 0,
+                cond: TrigCond::Always,
+            });
+        }
+        let lane = Lane {
+            profile: T8_DRUMS,
+            pattern: Pattern {
+                name: "cc_change".to_string(),
+                desc: String::new(),
+                length: 2,
+                data: PatternData::Drums(steps),
+                id: crate::persist::Id::nil(),
+                cc: vec![
+                    vec![CcLock { cc: 74, val: 64 }],
+                    vec![CcLock { cc: 74, val: 80 }],
+                ],
+            },
+            mute: false,
+            solo: false,
+            transpose: 0,
+            octave: 0,
+            route: None,
+            muted_voices: Vec::new(),
+            scale: crate::music::scale::Scale::Chromatic,
+            root: None,
+            swing: None,
+            clock_div: None,
+        };
+        let mut seq = Sequencer::new(set_with(vec![lane]));
+        let mut sink = RecordingSink::new();
+        seq.play(0);
+        // Run just past step 1 (2*dur - 1) so both steps fire but the loop-back step 2 does not.
+        run(&mut seq, &mut sink, dur * 2 - 1, 500);
+
+        let cc_vals: Vec<u8> = sink
+            .events
+            .iter()
+            .filter_map(|(_, m)| {
+                if let MidiMessage::ControlChange {
+                    controller: 74,
+                    value,
+                    ..
+                } = m
+                {
+                    Some(*value)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(
+            cc_vals,
+            vec![64, 80],
+            "both CC values must be sent when they differ"
+        );
+    }
+
+    /// After Stop the cache clears, so the next play re-sends all CC locks.
+    #[test]
+    fn cc_lock_cache_cleared_on_stop_resends_on_next_play() {
+        let dur = step_dur_micros(120.0);
+        let mut seq = Sequencer::new(set_with(vec![drum_lane_cc(74, 64)]));
+        let mut sink = RecordingSink::new();
+
+        // First play: CC74=64 is sent once.
+        seq.play(0);
+        run(&mut seq, &mut sink, dur - 1, 500);
+        let first_count = sink
+            .events
+            .iter()
+            .filter(|(_, m)| matches!(m, MidiMessage::ControlChange { controller: 74, .. }))
+            .count();
+        assert_eq!(first_count, 1, "first play must send CC74 once");
+
+        // Stop clears the cache.
+        seq.stop(dur, &mut sink);
+        sink.events.clear();
+
+        // Second play: CC74=64 must be re-sent (cache was cleared).
+        seq.play(dur * 2);
+        run(&mut seq, &mut sink, dur * 2 + dur - 1, 500);
+        let second_count = sink
+            .events
+            .iter()
+            .filter(|(_, m)| matches!(m, MidiMessage::ControlChange { controller: 74, .. }))
+            .count();
+        assert_eq!(second_count, 1, "second play after stop must re-send CC74");
+    }
+
+    /// CC does not perturb the note-ownership registry — sounding count is unaffected.
+    #[test]
+    fn cc_lock_does_not_affect_note_registry() {
+        // step_dur_micros(120.0) = 125_000. Kick gate = 0.1 * 125_000 = 12_500.
+        let mut seq = Sequencer::new(set_with(vec![drum_lane_cc(74, 64)]));
+        let mut sink = RecordingSink::new();
+        seq.play(0);
+        // Run to t=50_000: the kick NoteOff (at 12_500) is flushed,
+        // but step 1 (at t=125_000) has not fired yet.
+        // During this window the sounding registry must be empty (CC never registers).
+        run(&mut seq, &mut sink, 50_000, 500);
+
+        assert_eq!(
+            seq.sounding_count(),
+            0,
+            "CC must not add anything to the sounding registry"
+        );
     }
 }
