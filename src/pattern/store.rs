@@ -44,7 +44,7 @@ pub fn save_prefs(dir: &Path, prefs: &Prefs) -> anyhow::Result<()> {
 }
 
 /// The current on-disk schema version. Increment when the format changes.
-pub const CURRENT_SET_VERSION: u32 = 2;
+pub const CURRENT_SET_VERSION: u32 = 3;
 
 /// On-disk lane: stores the profile *id* (not the static profile), rehydrated on load.
 #[derive(Serialize, Deserialize)]
@@ -179,6 +179,12 @@ fn migrate_v1_to_v2(v: &mut serde_json::Value) {
     v["version"] = serde_json::json!(2u32);
 }
 
+/// Migration: v2 → v3 (M8 adds per-step `micro`/`cond`, per-pattern `cc`, per-lane
+/// `swing`/`clock_div`; serde default supplies all new fields, no rewrite needed).
+fn migrate_v2_to_v3(v: &mut serde_json::Value) {
+    v["version"] = serde_json::json!(3u32);
+}
+
 /// Run the migration ladder on a `serde_json::Value` before typed parse.
 /// Rejects files saved by a newer midip; upgrades older files in-place.
 pub fn migrate_set_value(v: &mut serde_json::Value) -> anyhow::Result<()> {
@@ -194,6 +200,7 @@ pub fn migrate_set_value(v: &mut serde_json::Value) -> anyhow::Result<()> {
         match cur {
             0 => migrate_v0_to_v1(v),
             1 => migrate_v1_to_v2(v),
+            2 => migrate_v2_to_v3(v),
             _ => break,
         }
         cur += 1;
@@ -2131,7 +2138,7 @@ mod tests {
     fn v1_set_without_chains_loads_with_empty_chains() {
         let mut v: serde_json::Value = serde_json::from_str(MINIMAL_V1_SET_JSON).unwrap();
         migrate_set_value(&mut v).unwrap();
-        assert_eq!(v["version"], 2, "v1 must migrate to version 2");
+        assert_eq!(v["version"], 3, "v1 must migrate to version 3");
         // Deserialize into SetDto — missing `chains` key must default to [].
         let dto: SetDto = serde_json::from_value(v).unwrap();
         assert!(
@@ -2160,8 +2167,112 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    // ── M8 Task 2: v2→v3 migration (per-step/per-lane fields) ────────────────
+
+    /// Minimal v2 Set JSON (no M8 fields) — simulates a file saved before M8.
+    const MINIMAL_V2_SET_JSON: &str = r#"{
+        "version": 2,
+        "id": "abcdef0123456789",
+        "name": "pre-m8",
+        "bpm": 120.0,
+        "swing": 0.5,
+        "lanes": []
+    }"#;
+
     #[test]
-    fn set_version_is_2() {
-        assert_eq!(CURRENT_SET_VERSION, 2);
+    fn v2_set_without_m8_fields_loads_with_defaults() {
+        let mut v: serde_json::Value = serde_json::from_str(MINIMAL_V2_SET_JSON).unwrap();
+        migrate_set_value(&mut v).unwrap();
+        assert_eq!(v["version"], 3, "v2 must migrate to version 3");
+        // Deserialize into SetDto — missing M8 keys must default cleanly.
+        let dto: SetDto = serde_json::from_value(v).unwrap();
+        assert!(
+            dto.chains.is_empty(),
+            "missing chains field must default to empty"
+        );
+        assert!(
+            dto.lanes.is_empty(),
+            "empty lanes must stay empty after migration"
+        );
+    }
+
+    #[test]
+    fn set_with_m8_fields_roundtrips() {
+        use crate::pattern::model::{CcLock, DrumHit, MelodicNote, PatternData, TrigCond};
+        let dir = unique_dir("m8-roundtrip");
+        let mut set = Set::default_set(default_profiles());
+        // Set per-lane M8 fields on lane 0.
+        set.lanes[0].swing = Some(0.55);
+        set.lanes[0].clock_div = Some(2);
+        // Set per-step M8 fields: a drum hit with micro+cond.
+        if let PatternData::Drums(ref mut steps) = set.lanes[0].pattern.data {
+            steps[0] = vec![DrumHit {
+                note: 36,
+                vel: 100,
+                prob: 1.0,
+                ratchet: 1,
+                micro: -50,
+                cond: TrigCond::Fill,
+            }];
+        }
+        // Set per-step M8 fields: a melodic note with micro+cond.
+        if let PatternData::Melodic(ref mut steps) = set.lanes[1].pattern.data {
+            steps[0] = crate::pattern::model::MelodicStep::from(vec![MelodicNote {
+                semi: 4,
+                vel: 1.0,
+                slide: false,
+                len: 0.5,
+                prob: 1.0,
+                ratchet: 1,
+                micro: 30,
+                cond: TrigCond::Always,
+            }]);
+        }
+        // Set per-pattern M8 cc field.
+        set.lanes[0].pattern.cc = vec![vec![CcLock { cc: 74, val: 64 }]];
+
+        let path = save_set(&dir, &mut set).unwrap();
+        let loaded = load_set(&path).unwrap();
+
+        assert_eq!(
+            loaded.lanes[0].swing,
+            Some(0.55),
+            "lane swing must survive save/load"
+        );
+        assert_eq!(
+            loaded.lanes[0].clock_div,
+            Some(2),
+            "lane clock_div must survive save/load"
+        );
+        if let PatternData::Drums(ref steps) = loaded.lanes[0].pattern.data {
+            assert_eq!(steps[0][0].micro, -50, "drum micro must survive save/load");
+            assert_eq!(
+                steps[0][0].cond,
+                TrigCond::Fill,
+                "drum cond must survive save/load"
+            );
+        } else {
+            panic!("expected Drums on lane 0");
+        }
+        if let PatternData::Melodic(ref steps) = loaded.lanes[1].pattern.data {
+            assert_eq!(
+                steps[0][0].micro, 30,
+                "melodic micro must survive save/load"
+            );
+        } else {
+            panic!("expected Melodic on lane 1");
+        }
+        assert_eq!(
+            loaded.lanes[0].pattern.cc,
+            vec![vec![CcLock { cc: 74, val: 64 }]],
+            "cc must survive save/load"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn set_version_is_3() {
+        assert_eq!(CURRENT_SET_VERSION, 3);
     }
 }
