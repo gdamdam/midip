@@ -7,6 +7,21 @@ feature milestone is a minor bump).
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-06-29 — Scale-aware melodic editing + note input
+
+### Added
+- **Per-lane scales** — choose a root + scale (Chromatic, Major, Natural/Harmonic Minor, the modes,
+  Major/Minor Pentatonic, Blues) per melodic lane: `n`/`N` cycles the scale, `h`/`H` moves the root.
+  Default is Chromatic, so existing patterns are unchanged.
+- **Scale-aware editing** — `↑`/`↓` moves a note by scale degree (semitone in Chromatic); new notes
+  fold into the scale; the editor shows the note name and scale degree. Changing the scale never
+  rewrites existing notes.
+- **Conform to scale** (`X`) — explicitly fold all existing notes in a lane into its scale, with a
+  confirmation (showing the count) and undo.
+- **Note-input sub-mode** (`I`) — a dedicated QWERTY piano for entering melodies: white keys
+  `a s d f g h j k`, black keys `w e t y u`, `z`/`x` shift octave, Backspace clears, Esc exits; entered
+  notes fold to the scale. The whole session is a single undo step.
+
 ### Changed
 - License changed from MIT to AGPL-3.0-or-later.
 
