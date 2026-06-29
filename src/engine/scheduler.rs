@@ -170,6 +170,10 @@ pub struct Sequencer {
     /// Cleared on Stop, panic, route change, and Set-swap (the latter replaces the
     /// whole `Sequencer`, so the new instance starts with an empty map).
     cc_cache: HashMap<(String, u8, u8), u8>,
+    /// Latched fill-active flag. Read by the trig-condition gate for Fill/NotFill
+    /// conditions. Separate from ToggleFill (a pattern transform) — this is a
+    /// momentary performance state toggled live via SetFillActive.
+    fill_active: bool,
 }
 
 /// Default PRNG seed (a fixed nonzero constant so playback is reproducible).
@@ -193,6 +197,7 @@ impl Sequencer {
             launch_offset: vec![0; n],
             just_launched: Vec::new(),
             cc_cache: HashMap::new(),
+            fill_active: false,
         }
     }
 
@@ -751,10 +756,24 @@ impl Sequencer {
         step.wrapping_sub(off) % count
     }
 
+    /// Number of full pattern cycles the lane has completed since its launch.
+    /// Mirrors `local_step_for` but integer-divides instead of modulo.
+    fn loop_index_for(&self, lane_idx: usize, step: usize, count: usize) -> u64 {
+        let off = self.launch_offset.get(lane_idx).copied().unwrap_or(0);
+        (step.wrapping_sub(off) / count) as u64
+    }
+
+    /// Set the latched fill-active performance flag (read by Fill/NotFill trig conditions).
+    pub fn set_fill_active(&mut self, on: bool) {
+        self.fill_active = on;
+    }
+
     fn materialize_drum_step(&mut self, lane_idx: usize, step: usize, swung: u64, dur: u64) {
         let lane = &self.set.lanes[lane_idx];
         let count = lane.pattern.step_count().max(1);
         let local = self.local_step_for(lane_idx, step, count);
+        let loop_index = self.loop_index_for(lane_idx, step, count);
+        let is_first = loop_index == 0;
         // Emit on the route channel (route override else profile) so the channel the
         // scheduler emits on matches the channel the route plan keys on (no mis-route).
         let channel = lane.route_channel();
@@ -770,6 +789,11 @@ impl Sequencer {
         for hit in hits {
             // Per-voice mute: skip this hit entirely when the voice is silenced.
             if self.set.lanes[lane_idx].is_voice_muted(hit.note) {
+                continue;
+            }
+            // Trig condition gate runs before the probability roll.
+            if !crate::pattern::trig::trig_fires(&hit.cond, loop_index, self.fill_active, is_first)
+            {
                 continue;
             }
             // Probability is rolled per hit; a failed roll skips the whole hit.
@@ -840,6 +864,8 @@ impl Sequencer {
         let lane = &self.set.lanes[lane_idx];
         let count = lane.pattern.step_count().max(1);
         let local = self.local_step_for(lane_idx, step, count);
+        let loop_index = self.loop_index_for(lane_idx, step, count);
+        let is_first = loop_index == 0;
         // Emit on the route channel (route override else profile) so emission and the
         // route plan agree on the channel (no mis-route / dropped notes).
         let channel = lane.route_channel();
@@ -865,8 +891,8 @@ impl Sequencer {
             self.materialize_chord_step(
                 lane_idx,
                 &step_notes,
-                channel,
-                (&port_stable_key, &cc_locks),
+                (channel, &port_stable_key, &cc_locks),
+                (loop_index, is_first),
                 swung,
                 dur,
             );
@@ -880,6 +906,10 @@ impl Sequencer {
             None => return, // rest: nothing to emit, prior active note keeps its NoteOff.
         };
 
+        // Trig condition gate runs before the probability roll.
+        if !crate::pattern::trig::trig_fires(&note.cond, loop_index, self.fill_active, is_first) {
+            return;
+        }
         // Probability is rolled once per note; a failed roll skips the entire step
         // (no NoteOn/NoteOff, and the prior active note keeps its scheduled release).
         if !self.rolls_fire(note.prob) {
@@ -1065,12 +1095,13 @@ impl Sequencer {
         &mut self,
         lane_idx: usize,
         notes: &[MelodicNote],
-        channel: u8,
-        route_cc: (&str, &[CcLock]),
+        route_cc: (u8, &str, &[CcLock]),
+        loop_ctx: (u64, bool),
         swung: u64,
         dur: u64,
     ) {
-        let (port_stable_key, cc_locks) = route_cc;
+        let (channel, port_stable_key, cc_locks) = route_cc;
+        let (loop_index, is_first) = loop_ctx;
         use crate::devices::profiles::{melodic_velocity, resolve_melodic_pitch};
 
         let lane = &self.set.lanes[lane_idx];
@@ -1101,6 +1132,11 @@ impl Sequencer {
 
         let mut earliest_on_at: Option<u64> = None;
         for note in notes {
+            // Trig condition gate runs before the probability roll.
+            if !crate::pattern::trig::trig_fires(&note.cond, loop_index, self.fill_active, is_first)
+            {
+                continue;
+            }
             // Probability is rolled per note (a failed roll skips just that note).
             if !self.rolls_fire(note.prob) {
                 continue;
@@ -4853,6 +4889,210 @@ mod sequencer_tests {
             seq.sounding_count(),
             0,
             "CC must not add anything to the sounding registry"
+        );
+    }
+
+    // --- trig-condition gate tests (T6) ----------------------------------
+
+    fn drum_lane_single_hit_cond(cond: TrigCond) -> Lane {
+        let mut steps: Vec<Vec<DrumHit>> = vec![Vec::new(); 4];
+        steps[0].push(DrumHit {
+            note: 60,
+            vel: 100,
+            prob: 1.0,
+            ratchet: 1,
+            micro: 0,
+            cond,
+        });
+        Lane {
+            profile: T8_DRUMS,
+            pattern: Pattern {
+                name: "cond".to_string(),
+                desc: String::new(),
+                length: 4,
+                data: PatternData::Drums(steps),
+                id: crate::persist::Id::nil(),
+                cc: Default::default(),
+            },
+            mute: false,
+            solo: false,
+            transpose: 0,
+            octave: 0,
+            route: None,
+            muted_voices: Vec::new(),
+            scale: crate::music::scale::Scale::Chromatic,
+            root: None,
+            swing: None,
+            clock_div: None,
+        }
+    }
+
+    fn melodic_lane_single_note_cond(cond: TrigCond) -> Lane {
+        let note = MelodicNote {
+            semi: 0,
+            vel: 1.0,
+            len: 0.5,
+            slide: false,
+            ratchet: 1,
+            micro: 0,
+            prob: 1.0,
+            cond,
+        };
+        let steps: Vec<MelodicStep> = vec![
+            MelodicStep::from(vec![note]),
+            MelodicStep::from(vec![]),
+            MelodicStep::from(vec![]),
+            MelodicStep::from(vec![]),
+        ];
+        Lane {
+            profile: S1,
+            pattern: Pattern {
+                name: "cond_mel".to_string(),
+                desc: String::new(),
+                length: 4,
+                data: PatternData::Melodic(steps),
+                id: crate::persist::Id::nil(),
+                cc: Default::default(),
+            },
+            mute: false,
+            solo: false,
+            transpose: 0,
+            octave: 0,
+            route: None,
+            muted_voices: Vec::new(),
+            scale: crate::music::scale::Scale::Chromatic,
+            root: None,
+            swing: None,
+            clock_div: None,
+        }
+    }
+
+    fn count_note_ons_for(sink: &RecordingSink, note: u8) -> usize {
+        sink.events
+            .iter()
+            .filter(|(_, msg)| matches!(msg, MidiMessage::NoteOn { note: n, .. } if *n == note))
+            .count()
+    }
+
+    fn count_any_note_ons(sink: &RecordingSink) -> usize {
+        sink.events
+            .iter()
+            .filter(|(_, msg)| matches!(msg, MidiMessage::NoteOn { .. }))
+            .count()
+    }
+
+    /// Run sequencer for exactly `loops` full loops of a 4-step pattern at 120 BPM.
+    /// Stops just before step 0 of the next loop to avoid materializing it.
+    fn run_loops(mut seq: Sequencer, loops: usize) -> (Sequencer, RecordingSink) {
+        let dur = step_dur_micros(120.0); // 125_000 µs per step
+                                          // End midway through the last step of loop N-1, never reaching step 0 of loop N.
+        let total = dur * 4 * (loops as u64) - dur / 2;
+        let mut sink = RecordingSink::new();
+        seq.play(0);
+        let mut t = 0u64;
+        while t <= total {
+            seq.tick(t, &mut sink);
+            t += dur / 4;
+        }
+        (seq, sink)
+    }
+
+    #[test]
+    fn trig_gate_always_fires_every_loop() {
+        let lane = drum_lane_single_hit_cond(TrigCond::Always);
+        let seq = Sequencer::new(set_with(vec![lane]));
+        let (_, sink) = run_loops(seq, 4);
+        assert_eq!(
+            count_note_ons_for(&sink, 60),
+            4,
+            "Always must fire every loop"
+        );
+    }
+
+    #[test]
+    fn trig_gate_ratio_1_2_fires_every_other_loop() {
+        let lane = drum_lane_single_hit_cond(TrigCond::Ratio { x: 1, y: 2 });
+        let seq = Sequencer::new(set_with(vec![lane]));
+        let (_, sink) = run_loops(seq, 4);
+        // x=1,y=2: fires when loop_index%2+1==1, i.e. loop_index%2==0 → loops 0,2
+        assert_eq!(
+            count_note_ons_for(&sink, 60),
+            2,
+            "Ratio 1:2 must fire on even loops only"
+        );
+    }
+
+    #[test]
+    fn trig_gate_first_fires_only_on_loop_0() {
+        let lane = drum_lane_single_hit_cond(TrigCond::First);
+        let seq = Sequencer::new(set_with(vec![lane]));
+        let (_, sink) = run_loops(seq, 4);
+        assert_eq!(
+            count_note_ons_for(&sink, 60),
+            1,
+            "First must fire only on loop 0"
+        );
+    }
+
+    #[test]
+    fn trig_gate_fill_fires_only_when_fill_active() {
+        let lane = drum_lane_single_hit_cond(TrigCond::Fill);
+        let mut seq = Sequencer::new(set_with(vec![lane]));
+        seq.set_fill_active(true);
+        let (_, sink) = run_loops(seq, 4);
+        assert_eq!(
+            count_note_ons_for(&sink, 60),
+            4,
+            "Fill must fire all loops when fill_active=true"
+        );
+    }
+
+    #[test]
+    fn trig_gate_fill_suppressed_when_fill_inactive() {
+        let lane = drum_lane_single_hit_cond(TrigCond::Fill);
+        let seq = Sequencer::new(set_with(vec![lane]));
+        let (_, sink) = run_loops(seq, 4);
+        assert_eq!(
+            count_note_ons_for(&sink, 60),
+            0,
+            "Fill must not fire when fill_active=false"
+        );
+    }
+
+    #[test]
+    fn trig_gate_not_fill_fires_when_fill_inactive() {
+        let lane = drum_lane_single_hit_cond(TrigCond::NotFill);
+        let seq = Sequencer::new(set_with(vec![lane]));
+        let (_, sink) = run_loops(seq, 4);
+        assert_eq!(
+            count_note_ons_for(&sink, 60),
+            4,
+            "NotFill must fire all loops when fill_active=false"
+        );
+    }
+
+    #[test]
+    fn trig_gate_runs_before_prob_check() {
+        // First cond + prob=1.0: gate blocks loops 1-3, so exactly 1 NoteOn across 4 loops.
+        let lane = drum_lane_single_hit_cond(TrigCond::First);
+        let seq = Sequencer::new(set_with(vec![lane]));
+        let (_, sink) = run_loops(seq, 4);
+        assert_eq!(
+            count_note_ons_for(&sink, 60),
+            1,
+            "Gate must block even when prob=1.0"
+        );
+    }
+
+    #[test]
+    fn trig_gate_melodic_ratio_1_2_fires_every_other_loop() {
+        let lane = melodic_lane_single_note_cond(TrigCond::Ratio { x: 1, y: 2 });
+        let seq = Sequencer::new(set_with(vec![lane]));
+        let (_, sink) = run_loops(seq, 4);
+        assert_eq!(
+            count_any_note_ons(&sink),
+            2,
+            "Melodic: Ratio 1:2 must fire every other loop"
         );
     }
 }

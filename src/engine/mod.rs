@@ -92,6 +92,9 @@ pub enum UiCommand {
         note: u8,
         on: bool,
     },
+    /// Latch fill-active performance state. Read by Fill/NotFill trig conditions
+    /// in the scheduler. Separate from ToggleFill (a pattern transform).
+    SetFillActive(bool),
     Quit,
 }
 
@@ -350,6 +353,9 @@ fn apply_command(
         }
         UiCommand::MuteVoice { lane, note, on } => {
             st.seq.set_voice_mute(lane, note, on, now, sink);
+        }
+        UiCommand::SetFillActive(on) => {
+            st.seq.set_fill_active(on);
         }
         UiCommand::Quit => {
             // Release all sounding notes before exiting — avoids hanging notes on hardware.
