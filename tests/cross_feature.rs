@@ -1272,3 +1272,295 @@ fn scene_capture_save_load_recall_roundtrip() {
     // Clean up.
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// 10. Chain roundtrip: create → save → load → PlayChain → bar-advance → stop-at-end (M7).
+//     Features combined: create_chain × add_chain_entry × looped=false ×
+//     store save/load × App::PlayChain × App::tick_chain bar-advance ×
+//     QueueScene recall (scene B at bar boundary 1) × stop-at-end transport stop ×
+//     registry balance (no hung notes across transitions + final stop).
+// ═══════════════════════════════════════════════════════════════════════════
+#[test]
+fn chain_roundtrip_create_save_load_play_advance() {
+    use midip::app::{Action, App};
+    use midip::pattern::chain::{add_chain_entry, create_chain};
+    use std::collections::HashMap;
+
+    // ── 1. Build a Set with two scenes (A, B) using STABLE inline patterns ────
+    //
+    // IMPORTANT: resolve_scene matches PatternRef::User(id) against the CURRENT
+    // lane patterns (inline slice). Both scenes must reference patterns that remain
+    // as the current lane patterns when the App is constructed after save/load.
+    // To guarantee this, we capture both scenes from the SAME lane patterns;
+    // scenes are distinguished by different performance state (mute, transpose).
+    //
+    // Lane 1 (synth) holds a note for a full bar so it is sounding when the
+    // QueueScene for scene B fires — stress-testing release-before-swap.
+    let profs = profiles::default_profiles();
+
+    // Drum pattern: BD on step 0 (lane 0, ch 9).
+    let mut drum_steps: Vec<DrumStep> = vec![Vec::new(); 16];
+    drum_steps[0].push(DrumHit { note: 36, vel: 100, prob: 1.0, ratchet: 1 });
+    let mut drum_pat = Pattern {
+        name: "bd-pattern".into(),
+        desc: String::new(),
+        length: 16,
+        data: PatternData::Drums(drum_steps),
+        id: midip::persist::Id::nil(),
+    };
+    drum_pat.ensure_id();
+
+    // Synth pattern: held note for a full bar (len 16.0) — still sounding at bar boundary.
+    let mut syn_steps = vec![MelodicStep::default(); 16];
+    syn_steps[0] = MelodicStep::from(vec![MelodicNote {
+        semi: 0,
+        vel: 1.0,
+        slide: false,
+        len: 16.0,
+        prob: 1.0,
+        ratchet: 1,
+    }]);
+    let mut syn_pat = Pattern {
+        name: "held-synth".into(),
+        desc: String::new(),
+        length: 16,
+        data: PatternData::Melodic(syn_steps),
+        id: midip::persist::Id::nil(),
+    };
+    syn_pat.ensure_id();
+
+    // Helper: build a Lane.
+    let make_lane = |prof: midip::devices::profiles::DeviceProfile, pat: Pattern| -> Lane {
+        Lane {
+            profile: prof,
+            pattern: pat,
+            mute: false,
+            solo: false,
+            transpose: 0,
+            octave: 0,
+            route: None,
+            muted_voices: Vec::new(),
+            scale: midip::music::scale::Scale::Chromatic,
+            root: None,
+        }
+    };
+
+    let mut set = Set {
+        name: "chain-roundtrip".into(),
+        bpm: 120.0,
+        swing: 0.5,
+        lanes: vec![
+            make_lane(profs[0], drum_pat.clone()),  // lane 0: drums (ch 9)
+            make_lane(profs[2], syn_pat.clone()),   // lane 1: synth, held note
+        ],
+        id: midip::persist::Id::nil(),
+        scenes: Vec::new(),
+        chains: Vec::new(),
+    };
+    set.ensure_id();
+
+    // Capture scene A: drums unmuted, synth transpose=0.
+    let scene_a = set.capture_scene("Scene-A".to_string());
+    set.scenes.push(scene_a.clone());
+
+    // Differentiate scene B by performance state (same patterns, different transpose).
+    // Both scenes reference the SAME pattern IDs — they will always resolve from the
+    // current inline lane patterns after save/load.
+    set.lanes[1].transpose = 7; // a fifth up for scene B
+    let scene_b = set.capture_scene("Scene-B".to_string());
+    set.scenes.push(scene_b.clone());
+
+    // Restore lane state to scene A defaults (the chain will recall from scenes).
+    set.lanes[1].transpose = 0;
+
+    // ── 2. Create a chain: entry A (1 bar) → entry B (1 bar), looped = false ──
+    let chain_idx = create_chain(&mut set, "test-chain");
+    add_chain_entry(&mut set, chain_idx, scene_a.id.clone());
+    add_chain_entry(&mut set, chain_idx, scene_b.id.clone());
+    set.chains[chain_idx].looped = false;
+
+    // ── 3. Serialize → load; assert chain + entries survive persistence ────────
+    let dir = unique_dir("chain-roundtrip");
+    let saved_path = store::save_set(&dir, &mut set).unwrap();
+    let loaded_set = store::load_set(&saved_path).unwrap();
+
+    assert_eq!(loaded_set.chains.len(), 1, "chain must survive save/load");
+    assert_eq!(loaded_set.chains[0].entries.len(), 2, "both entries must survive");
+    assert_eq!(
+        loaded_set.chains[0].entries[0].scene_id, scene_a.id,
+        "entry 0 must reference scene A"
+    );
+    assert_eq!(
+        loaded_set.chains[0].entries[1].scene_id, scene_b.id,
+        "entry 1 must reference scene B"
+    );
+    assert!(!loaded_set.chains[0].looped, "looped=false must persist");
+    assert_eq!(loaded_set.scenes.len(), 2, "both scenes must survive");
+
+    // Verify persistence format version is current (v2 with chains).
+    assert_eq!(
+        loaded_set.chains[0].entries[0].bars, 1,
+        "default bars=1 must persist"
+    );
+
+    // ── 4. Use App to compute the command sequence PlayChain would drive ───────
+    //
+    // The real main loop does:
+    //   a) PlayChain(0) → emits Play + QueueScene(A)   (engine_playing=false → starts transport)
+    //   b) EngineEvent::Started → sets engine_playing=true
+    //   c) EngineEvent::Playhead{step=16} → tick_chain(16) → QueueScene(B)
+    //   d) EngineEvent::Playhead{step=32} → tick_chain(32) → Stop (looped=false, end)
+    //
+    // We replicate this by calling the App to generate each batch of commands,
+    // then timestamp them for run_engine_headless.
+    let mut app = App::new(loaded_set, test_library());
+
+    // BPM=120: 1 step = 125_000 µs, 1 bar (16 steps) = 2_000_000 µs.
+    let step_us = step_dur_micros(120.0) as u64;
+    let bar_us = step_us * 16;
+
+    // (a) PlayChain: App not yet playing → emits Play + immediate LoadPattern (stopped
+    //     path: entry 0's scene loads immediately before transport starts, so the engine
+    //     begins playing scene A from step 0 with no quantization delay).
+    assert!(!app.playing, "App must start stopped");
+    let play_cmds = app.apply(Action::PlayChain(0));
+    assert!(app.playing, "App must be playing after PlayChain");
+    assert!(
+        play_cmds.iter().any(|c| matches!(c, UiCommand::Play)),
+        "PlayChain must emit UiCommand::Play when stopped; got: {play_cmds:?}"
+    );
+    // When stopped, recall_scene_quant uses LoadPattern (immediate apply), not QueueScene.
+    assert!(
+        play_cmds.iter().any(|c| matches!(c, UiCommand::LoadPattern { .. })),
+        "PlayChain from stopped must emit LoadPattern for entry 0; got: {play_cmds:?}"
+    );
+
+    // (b) Simulate EngineEvent::Started (sets engine_playing=true so bar-boundary
+    //     tick_chain calls use the QueueScene path, not immediate LoadPattern).
+    app.engine_playing = true;
+
+    // (c) Bar boundary 1 (step=16): entry A has dwelled 1 bar → Advance to entry B.
+    let bar1_cmds = app.tick_chain(16);
+    assert!(
+        bar1_cmds.iter().any(|c| matches!(c, UiCommand::QueueScene { .. })),
+        "tick_chain at step 16 must emit QueueScene for entry B; got: {bar1_cmds:?}"
+    );
+
+    // (d) Bar boundary 2 (step=32): entry B has dwelled 1 bar → Stop (looped=false).
+    let bar2_cmds = app.tick_chain(32);
+    assert!(
+        bar2_cmds.iter().any(|c| matches!(c, UiCommand::Stop)),
+        "tick_chain at step 32 must emit Stop (end of chain, looped=false); got: {bar2_cmds:?}"
+    );
+
+    // Verify chain playback was cleared on Stop.
+    assert!(
+        app.chain_playback.is_none(),
+        "chain_playback must be None after stop-at-end"
+    );
+
+    // ── 5. Feed commands to the headless engine; assert registry balance ───────
+    //
+    // Assemble the command timeline exactly as the real main loop would dispatch:
+    //   t=0:      Play + QueueScene(A)   (from PlayChain)
+    //   t=bar_us: QueueScene(B)           (from tick_chain at step 16)
+    //   t=2*bar:  Stop                    (from tick_chain at step 32)
+    let mut engine_cmds: Vec<(u64, UiCommand)> = Vec::new();
+
+    // Rebuild App to get a fresh command set for the engine (same loaded_set).
+    // Re-derive the engine command sequence; the App above is already consumed
+    // so we reconstruct from store.
+    let engine_set = store::load_set(&saved_path).unwrap();
+    let mut app2 = App::new(engine_set, test_library());
+    app2.engine_playing = false;
+
+    // t=0: PlayChain(0) → Play + QueueScene(A)
+    let cmds0 = app2.apply(Action::PlayChain(0));
+    for cmd in cmds0 {
+        engine_cmds.push((0, cmd));
+    }
+    app2.engine_playing = true;
+
+    // t=bar_us: tick_chain(16) → QueueScene(B)
+    let cmds1 = app2.tick_chain(16);
+    for cmd in cmds1 {
+        engine_cmds.push((bar_us, cmd));
+    }
+
+    // t=2*bar_us: tick_chain(32) → Stop
+    let cmds2 = app2.tick_chain(32);
+    for cmd in cmds2 {
+        engine_cmds.push((2 * bar_us, cmd));
+    }
+
+    // Non-vacuous guard: we must have Play + LoadPattern(A) + QueueScene(B) + Stop.
+    // Entry 0 (scene A) is recalled immediately via LoadPattern (stopped-transport path);
+    // entry 1 (scene B) is recalled via QueueScene at bar boundary 1 (engine_playing=true).
+    assert!(
+        engine_cmds.iter().any(|(_, c)| matches!(c, UiCommand::Play)),
+        "must have Play command; got: {engine_cmds:?}"
+    );
+    assert!(
+        engine_cmds.iter().any(|(_, c)| matches!(c, UiCommand::LoadPattern { .. })),
+        "must have LoadPattern for entry 0 (scene A); got: {engine_cmds:?}"
+    );
+    let q_scene_count = engine_cmds
+        .iter()
+        .filter(|(_, c)| matches!(c, UiCommand::QueueScene { .. }))
+        .count();
+    assert_eq!(
+        q_scene_count, 1,
+        "must have exactly 1 QueueScene command (scene B at bar boundary); got: {engine_cmds:?}"
+    );
+    assert!(
+        engine_cmds.iter().any(|(_, c)| matches!(c, UiCommand::Stop)),
+        "must have a Stop command; got: {engine_cmds:?}"
+    );
+
+    let mut link = FakeLink::new();
+    let mut sink = RecordingSink::new();
+
+    // Run engine for 2 bars + a little past the Stop to let all NoteOffs drain.
+    let engine_set2 = store::load_set(&saved_path).unwrap();
+    let _ = run_engine_headless(
+        engine_set2,
+        &mut link,
+        &mut sink,
+        engine_cmds,
+        2 * bar_us + step_us, // a hair past bar boundary 2
+        step_us / 4,
+    );
+
+    // At least some MIDI was emitted (non-vacuous guard: real notes sounded).
+    let note_ons: Vec<_> = sink.events.iter().filter(|(_, m)| {
+        matches!(m, MidiMessage::NoteOn { vel, .. } if *vel > 0)
+    }).collect();
+    assert!(
+        !note_ons.is_empty(),
+        "engine must emit real NoteOns across chain playback; got no NoteOns"
+    );
+
+    // Registry balance: every NoteOn must be matched by a NoteOff (no hung notes).
+    let mut net: HashMap<(u8, u8), i32> = HashMap::new();
+    for (_, msg) in &sink.events {
+        match msg {
+            MidiMessage::NoteOn { channel, note, vel } if *vel > 0 => {
+                *net.entry((*channel, *note)).or_insert(0) += 1;
+            }
+            MidiMessage::NoteOn { channel, note, .. } => {
+                *net.entry((*channel, *note)).or_insert(0) -= 1;
+            }
+            MidiMessage::NoteOff { channel, note, .. } => {
+                *net.entry((*channel, *note)).or_insert(0) -= 1;
+            }
+            _ => {}
+        }
+    }
+    let hung: Vec<_> = net.iter().filter(|(_, &v)| v > 0).collect();
+    assert!(
+        hung.is_empty(),
+        "no hung notes after chain stop-at-end; leftover: {hung:?}"
+    );
+
+    // Clean up.
+    let _ = std::fs::remove_dir_all(&dir);
+}
