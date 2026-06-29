@@ -270,6 +270,14 @@ pub enum Action {
     DoDeleteChain(usize),
     /// Append a new entry (scene_id) to the selected chain.
     AddChainEntry { chain: usize, scene_id: crate::persist::Id },
+    /// Append the currently selected scene (scene_sel) to the selected chain (chain_sel).
+    AddSelectedSceneToChain,
+    /// Remove the selected entry (chain_entry_sel) from the selected chain (chain_sel).
+    RemoveSelectedChainEntry,
+    /// Move entry selection down by 1 within the selected chain's entries.
+    ChainEntrySelectNext,
+    /// Move entry selection up by 1 within the selected chain's entries.
+    ChainEntrySelectPrev,
     /// Remove entry at `entry` from chain `chain`.
     RemoveChainEntry { chain: usize, entry: usize },
     /// Move entry at `entry` earlier in chain `chain`.
@@ -280,7 +288,15 @@ pub enum Action {
     SetChainEntryBars { chain: usize, entry: usize, value: u32 },
     /// Toggle the `looped` flag on chain at `idx`.
     ToggleChainLoop(usize),
+    /// Toggle loop on the currently selected chain (dispatches ToggleChainLoop(chain_sel)).
+    ToggleSelectedChainLoop,
+    /// Adjust bars of (chain_sel, chain_entry_sel) by delta (clamped ≥ 1).
+    AdjustSelectedChainEntryBars(i32),
+    /// Adjust repeats of (chain_sel, chain_entry_sel) by delta (clamped ≥ 1).
+    AdjustSelectedChainEntryRepeats(i32),
     // ── M7 Transport stubs (real behavior in Task 5) ──────────────────────────
+    /// Play the currently selected chain (dispatches PlayChain(chain_sel)).
+    PlaySelectedChain,
     /// Open the chains overlay (alias used by song-mode UI).
     PlayChain(usize),
     StopChain,
@@ -524,6 +540,8 @@ pub struct App {
     pub scene_issues: Vec<usize>,
     /// Index of the currently selected chain in `set.chains`.
     pub chain_sel: usize,
+    /// Index of the currently selected entry within the selected chain.
+    pub chain_entry_sel: usize,
     /// M7 Task 5: live chain playback state (runtime only — NOT persisted). `Some` while a
     /// chain is auto-advancing; the App runs `chain_decision` at each engine-reported bar
     /// boundary (see `tick_chain`) and recalls the next entry's scene via the existing
@@ -600,6 +618,7 @@ impl App {
             scene_sel: 0,
             scene_issues: Vec::new(),
             chain_sel: 0,
+            chain_entry_sel: 0,
             chain_playback: None,
         }
     }
@@ -2011,7 +2030,45 @@ impl App {
                 if self.set.chains.get(chain).is_some() {
                     self.snapshot();
                     crate::pattern::chain::add_chain_entry(&mut self.set, chain, scene_id);
+                    // Point entry sel at the newly appended entry.
+                    if let Some(c) = self.set.chains.get(chain) {
+                        self.chain_entry_sel = c.entries.len().saturating_sub(1);
+                    }
                 }
+            }
+            Action::AddSelectedSceneToChain => {
+                if let Some(scene) = self.set.scenes.get(self.scene_sel) {
+                    let scene_id = scene.id.clone();
+                    let chain = self.chain_sel;
+                    cmds.extend(self.apply(Action::AddChainEntry { chain, scene_id }));
+                } else {
+                    self.set_status("No scene selected");
+                }
+            }
+            Action::RemoveSelectedChainEntry => {
+                let chain = self.chain_sel;
+                let entry = self.chain_entry_sel;
+                cmds.extend(self.apply(Action::RemoveChainEntry { chain, entry }));
+                // Clamp entry sel after removal.
+                if let Some(c) = self.set.chains.get(chain) {
+                    let n = c.entries.len();
+                    if n == 0 {
+                        self.chain_entry_sel = 0;
+                    } else {
+                        self.chain_entry_sel = self.chain_entry_sel.min(n - 1);
+                    }
+                }
+            }
+            Action::ChainEntrySelectNext => {
+                if let Some(c) = self.set.chains.get(self.chain_sel) {
+                    let n = c.entries.len();
+                    if n > 0 {
+                        self.chain_entry_sel = (self.chain_entry_sel + 1).min(n - 1);
+                    }
+                }
+            }
+            Action::ChainEntrySelectPrev => {
+                self.chain_entry_sel = self.chain_entry_sel.saturating_sub(1);
             }
             Action::RemoveChainEntry { chain, entry } => {
                 if self.set.chains.get(chain).and_then(|c| c.entries.get(entry)).is_some() {
@@ -2057,6 +2114,30 @@ impl App {
                     crate::pattern::chain::toggle_chain_loop(&mut self.set, idx);
                 }
             }
+            Action::ToggleSelectedChainLoop => {
+                let idx = self.chain_sel;
+                cmds.extend(self.apply(Action::ToggleChainLoop(idx)));
+            }
+            Action::PlaySelectedChain => {
+                let idx = self.chain_sel;
+                cmds.extend(self.apply(Action::PlayChain(idx)));
+            }
+            Action::AdjustSelectedChainEntryBars(delta) => {
+                let chain = self.chain_sel;
+                let entry = self.chain_entry_sel;
+                if let Some(e) = self.set.chains.get(chain).and_then(|c| c.entries.get(entry)) {
+                    let new_val = (e.bars as i32 + delta).max(1) as u32;
+                    cmds.extend(self.apply(Action::SetChainEntryBars { chain, entry, value: new_val }));
+                }
+            }
+            Action::AdjustSelectedChainEntryRepeats(delta) => {
+                let chain = self.chain_sel;
+                let entry = self.chain_entry_sel;
+                if let Some(e) = self.set.chains.get(chain).and_then(|c| c.entries.get(entry)) {
+                    let new_val = (e.repeats as i32 + delta).max(1) as u32;
+                    cmds.extend(self.apply(Action::SetChainEntryRepeats { chain, entry, value: new_val }));
+                }
+            }
             // ── M7 Task 5: chain playback ───────────────────────────────────────
             Action::PlayChain(idx) => {
                 match self.set.chains.get(idx) {
@@ -2075,6 +2156,11 @@ impl App {
                             active: true,
                         });
                         cmds.extend(self.arm_chain_entry(idx, 0));
+                        // Start transport if not already playing so the chain actually runs.
+                        if !self.playing {
+                            self.playing = true;
+                            cmds.push(UiCommand::Play);
+                        }
                         self.set_status(format!("Playing chain \"{}\"", self.set.chains[idx].name));
                     }
                 }
@@ -9958,6 +10044,38 @@ mod tests {
             cmds.iter().any(|c| matches!(c, UiCommand::Stop)),
             "StopChain stops transport (all-notes-off via engine); got {cmds:?}"
         );
+    }
+
+    // ── M7 T6: PlayChain starts transport ─────────────────────────────────────
+
+    #[test]
+    fn play_chain_starts_transport_when_stopped() {
+        let (mut app, c) = app_with_chain(&[(0, 1, 1)], false);
+        assert!(!app.playing, "transport must be stopped before test");
+        let cmds = app.apply(Action::PlayChain(c));
+        assert!(app.playing, "playing must be set to true after PlayChain");
+        assert!(
+            cmds.iter().any(|c| matches!(c, UiCommand::Play)),
+            "PlayChain must emit UiCommand::Play when transport was stopped; got {cmds:?}"
+        );
+    }
+
+    #[test]
+    fn play_chain_does_not_double_start_transport_when_already_playing() {
+        let (mut app, c) = app_with_chain(&[(0, 1, 1)], false);
+        app.playing = true; // pretend transport is already running
+        let cmds = app.apply(Action::PlayChain(c));
+        assert!(app.playing);
+        let play_count = cmds.iter().filter(|c| matches!(c, UiCommand::Play)).count();
+        assert_eq!(play_count, 0, "must not emit extra Play when already playing; got {cmds:?}");
+    }
+
+    #[test]
+    fn play_selected_chain_uses_chain_sel() {
+        let (mut app, c) = app_with_chain(&[(0, 1, 1)], false);
+        app.chain_sel = c;
+        app.apply(Action::PlaySelectedChain);
+        assert!(app.chain_playback.is_some(), "PlaySelectedChain must arm playback for chain_sel");
     }
 
     #[test]

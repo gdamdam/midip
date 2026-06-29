@@ -203,11 +203,22 @@ pub fn key_to_action(key: KeyEvent, mode: Mode, kind: LaneKind) -> Action {
             return match key.code {
                 KeyCode::Up => Action::ChainSelect(-1),
                 KeyCode::Down => Action::ChainSelect(1),
+                KeyCode::Enter => Action::PlaySelectedChain,
                 KeyCode::Char('c') => Action::CreateChain,
                 KeyCode::Char('r') => Action::RenameChain,
                 KeyCode::Char('d') => Action::DuplicateChain,
                 KeyCode::Char('x') | KeyCode::Delete => Action::DeleteChain,
-                KeyCode::Esc => Action::CloseChains,
+                KeyCode::Char('C') => Action::StopChain,
+                KeyCode::Char('a') => Action::AddSelectedSceneToChain,
+                KeyCode::Char('X') => Action::RemoveSelectedChainEntry,
+                KeyCode::Tab => Action::ChainEntrySelectNext,
+                KeyCode::BackTab => Action::ChainEntrySelectPrev,
+                KeyCode::Char('m') => Action::ToggleSelectedChainLoop,
+                KeyCode::Char('[') => Action::AdjustSelectedChainEntryBars(-1),
+                KeyCode::Char(']') => Action::AdjustSelectedChainEntryBars(1),
+                KeyCode::Char('{') => Action::AdjustSelectedChainEntryRepeats(-1),
+                KeyCode::Char('}') => Action::AdjustSelectedChainEntryRepeats(1),
+                KeyCode::Char('K') | KeyCode::Esc => Action::CloseChains,
                 _ => Action::None,
             };
         }
@@ -287,6 +298,8 @@ pub fn key_to_action(key: KeyEvent, mode: Mode, kind: LaneKind) -> Action {
                     'V' => return Action::OpenCrateView,    // open live crate browser
                     // 'G' (Shift+g) was unbound in Edit; opens the scene manager.
                     'G' => return Action::OpenScenes,
+                    // 'K' (Shift+k) opens the chain manager. Lowercase 'k' is ToggleLink.
+                    'K' => return Action::OpenChains,
                     // 'i' was unbound; chosen for "in-sync" — re-sync the focused lane's
                     // phase at the next bar/beat without changing its pattern.
                     'i' => return Action::RestartLane,
@@ -1825,4 +1838,89 @@ mod tests {
             "'!' must be Panic in Scenes"
         );
     }
+
+    // ── M7 T6: Mode::Chains input routing ──────────────────────────────────────
+
+    #[test]
+    fn shift_k_opens_chains_from_edit_mode() {
+        for kind in [LaneKind::Drums, LaneKind::Melodic] {
+            assert_eq!(
+                key_to_action(k(KeyCode::Char('K')), Mode::Edit, kind),
+                Action::OpenChains,
+                "'K' in Edit must open chain manager"
+            );
+        }
+    }
+
+    #[test]
+    fn enter_in_chains_mode_plays_selected_chain() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Enter), Mode::Chains, LaneKind::Drums),
+            Action::PlaySelectedChain,
+            "Enter in Chains must PlaySelectedChain"
+        );
+    }
+
+    #[test]
+    fn c_in_chains_mode_creates_chain() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('c')), Mode::Chains, LaneKind::Drums),
+            Action::CreateChain
+        );
+    }
+
+    #[test]
+    fn esc_in_chains_mode_closes() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Esc), Mode::Chains, LaneKind::Drums),
+            Action::CloseChains
+        );
+    }
+
+    #[test]
+    fn k_in_chains_mode_closes() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('K')), Mode::Chains, LaneKind::Drums),
+            Action::CloseChains,
+            "'K' in Chains must CloseChains (mirror G/esc in Scenes)"
+        );
+    }
+
+    #[test]
+    fn chains_mode_sub_keys() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Up), Mode::Chains, LaneKind::Drums),
+            Action::ChainSelect(-1)
+        );
+        assert_eq!(
+            key_to_action(k(KeyCode::Down), Mode::Chains, LaneKind::Drums),
+            Action::ChainSelect(1)
+        );
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('r')), Mode::Chains, LaneKind::Drums),
+            Action::RenameChain
+        );
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('d')), Mode::Chains, LaneKind::Drums),
+            Action::DuplicateChain
+        );
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('x')), Mode::Chains, LaneKind::Drums),
+            Action::DeleteChain
+        );
+        assert_eq!(
+            key_to_action(k(KeyCode::Delete), Mode::Chains, LaneKind::Drums),
+            Action::DeleteChain
+        );
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('C')), Mode::Chains, LaneKind::Drums),
+            Action::StopChain
+        );
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('m')), Mode::Chains, LaneKind::Drums),
+            Action::ToggleSelectedChainLoop,
+            "'m' must ToggleSelectedChainLoop"
+        );
+    }
+
 }

@@ -147,6 +147,17 @@ fn right_column_lines() -> Vec<Line<'static>> {
         row("[z]  validate (check missing patterns)"),
         row("[G / esc]  close"),
         blank(),
+        // ── Chains  [K] ───────────────────────────────────────────────
+        header("Chains  [K] to open"),
+        row("[↑ ↓]  select chain"),
+        row("[enter]  play chain (starts transport)   [C]  stop"),
+        row("[c]  create   [r]  rename   [d]  duplicate   [x]  delete"),
+        row("[m]  toggle loop   [a]  add selected scene as entry"),
+        row("[X]  remove selected entry"),
+        row("[tab / shift-tab]  navigate entries"),
+        row("[ / ]  bars −/+   { / }  repeats −/+"),
+        row("[K / esc]  close"),
+        blank(),
         // ── Favorites ─────────────────────────────────────────────────
         header("Favorites  (Library mode)"),
         row("[f]  toggle favorite on selected pattern"),
