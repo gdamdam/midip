@@ -5,9 +5,9 @@
 **A terminal MIDI sequencer & live groovebox for the Roland AIRA Compact T‑8 and S‑1**
 
 [![License](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.9.0-success.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.10.0-success.svg)](CHANGELOG.md)
 [![Rust](https://img.shields.io/badge/rust-2021%20edition-orange.svg)](https://www.rust-lang.org)
-[![Tests](https://img.shields.io/badge/tests-684%20passing-brightgreen.svg)](docs/HARDWARE-ACCEPTANCE.md)
+[![Tests](https://img.shields.io/badge/tests-730%20passing-brightgreen.svg)](docs/HARDWARE-ACCEPTANCE.md)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg)](#build--run)
 [![Built with ratatui](https://img.shields.io/badge/TUI-ratatui-blueviolet.svg)](https://ratatui.rs)
 
@@ -44,6 +44,7 @@ gear is the sound. (It never triggers a device's own internal pattern — see
 - [Favorites & crates](#favorites--crates)
 - [Performance controls](#performance-controls)
 - [Scale-aware editing](#scale-aware-editing)
+- [Scenes](#scenes)
 - [Configuration](#configuration)
 - [Project layout](#project-layout)
 - [Testing](#testing)
@@ -84,6 +85,10 @@ gear is the sound. (It never triggers a device's own internal pattern — see
   Stack notes by key in the note-input sub-mode, build a scale-aware triad with `j`, or strip
   a note with `J`. The T‑8 bass stays monophonic (single note + slide). Backward-compatible:
   every existing pattern loads and plays exactly as before.
+- **Scenes** — capture the current per-lane state (pattern + mute/solo/transpose/octave) as a
+  named scene, then recall it live as a **quantized all-lane launch on one boundary** — all
+  lanes switch together on the next bar/beat. The scene manager (`G`) handles capture, recall,
+  rename, duplicate, delete, and validation. Scenes live in the set file (backward-compatible).
 - **Tempo** — type an exact BPM, nudge it, **tap tempo**, or sync to **Ableton Link**
   (embedded — no separate bridge app). Link bar‑locks playback start so no notes fire before
   the bar boundary. midip is the clock master (24 PPQN).
@@ -114,7 +119,7 @@ Other commands:
 
 ```sh
 cargo build --release        # just build the binary (target/release/midip)
-cargo test                   # run the test suite (684 tests, no hardware needed)
+cargo test                   # run the test suite (730 tests, no hardware needed)
 ```
 
 > Run it in a real terminal (not piped) — it takes over the screen while running and restores
@@ -282,6 +287,7 @@ Press **`?`** in‑app for the full scrollable two-column list. `space` and `!` 
 | `w` | Open route editor |
 | `l` | Open library |
 | `V` | Open live crate view |
+| `G` | Open scene manager |
 | `o` | Open set manager |
 | `s` | Save set |
 | `?` | Help overlay |
@@ -401,6 +407,30 @@ stays mono: a new note replaces the old, keeping slide). On a poly lane:
 Chords are saved compatibly: a mono pattern still writes the legacy on-disk shape and loads
 in earlier builds; only patterns that actually contain a chord become this-version-only.
 
+## Scenes
+
+A **scene** is a snapshot of what every lane is playing — each lane's pattern plus its mute,
+solo, transpose, and octave. Scenes let you set up sections of a track and switch between them
+live. Open the scene manager with `G`:
+
+| Key | Action |
+|-----|--------|
+| `↑` / `↓` | Select a scene |
+| `c` | Capture the current state as a new scene |
+| `Enter` | Recall the selected scene (quantized all-lane launch) |
+| `r` / `d` | Rename / duplicate the selected scene |
+| `x` / `Del` | Delete the selected scene (with confirmation) |
+| `z` | Validate — flag assignments whose pattern is missing |
+| `C` | Cancel a queued recall |
+| `G` / `Esc` | Close |
+
+**Recall is quantized:** while playing, recalling a scene queues every lane to switch to its
+assigned pattern and state together on the next boundary (next‑bar or next‑beat, following the
+`b` toggle), so the outgoing scene keeps sounding until the boundary — then all lanes flip at
+once, with no hung notes. When stopped, recall applies immediately. A lane whose pattern is
+missing is left untouched and reported. Scenes are saved inside the set file; old sets simply
+have no scenes.
+
 ## Configuration
 
 Environment variables (all optional):
@@ -438,12 +468,12 @@ cargo test
 The engine writes through a `MidiSink` trait, so playback, scheduling, slides, probability,
 ratcheting, polymeter, quantized launch, favorites, crates, scale-aware editing, and the
 reducer are all tested with a recording sink — **no hardware needed**. UI views are checked
-with ratatui's `TestBackend`. 684 tests, 0 failures. (Live MIDI and Ableton Link are hardware
+with ratatui's `TestBackend`. 730 tests, 0 failures. (Live MIDI and Ableton Link are hardware
 paths — see [`docs/HARDWARE-ACCEPTANCE.md`](docs/HARDWARE-ACCEPTANCE.md).)
 
 ## Status
 
-v0.9.0 — feature‑complete and green. See [`docs/KNOWN-ISSUES.md`](docs/KNOWN-ISSUES.md) for
+v0.10.0 — feature‑complete and green. See [`docs/KNOWN-ISSUES.md`](docs/KNOWN-ISSUES.md) for
 open items, and [`CHANGELOG.md`](CHANGELOG.md) for the full history.
 
 ## License

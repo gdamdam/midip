@@ -7,6 +7,23 @@ feature milestone is a minor bump).
 
 ## [Unreleased]
 
+## [0.10.0] — 2026-06-29 — Scenes
+
+### Added
+- **Scenes** — capture the current per-lane performance state (each lane's pattern + mute,
+  solo, transpose, and octave) as a named scene, and recall it live. Recall is a **quantized
+  all-lane launch on one boundary**: every lane switches to its assigned pattern and state
+  together on the next bar/beat (next-beat/next-bar follows the `b` toggle), so the outgoing
+  scene plays until the boundary; when stopped, recall applies immediately. A lane whose
+  pattern is missing is left untouched and reported, and `C` cancels a queued recall.
+- **Scene manager** (`G`) — list, capture (`c`), recall (`Enter`), rename (`r`), duplicate
+  (`d`), delete (`x`, with confirmation), and validate (`z`, flags missing assignments)
+  scenes, with a per-lane assignment detail view and a queued-recall marker.
+
+### Changed
+- Scenes are stored inside the set file (backward-compatible: old sets load with no scenes,
+  and adding scenes needs no format-version bump).
+
 ## [0.9.0] — 2026-06-29 — Chords & polyphony
 
 ### Added
