@@ -1,5 +1,6 @@
+use crate::music::scale::fold_to_scale;
 use crate::pattern::euclid::bjorklund;
-use crate::pattern::model::{DrumHit, Lane, Pattern, PatternData};
+use crate::pattern::model::{DrumHit, Lane, MelodicNote, MelodicStep, Pattern, PatternData};
 
 /// Which generation strategy to apply.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -60,6 +61,13 @@ pub(crate) fn next_rng(state: &mut u64) -> u64 {
 const VEL_MIN: u64 = 80;
 const VEL_RANGE: u64 = 40; // 80..=119
 
+// ── Velocity band for generated melodic notes ────────────────────────────────
+// vel is a float multiplier (0..=1.3 typical). We generate in [0.8, 1.2).
+// Implemented as: 0.8 + (rng % 4096) / 4096.0 * 0.4
+const MEL_VEL_BASE: f32 = 0.8;
+const MEL_VEL_SPREAD: f32 = 0.4;
+const MEL_VEL_DENOM: u64 = 4096;
+
 /// Generate a drum pattern from scratch using Euclidean distribution for placement
 /// and seeded xorshift for velocity.
 ///
@@ -111,18 +119,89 @@ fn generate_drums(params: &GenParams, source: &Pattern) -> Pattern {
     out
 }
 
+/// Generate a melodic pattern from scratch.
+///
+/// For each active step (placed via Euclidean distribution on `density`), pick a
+/// raw semitone offset in `[-range, +range]` using the seeded RNG, then fold it
+/// to `lane.scale` via the M5 `fold_to_scale` function. Velocity is a seeded float
+/// multiplier in `[MEL_VEL_BASE, MEL_VEL_BASE + MEL_VEL_SPREAD)`.
+///
+/// Each active step produces exactly one `MelodicNote` (mono). Inactive steps are
+/// rests (`MelodicStep::default()` = empty vec).
+///
+/// `range = 0` → all active notes land on degree 0 (root-fold of 0 = 0 for any scale).
+fn generate_melodic(params: &GenParams, source: &Pattern, lane: &Lane) -> Pattern {
+    let length = source.length;
+    let mut out = source.clone();
+
+    let pulses = if params.density == 0 {
+        0
+    } else if params.density >= 100 {
+        length
+    } else {
+        let d = params.density as usize;
+        (d * length + 50) / 100
+    };
+
+    let mask = bjorklund(pulses, length, 0);
+    let mut rng = params.seed;
+
+    // The chromatic span to draw from: [-range, +range]. Total candidates = 2*range+1.
+    // When range == 0 the only candidate is 0 (root offset, folds to root degree).
+    let span = params.range as i32 * 2 + 1; // always ≥ 1
+
+    let steps: Vec<MelodicStep> = mask
+        .into_iter()
+        .map(|active| {
+            if active {
+                // Pick a raw offset in [-range, +range].
+                let raw_offset = if params.range == 0 {
+                    0i32
+                } else {
+                    // rng % span gives [0, span); subtract range to center around 0.
+                    let r = next_rng(&mut rng);
+                    (r % span as u64) as i32 - params.range as i32
+                };
+
+                // Fold to lane scale (reuses M5 scale-fold; no-op for Chromatic).
+                let folded = fold_to_scale(raw_offset, lane.scale);
+
+                // Clamp to i8 (semitone offset field is i8).
+                let semi = folded.clamp(i8::MIN as i32, i8::MAX as i32) as i8;
+
+                // Seeded velocity multiplier in [MEL_VEL_BASE, MEL_VEL_BASE + MEL_VEL_SPREAD).
+                let v = next_rng(&mut rng);
+                let vel = MEL_VEL_BASE + (v % MEL_VEL_DENOM) as f32 / MEL_VEL_DENOM as f32 * MEL_VEL_SPREAD;
+
+                MelodicStep::from(vec![MelodicNote {
+                    semi,
+                    vel,
+                    slide: false,
+                    len: lane.profile.gate_fraction,
+                    prob: 1.0,
+                    ratchet: 1,
+                }])
+            } else {
+                MelodicStep::default()
+            }
+        })
+        .collect();
+
+    out.data = PatternData::Melodic(steps);
+    out
+}
+
 /// Dispatch generation based on `params.mode` and the kind of `source`.
 ///
 /// Tasks 2–4 replace the `todo!()` arms with real drum/melodic/vary logic.
 /// For now every arm returns `source.clone()` so the crate compiles and the
 /// purity test (same seed → same output) passes trivially.
-pub fn generate(params: &GenParams, source: &Pattern, _lane: &Lane) -> Pattern {
+pub fn generate(params: &GenParams, source: &Pattern, lane: &Lane) -> Pattern {
     use crate::pattern::model::LaneKind;
     match (&params.mode, source.kind()) {
         (GenMode::Generate, LaneKind::Drums) => generate_drums(params, source),
         (GenMode::Generate, LaneKind::Melodic) => {
-            // Task 3: melodic generation
-            source.clone()
+            generate_melodic(params, source, lane)
         }
         (GenMode::Vary, LaneKind::Drums) => {
             // Task 4: drum variation
@@ -310,6 +389,221 @@ mod gen_core_tests {
                 }
             }
             _ => panic!("expected drums"),
+        }
+    }
+
+    // ── Task 3: melodic Generate arm ─────────────────────────────────────────
+
+    use crate::devices::profiles::S1;
+
+    /// Melodic fixture: 16-step empty melodic pattern + Lane with given scale.
+    fn melodic_fixture(scale: Scale) -> (GenParams, Pattern, Lane) {
+        let src = Pattern::empty_melodic(16);
+        let lane = Lane {
+            profile: S1,
+            pattern: Pattern::empty_melodic(16),
+            mute: false,
+            solo: false,
+            transpose: 0,
+            octave: 0,
+            route: None,
+            muted_voices: vec![],
+            scale,
+            root: None,
+        };
+        let params = GenParams { density: 75, range: 12, ..GenParams::default() };
+        (params, src, lane)
+    }
+
+    /// Extract all active notes from a melodic pattern.
+    fn melodic_notes(pat: &Pattern) -> Vec<i8> {
+        match &pat.data {
+            PatternData::Melodic(steps) => steps
+                .iter()
+                .flat_map(|s| s.iter().map(|n| n.semi))
+                .collect(),
+            _ => panic!("expected melodic"),
+        }
+    }
+
+    fn melodic_active_count(pat: &Pattern) -> usize {
+        match &pat.data {
+            PatternData::Melodic(steps) => steps.iter().filter(|s| !s.is_empty()).count(),
+            _ => panic!("expected melodic"),
+        }
+    }
+
+    #[test]
+    fn melodic_generate_density_0_produces_no_notes() {
+        let (mut p, src, lane) = melodic_fixture(Scale::Chromatic);
+        p.density = 0;
+        let out = generate(&p, &src, &lane);
+        assert_eq!(melodic_active_count(&out), 0, "density=0 must produce no notes");
+    }
+
+    #[test]
+    fn melodic_generate_density_100_fills_all_steps() {
+        let (mut p, src, lane) = melodic_fixture(Scale::Chromatic);
+        p.density = 100;
+        let out = generate(&p, &src, &lane);
+        assert_eq!(
+            melodic_active_count(&out),
+            src.length,
+            "density=100 must fill all steps"
+        );
+    }
+
+    #[test]
+    fn melodic_generate_is_deterministic() {
+        let (p, src, lane) = melodic_fixture(Scale::Major);
+        let a = generate(&p, &src, &lane);
+        let b = generate(&p, &src, &lane);
+        assert_eq!(a, b, "same seed must produce identical output");
+    }
+
+    #[test]
+    fn melodic_generate_different_seeds_differ() {
+        let (p, src, lane) = melodic_fixture(Scale::Major);
+        let p2 = GenParams { seed: 99999, ..p.clone() };
+        let a = generate(&p, &src, &lane);
+        let b = generate(&p2, &src, &lane);
+        assert_ne!(a, b, "different seeds must produce different patterns");
+    }
+
+    #[test]
+    fn melodic_generate_range_0_all_root_degree() {
+        // range=0 → raw offset is always 0 → fold_to_scale(0, any) = 0
+        let (mut p, src, lane) = melodic_fixture(Scale::Major);
+        p.range = 0;
+        p.density = 100;
+        let out = generate(&p, &src, &lane);
+        let notes = melodic_notes(&out);
+        assert!(!notes.is_empty(), "density=100 must produce notes");
+        for semi in &notes {
+            assert_eq!(*semi, 0, "range=0 must produce only root-degree (semi=0) notes");
+        }
+    }
+
+    #[test]
+    fn melodic_generate_all_semis_within_range() {
+        let range = 7u8;
+        let (mut p, src, lane) = melodic_fixture(Scale::Chromatic);
+        p.range = range;
+        p.density = 100;
+        let out = generate(&p, &src, &lane);
+        let notes = melodic_notes(&out);
+        for semi in &notes {
+            assert!(
+                *semi >= -(range as i8) && *semi <= range as i8,
+                "semi {} outside ±{} range",
+                semi,
+                range
+            );
+        }
+    }
+
+    #[test]
+    fn melodic_generate_major_scale_all_in_scale() {
+        let (mut p, src, lane) = melodic_fixture(Scale::Major);
+        p.density = 100;
+        p.range = 11; // cover all pitch classes
+        let out = generate(&p, &src, &lane);
+        let notes = melodic_notes(&out);
+        assert!(!notes.is_empty());
+        let major_degrees: &[u8] = &[0, 2, 4, 5, 7, 9, 11];
+        for semi in &notes {
+            let pc = semi.rem_euclid(12) as u8;
+            assert!(
+                major_degrees.contains(&pc),
+                "semi {} (pc={}) not in Major scale",
+                semi,
+                pc
+            );
+        }
+    }
+
+    #[test]
+    fn melodic_generate_minor_pentatonic_all_in_scale() {
+        let (mut p, src, lane) = melodic_fixture(Scale::MinorPentatonic);
+        p.density = 100;
+        p.range = 11;
+        let out = generate(&p, &src, &lane);
+        let notes = melodic_notes(&out);
+        assert!(!notes.is_empty());
+        let minor_penta: &[u8] = &[0, 3, 5, 7, 10];
+        for semi in &notes {
+            let pc = semi.rem_euclid(12) as u8;
+            assert!(
+                minor_penta.contains(&pc),
+                "semi {} (pc={}) not in MinorPentatonic scale",
+                semi,
+                pc
+            );
+        }
+    }
+
+    #[test]
+    fn melodic_generate_chromatic_allows_any_in_range() {
+        // Chromatic = identity; any semitone in [-range, +range] is valid.
+        let (mut p, src, lane) = melodic_fixture(Scale::Chromatic);
+        p.density = 100;
+        p.range = 12;
+        let out = generate(&p, &src, &lane);
+        let notes = melodic_notes(&out);
+        assert!(!notes.is_empty());
+        // Just verify in-range (fold is identity for Chromatic).
+        for semi in &notes {
+            assert!(
+                *semi >= -12 && *semi <= 12,
+                "chromatic semi {} out of ±12 range",
+                semi
+            );
+        }
+    }
+
+    #[test]
+    fn melodic_generate_single_note_per_active_step() {
+        // Mono: each active step must have exactly one note.
+        let (mut p, src, lane) = melodic_fixture(Scale::Major);
+        p.density = 100;
+        let out = generate(&p, &src, &lane);
+        match &out.data {
+            PatternData::Melodic(steps) => {
+                for step in steps {
+                    assert!(
+                        step.len() <= 1,
+                        "each step must have at most 1 note (mono), got {}",
+                        step.len()
+                    );
+                }
+            }
+            _ => panic!("expected melodic"),
+        }
+    }
+
+    #[test]
+    fn melodic_generate_velocity_in_band() {
+        let (mut p, src, lane) = melodic_fixture(Scale::Chromatic);
+        p.density = 100;
+        let out = generate(&p, &src, &lane);
+        match &out.data {
+            PatternData::Melodic(steps) => {
+                for step in steps {
+                    for note in step.iter() {
+                        assert!(
+                            note.vel >= MEL_VEL_BASE && note.vel < MEL_VEL_BASE + MEL_VEL_SPREAD,
+                            "velocity {} out of band [{}, {})",
+                            note.vel,
+                            MEL_VEL_BASE,
+                            MEL_VEL_BASE + MEL_VEL_SPREAD
+                        );
+                        assert_eq!(note.prob, 1.0);
+                        assert_eq!(note.ratchet, 1);
+                        assert!(!note.slide);
+                    }
+                }
+            }
+            _ => panic!("expected melodic"),
         }
     }
 }
