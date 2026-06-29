@@ -7,6 +7,18 @@ feature milestone is a minor bump).
 
 ## [Unreleased]
 
+## [0.12.0] — 2026-06-29 — Generative
+
+### Added
+- **Generative tools** (`D`) — a panel to generate or vary the focused lane's pattern.
+  **Generate** builds a fresh pattern from a target density (drums via Euclidean distribution) and,
+  for melodic lanes, pitches within a range **folded to the lane's scale**; **Vary** perturbs the
+  current pattern by a mutation amount. Both are **seeded and reproducible** (visible seed, `z` to
+  reroll). The candidate previews live and auditions non-destructively, then **commits as a single
+  undo** (`Enter`) or reverts (`Esc`) — reusing the existing transform/undo machinery. Panel keys:
+  `Tab`/`Shift+Tab` switch Vary/Generate, `d`/`r`/`m` adjust density/range/mutate, `z` rerolls.
+  Generation writes only rhythm, pitch, and velocity (no persistence change).
+
 ## [0.11.0] — 2026-06-29 — Song Mode
 
 ### Added
