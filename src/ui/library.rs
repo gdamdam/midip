@@ -152,6 +152,30 @@ fn build_preview_lines(pattern: &Pattern, width: usize, max_height: usize) -> Ve
 /// Number of items visible in a genre/pattern list at once before scrolling.
 const VISIBLE_HEIGHT: usize = 12;
 
+/// Build the `PatternRef` for an entry in a genre map at a given index.
+/// Returns `None` if the index is out of bounds.
+fn pattern_ref_for_entry(
+    app: &App,
+    genre: &str,
+    pat: &crate::pattern::model::Pattern,
+) -> crate::pattern::refs::PatternRef {
+    use crate::pattern::refs::PatternRef;
+    if genre == "User" {
+        PatternRef::User(pat.id.clone())
+    } else {
+        let role = match app.lib_role {
+            crate::pattern::library::LibRole::Drums => "drums",
+            crate::pattern::library::LibRole::Bass => "bass",
+            crate::pattern::library::LibRole::Synth => "synth",
+        };
+        PatternRef::Vendored {
+            role: role.to_string(),
+            genre: genre.to_string(),
+            name: pat.name.clone(),
+        }
+    }
+}
+
 /// Render the library browser into `area`.
 pub fn render_library(f: &mut Frame, area: Rect, app: &App) {
     let map = map_for_role(app, app.lib_role);
@@ -162,7 +186,13 @@ pub fn render_library(f: &mut Frame, area: Rect, app: &App) {
     } else {
         " GENRE "
     };
-    let pattern_title = if !genre_focused {
+    let pattern_title = if app.fav_filter {
+        if !genre_focused {
+            " ▸PATTERN ★only "
+        } else {
+            " PATTERN ★only "
+        }
+    } else if !genre_focused {
         " ▸PATTERN "
     } else {
         " PATTERN "
@@ -221,12 +251,33 @@ pub fn render_library(f: &mut Frame, area: Rect, app: &App) {
     }
     f.render_widget(Paragraph::new(genre_lines), cols[0]);
 
-    // Column 2: pattern list for the selected genre + scroll window + position indicator.
-    let selected_patterns: &[crate::pattern::model::Pattern] = genres
+    // Column 2: pattern list for the selected genre.
+    // When fav_filter is on, only show patterns that are in favorites.
+    let all_patterns: &[crate::pattern::model::Pattern] = genres
         .get(app.lib_genre)
         .map(|(_, pats)| pats.as_slice())
         .unwrap_or(&[]);
-    let pat_total = selected_patterns.len();
+    let selected_genre_name: &str = genres
+        .get(app.lib_genre)
+        .map(|(name, _)| name.as_str())
+        .unwrap_or("");
+
+    // Build the filtered view: (original_index, pattern) pairs
+    let visible_patterns: Vec<(usize, &crate::pattern::model::Pattern)> = all_patterns
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| {
+            if app.fav_filter {
+                let r = pattern_ref_for_entry(app, selected_genre_name, p);
+                app.favorites.contains(&r)
+            } else {
+                true
+            }
+        })
+        .collect();
+
+    let pat_total = visible_patterns.len();
+    // lib_pattern indexes into visible_patterns when filter is on, into all_patterns otherwise.
     let pat_scroll = app
         .lib_pattern
         .saturating_sub(VISIBLE_HEIGHT / 2)
@@ -236,20 +287,30 @@ pub fn render_library(f: &mut Frame, area: Rect, app: &App) {
         pattern_title,
         Style::default().add_modifier(Modifier::BOLD),
     )));
-    for (i, p) in selected_patterns
+    for (display_i, (orig_i, p)) in visible_patterns
         .iter()
         .enumerate()
         .skip(pat_scroll)
         .take(VISIBLE_HEIGHT)
     {
-        let marker = if i == app.lib_pattern { "▸" } else { " " };
-        let style = if i == app.lib_pattern {
+        let marker = if display_i == app.lib_pattern {
+            "▸"
+        } else {
+            " "
+        };
+        let style = if display_i == app.lib_pattern {
             Style::default().add_modifier(Modifier::BOLD)
         } else {
             Style::default()
         };
+        let r = pattern_ref_for_entry(app, selected_genre_name, p);
+        let star = if app.favorites.contains(&r) {
+            "\u{2605}"
+        } else {
+            " "
+        };
         pattern_lines.push(Line::from(Span::styled(
-            format!("{marker}{:02} {}", i + 1, p.name),
+            format!("{marker}{star}{:02} {}", orig_i + 1, p.name),
             style,
         )));
     }
@@ -262,6 +323,10 @@ pub fn render_library(f: &mut Frame, area: Rect, app: &App) {
     }
     f.render_widget(Paragraph::new(pattern_lines), cols[1]);
 
+    // Resolve the selected pattern from the visible (possibly filtered) list.
+    let selected_pattern_in_col2: Option<&crate::pattern::model::Pattern> =
+        visible_patterns.get(app.lib_pattern).map(|(_, p)| *p);
+
     // Column 3: detailed preview for the selected pattern + audition badge + load hint.
     let preview_width = cols[2].width as usize;
     let preview_height = cols[2].height as usize;
@@ -269,7 +334,7 @@ pub fn render_library(f: &mut Frame, area: Rect, app: &App) {
     // Reserve lines: 1 for the hint (or 2 when auditioning for the badge).
     let reserved = if auditioning { 2 } else { 1 };
     let mut preview_lines: Vec<Line> = Vec::new();
-    if let Some(p) = selected_patterns.get(app.lib_pattern) {
+    if let Some(p) = selected_pattern_in_col2 {
         let max_h = preview_height.saturating_sub(reserved);
         preview_lines.extend(build_preview_lines(p, preview_width, max_h));
     }
@@ -537,6 +602,108 @@ mod tests {
         );
         // root=45 (A2), semi=0 → A2; semi=7 → E3
         assert!(whole.contains("A2"), "expected note name A2 in: {whole:?}");
+    }
+
+    // ── M4a Task 3: favorites UI tests ────────────────────────────────────────
+
+    #[test]
+    fn render_library_shows_star_for_favorited_pattern() {
+        use crate::pattern::refs::PatternRef;
+        use crate::pattern::store::Favorites;
+
+        let set = Set::default_set(default_profiles());
+        let mut app = App::new(set, library_with_drums());
+        app.lib_role = LibRole::Drums;
+        app.lib_genre = 0;
+        app.lib_pattern = 0;
+
+        // Favorite the "Four on Floor" pattern in techno.
+        let r = PatternRef::Vendored {
+            role: "drums".to_string(),
+            genre: "techno".to_string(),
+            name: "Four on Floor".to_string(),
+        };
+        let mut favs = Favorites::default();
+        favs.toggle(r);
+        app.favorites = favs;
+
+        let whole = render_to_string(&app);
+        assert!(
+            whole.contains('\u{2605}'),
+            "favorited pattern must show ★ in library browser: {whole:?}"
+        );
+    }
+
+    #[test]
+    fn render_library_fav_filter_shows_only_favorites() {
+        use crate::pattern::model::{DrumHit, Pattern, PatternData};
+        use crate::pattern::refs::PatternRef;
+        use crate::pattern::store::Favorites;
+
+        // Build a library with two patterns in techno: only "Four on Floor" favorited.
+        let mut drums = GenreMap::new();
+        let pat1 = Pattern {
+            name: "Four on Floor".to_string(),
+            desc: String::new(),
+            length: 16,
+            data: PatternData::Drums(vec![
+                vec![DrumHit {
+                    note: 36,
+                    vel: 127,
+                    prob: 1.0,
+                    ratchet: 1,
+                }];
+                16
+            ]),
+            id: crate::persist::Id::nil(),
+        };
+        let pat2 = Pattern {
+            name: "Off Beat".to_string(),
+            desc: String::new(),
+            length: 16,
+            data: PatternData::Drums(vec![Vec::new(); 16]),
+            id: crate::persist::Id::nil(),
+        };
+        drums.insert("techno".to_string(), vec![pat1, pat2]);
+        let library = Library {
+            drums,
+            bass: GenreMap::new(),
+            synth: GenreMap::new(),
+        };
+
+        let set = Set::default_set(default_profiles());
+        let mut app = App::new(set, library);
+        app.lib_role = LibRole::Drums;
+        app.lib_genre = 0;
+        app.lib_pattern = 0;
+
+        // Favorite only "Four on Floor".
+        let r = PatternRef::Vendored {
+            role: "drums".to_string(),
+            genre: "techno".to_string(),
+            name: "Four on Floor".to_string(),
+        };
+        let mut favs = Favorites::default();
+        favs.toggle(r);
+        app.favorites = favs;
+        app.fav_filter = true;
+
+        let whole = render_to_string(&app);
+        // Favorited pattern must appear.
+        assert!(
+            whole.contains("Four on Floor"),
+            "favorited pattern must appear when fav_filter on: {whole:?}"
+        );
+        // Non-favorited pattern must NOT appear.
+        assert!(
+            !whole.contains("Off Beat"),
+            "non-favorited pattern must be hidden when fav_filter on: {whole:?}"
+        );
+        // Filter indicator must appear.
+        assert!(
+            whole.contains("\u{2605}only") || whole.contains("★only"),
+            "fav_filter indicator must appear in library title: {whole:?}"
+        );
     }
 
     #[test]

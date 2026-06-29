@@ -7,6 +7,22 @@ feature milestone is a minor bump).
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-06-28 — Favorites · crates · live launch
+
+### Added
+- **Favorite patterns** — star any vendored or user pattern in the library (`f`), filter to
+  favorites-only (`F`); favorites persist across runs.
+- **Crates** — named, ordered, reusable collections of pattern references. Create, rename,
+  duplicate, delete, reorder, and add/remove entries; a pattern can live in multiple crates.
+- **Live crate view** (`V`) — browse a crate and launch from it live: `↑/↓` select an entry
+  (never changes playback), `Enter` launches it **quantized** to the **role-matched lane** (drums→
+  drum lane, bass→bass, synth→synth), `a` auditions (gated), `←/→` switches crates, `f` favorites,
+  `C` cancels a queued launch.
+- **Pre-performance validation** (`z` in the crate view) — reports entries whose pattern is missing
+  or whose target lane's device is unavailable, so you can catch problems before a set.
+- The `?` controls overlay is now **scrollable + two-column** so it fits any terminal, and documents
+  all current keys.
+
 ## [0.5.0] — 2026-06-28 — Quantized launch · audition · set/pattern management
 
 ### Added

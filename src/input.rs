@@ -62,6 +62,8 @@ pub fn key_to_action(key: KeyEvent, mode: Mode, kind: LaneKind) -> Action {
             KeyCode::Char('a') => return Action::Audition, // cue/audition selected pattern
             KeyCode::Char('b') => return Action::ToggleLaunchQuant, // toggle bar/beat quant
             KeyCode::Char('C') => return Action::CancelQueue, // cancel pending queued launch
+            KeyCode::Char('f') => return Action::ToggleFavorite, // toggle favorite
+            KeyCode::Char('F') => return Action::ToggleFavFilter, // toggle favorites-only filter
             KeyCode::Char('l') | KeyCode::Esc => return Action::CloseLibrary,
             _ => {}
         },
@@ -96,7 +98,19 @@ pub fn key_to_action(key: KeyEvent, mode: Mode, kind: LaneKind) -> Action {
                 _ => Action::None,
             };
         }
-        Mode::Help => return Action::Help,
+        Mode::Help => {
+            return match key.code {
+                KeyCode::Char('?') | KeyCode::Char('q') | KeyCode::Esc => Action::Help,
+                KeyCode::Up => Action::HelpScroll(-1),
+                KeyCode::Down => Action::HelpScroll(1),
+                KeyCode::PageUp => Action::HelpScroll(-10),
+                KeyCode::PageDown => Action::HelpScroll(10),
+                KeyCode::Home => Action::HelpScroll(i32::MIN / 2),
+                KeyCode::End => Action::HelpScroll(i32::MAX / 2),
+                // space and ! are already handled before the mode branch
+                _ => Action::None,
+            };
+        }
         Mode::RouteEditor => {
             return match key.code {
                 KeyCode::Esc => Action::CloseRouteEditor,
@@ -124,6 +138,21 @@ pub fn key_to_action(key: KeyEvent, mode: Mode, kind: LaneKind) -> Action {
                 KeyCode::Backspace => Action::TempoBackspace,
                 KeyCode::Enter => Action::TempoCommit,
                 KeyCode::Esc => Action::TempoCancel,
+                _ => Action::None,
+            };
+        }
+        Mode::CrateView => {
+            return match key.code {
+                KeyCode::Up => Action::CrateEntrySel(-1),
+                KeyCode::Down => Action::CrateEntrySel(1),
+                KeyCode::Left => Action::CrateSel(-1),
+                KeyCode::Right => Action::CrateSel(1),
+                KeyCode::Enter => Action::LaunchCrateEntry,
+                KeyCode::Char('a') => Action::AuditionCrateEntry,
+                KeyCode::Char('C') => Action::CancelQueue,
+                KeyCode::Char('f') => Action::FavoriteCrateEntry,
+                KeyCode::Char('z') => Action::ValidateCrate,
+                KeyCode::Esc | KeyCode::Char('V') => Action::CloseCrateView,
                 _ => Action::None,
             };
         }
@@ -200,6 +229,7 @@ pub fn key_to_action(key: KeyEvent, mode: Mode, kind: LaneKind) -> Action {
                     'A' => return Action::OpenSaveUserPattern, // save focused lane as user pattern
                     'Z' => return Action::OpenClearPattern, // clear focused lane (confirm if material)
                     'L' => return Action::DoubleLength,     // double pattern length, repeat content
+                    'V' => return Action::OpenCrateView,    // open live crate browser
                     _ => {}
                 }
 
@@ -267,6 +297,7 @@ mod tests {
             Mode::TempoEntry,
             Mode::SetBrowser,
             Mode::RecoveryPrompt,
+            Mode::CrateView,
         ] {
             assert_eq!(
                 key_to_action(k(KeyCode::Char(' ')), mode.clone(), LaneKind::Drums),
@@ -286,6 +317,7 @@ mod tests {
             Mode::TempoEntry,
             Mode::SetBrowser,
             Mode::RecoveryPrompt,
+            Mode::CrateView,
         ] {
             assert_eq!(
                 key_to_action(k(KeyCode::Char('!')), mode.clone(), LaneKind::Drums),
@@ -735,6 +767,7 @@ mod tests {
             Mode::SetBrowser,
             Mode::RouteEditor,
             Mode::RecoveryPrompt,
+            Mode::CrateView,
         ] {
             assert_eq!(
                 key_to_action(k(KeyCode::Char(' ')), mode.clone(), LaneKind::Drums),
@@ -755,6 +788,7 @@ mod tests {
             Mode::SetBrowser,
             Mode::RouteEditor,
             Mode::RecoveryPrompt,
+            Mode::CrateView,
         ] {
             assert_eq!(
                 key_to_action(k(KeyCode::Char('!')), mode.clone(), LaneKind::Drums),
@@ -1090,5 +1124,197 @@ mod tests {
             assert_ne!(action, Action::None, "'L' must not be unbound in Edit mode");
             assert_eq!(action, Action::DoubleLength);
         }
+    }
+
+    // ── Help mode scroll keys ─────────────────────────────────────────────
+
+    #[test]
+    fn help_mode_down_scrolls() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Down), Mode::Help, LaneKind::Drums),
+            Action::HelpScroll(1)
+        );
+    }
+
+    #[test]
+    fn help_mode_up_scrolls() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Up), Mode::Help, LaneKind::Drums),
+            Action::HelpScroll(-1)
+        );
+    }
+
+    #[test]
+    fn help_mode_question_closes() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('?')), Mode::Help, LaneKind::Drums),
+            Action::Help
+        );
+    }
+
+    #[test]
+    fn help_mode_esc_closes() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Esc), Mode::Help, LaneKind::Drums),
+            Action::Help
+        );
+    }
+
+    #[test]
+    fn help_mode_space_still_plays() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Char(' ')), Mode::Help, LaneKind::Drums),
+            Action::TogglePlay
+        );
+    }
+
+    #[test]
+    fn help_mode_bang_still_panics() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('!')), Mode::Help, LaneKind::Drums),
+            Action::Panic
+        );
+    }
+
+    // ── M4a Task 3: favorites key bindings in Library mode ───────────────────
+
+    #[test]
+    fn f_key_maps_to_toggle_favorite_in_library_mode() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('f')), Mode::Library, LaneKind::Drums),
+            Action::ToggleFavorite,
+            "'f' in Library mode must be ToggleFavorite"
+        );
+    }
+
+    #[test]
+    fn shift_f_key_maps_to_toggle_fav_filter_in_library_mode() {
+        let shift_f = KeyEvent::new(KeyCode::Char('F'), KeyModifiers::SHIFT);
+        assert_eq!(
+            key_to_action(shift_f, Mode::Library, LaneKind::Drums),
+            Action::ToggleFavFilter,
+            "'F' in Library mode must be ToggleFavFilter"
+        );
+    }
+
+    #[test]
+    fn space_and_bang_still_global_in_library_mode_after_favorites() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Char(' ')), Mode::Library, LaneKind::Drums),
+            Action::TogglePlay,
+            "space must remain TogglePlay in Library mode"
+        );
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('!')), Mode::Library, LaneKind::Drums),
+            Action::Panic,
+            "! must remain Panic in Library mode"
+        );
+    }
+
+    // ── M4a Task 5: crate view key bindings ──────────────────────────────────
+
+    #[test]
+    fn v_key_opens_crate_view_in_edit_mode() {
+        for kind in [LaneKind::Drums, LaneKind::Melodic] {
+            assert_eq!(
+                key_to_action(k(KeyCode::Char('V')), Mode::Edit, kind),
+                Action::OpenCrateView,
+                "'V' in Edit mode must open crate view"
+            );
+        }
+    }
+
+    #[test]
+    fn v_was_unbound_before_crate_view() {
+        for kind in [LaneKind::Drums, LaneKind::Melodic] {
+            assert_ne!(
+                key_to_action(k(KeyCode::Char('V')), Mode::Edit, kind),
+                Action::None,
+                "'V' must not be unbound in Edit mode"
+            );
+        }
+    }
+
+    #[test]
+    fn crate_view_mode_arrows_navigate() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Up), Mode::CrateView, LaneKind::Drums),
+            Action::CrateEntrySel(-1)
+        );
+        assert_eq!(
+            key_to_action(k(KeyCode::Down), Mode::CrateView, LaneKind::Drums),
+            Action::CrateEntrySel(1)
+        );
+        assert_eq!(
+            key_to_action(k(KeyCode::Left), Mode::CrateView, LaneKind::Drums),
+            Action::CrateSel(-1)
+        );
+        assert_eq!(
+            key_to_action(k(KeyCode::Right), Mode::CrateView, LaneKind::Drums),
+            Action::CrateSel(1)
+        );
+    }
+
+    #[test]
+    fn crate_view_enter_launches() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Enter), Mode::CrateView, LaneKind::Drums),
+            Action::LaunchCrateEntry
+        );
+    }
+
+    #[test]
+    fn crate_view_esc_closes() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Esc), Mode::CrateView, LaneKind::Drums),
+            Action::CloseCrateView
+        );
+    }
+
+    #[test]
+    fn crate_view_v_also_closes() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('V')), Mode::CrateView, LaneKind::Drums),
+            Action::CloseCrateView
+        );
+    }
+
+    #[test]
+    fn crate_view_a_auditions() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('a')), Mode::CrateView, LaneKind::Drums),
+            Action::AuditionCrateEntry
+        );
+    }
+
+    #[test]
+    fn crate_view_f_favorites() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('f')), Mode::CrateView, LaneKind::Drums),
+            Action::FavoriteCrateEntry
+        );
+    }
+
+    #[test]
+    fn crate_view_shift_c_cancel_queue() {
+        let shift_c = KeyEvent::new(KeyCode::Char('C'), KeyModifiers::SHIFT);
+        assert_eq!(
+            key_to_action(shift_c, Mode::CrateView, LaneKind::Drums),
+            Action::CancelQueue
+        );
+    }
+
+    #[test]
+    fn space_and_bang_still_global_in_crate_view() {
+        assert_eq!(
+            key_to_action(k(KeyCode::Char(' ')), Mode::CrateView, LaneKind::Drums),
+            Action::TogglePlay,
+            "space must remain TogglePlay in CrateView mode"
+        );
+        assert_eq!(
+            key_to_action(k(KeyCode::Char('!')), Mode::CrateView, LaneKind::Drums),
+            Action::Panic,
+            "! must remain Panic in CrateView mode"
+        );
     }
 }

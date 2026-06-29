@@ -1,6 +1,6 @@
 [package]
 name = "midip"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2021"
 description = "Terminal MIDI pattern sequencer for Roland AIRA Compact T-8 and S-1"
 license = "MIT"

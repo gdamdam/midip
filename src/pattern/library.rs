@@ -246,6 +246,34 @@ impl Library {
         };
         map.keys().map(|s| s.as_str()).collect()
     }
+
+    /// Look up a pattern by (role, genre, name). role must be "drums", "bass", or "synth".
+    pub fn find(&self, role: &str, genre: &str, name: &str) -> Option<&Pattern> {
+        let map = match role {
+            "drums" => &self.drums,
+            "bass" => &self.bass,
+            "synth" => &self.synth,
+            _ => return None,
+        };
+        map.get(genre)?.iter().find(|p| p.name == name)
+    }
+
+    /// All (role, genre, name) triples for building PatternRef::Vendored.
+    pub fn entries(&self) -> Vec<(String, String, String)> {
+        let mut out = Vec::new();
+        for (role, map) in [
+            ("drums", &self.drums),
+            ("bass", &self.bass),
+            ("synth", &self.synth),
+        ] {
+            for (genre, patterns) in map {
+                for pat in patterns {
+                    out.push((role.to_string(), genre.clone(), pat.name.clone()));
+                }
+            }
+        }
+        out
+    }
 }
 
 #[cfg(test)]
@@ -431,5 +459,31 @@ mod tests {
         assert_eq!(bpats.len(), 20);
         assert_eq!(bpats[0].length, 16);
         assert_eq!(bpats[0].kind(), LaneKind::Melodic);
+    }
+
+    #[test]
+    fn library_find_returns_known_pattern() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/patterns");
+        let lib = Library::load(&dir).unwrap();
+        let pat = lib.find("drums", "techno", "Four on Floor");
+        assert!(pat.is_some());
+        assert_eq!(pat.unwrap().name, "Four on Floor");
+        // None for unknown
+        assert!(lib.find("drums", "techno", "nonexistent").is_none());
+        assert!(lib
+            .find("unknown_role", "techno", "Four on Floor")
+            .is_none());
+    }
+
+    #[test]
+    fn library_entries_nonempty() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/patterns");
+        let lib = Library::load(&dir).unwrap();
+        let entries = lib.entries();
+        assert!(!entries.is_empty());
+        // All three roles present
+        assert!(entries.iter().any(|(r, _, _)| r == "drums"));
+        assert!(entries.iter().any(|(r, _, _)| r == "bass"));
+        assert!(entries.iter().any(|(r, _, _)| r == "synth"));
     }
 }
