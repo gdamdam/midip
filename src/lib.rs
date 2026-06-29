@@ -5,6 +5,7 @@ pub mod engine;
 pub mod input;
 pub mod link;
 pub mod midi;
+pub mod music;
 pub mod pattern;
 pub mod persist;
 pub mod ui;
