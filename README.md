@@ -5,9 +5,9 @@
 **A terminal MIDI sequencer & live groovebox for the Roland AIRA Compact T‑8 and S‑1**
 
 [![License](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.15.0-success.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.0.0-success.svg)](CHANGELOG.md)
 [![Rust](https://img.shields.io/badge/rust-2021%20edition-orange.svg)](https://www.rust-lang.org)
-[![Tests](https://img.shields.io/badge/tests-973%20passing-brightgreen.svg)](docs/HARDWARE-ACCEPTANCE.md)
+[![Tests](https://img.shields.io/badge/tests-973%20passing-brightgreen.svg)](CHANGELOG.md)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg)](#build--run)
 [![Built with ratatui](https://img.shields.io/badge/TUI-ratatui-blueviolet.svg)](https://ratatui.rs)
 
@@ -45,6 +45,10 @@ gear is the sound. (It never triggers a device's own internal pattern — see
 - [Performance controls](#performance-controls)
 - [Scale-aware editing](#scale-aware-editing)
 - [Scenes](#scenes)
+- [Song mode (chains)](#song-mode-chains)
+- [Generative tools](#generative-tools)
+- [Per-step CC, microtiming & trig conditions](#per-step-cc-microtiming--trig-conditions)
+- [MIDI clock input](#midi-clock-input)
 - [Configuration](#configuration)
 - [Project layout](#project-layout)
 - [Testing](#testing)
@@ -89,6 +93,21 @@ gear is the sound. (It never triggers a device's own internal pattern — see
   named scene, then recall it live as a **quantized all-lane launch on one boundary** — all
   lanes switch together on the next bar/beat. The scene manager (`G`) handles capture, recall,
   rename, duplicate, delete, and validation. Scenes live in the set file (backward-compatible).
+- **Song mode / chaining** — build ordered **chains** of scenes (`K`): each entry dwells for a
+  set number of bars × repeats, then auto-launches the next scene on a bar boundary. Chains can
+  loop, stop at the end, or be jumped live (`j`). Multiple named chains per set.
+- **Generative tools** (`D`) — generate a fresh pattern from density/range/seed, or **vary**
+  (mutate) the current one. Seeded and reproducible; pitches fold to the lane's scale. Previews
+  live, commits as a single undo on Enter or reverts on Esc.
+- **Per-step CC locks, microtiming & trig conditions** — lock CC values to individual steps;
+  nudge note timing earlier/later within the step (`\`/`|`); and set **trig conditions** (`z`:
+  Always / 1:2 / 1:3 / 1:4 / Fill / !Fill / 1st / !1st). A latched fill toggle drives Fill
+  conditions. Also: per-lane **swing override** (`a`/`_`) and **clock division** (`Q`, /1–/4).
+- **MIDI clock input** (`W`) — follow an external 24-PPQN clock as a slave. The transport header
+  shows `CLK-IN <port> [LOCKED|FREE|LOST]`; Start/Continue/Stop are obeyed; clock-loss stops
+  cleanly. midip's first MIDI input path.
+- **Ember theme** — a warm, cozy dark palette (cream on warm-dark, orange/pink/aqua accents);
+  fully static, no flashing, degrades to monochrome. Version shown in the transport header.
 - **Tempo** — type an exact BPM, nudge it, **tap tempo**, or sync to **Ableton Link**
   (embedded — no separate bridge app). Link bar‑locks playback start so no notes fire before
   the bar boundary. midip is the clock master (24 PPQN).
@@ -119,7 +138,7 @@ Other commands:
 
 ```sh
 cargo build --release        # just build the binary (target/release/midip)
-cargo test                   # run the test suite (730 tests, no hardware needed)
+cargo test                   # run the test suite (973 tests, no hardware needed)
 ```
 
 > Run it in a real terminal (not piped) — it takes over the screen while running and restores
@@ -190,6 +209,10 @@ Press **`?`** in‑app for the full scrollable two-column list. `space` and `!` 
 | `x` `c` `v` | Cut / copy / paste |
 | `r` / `R` | Rotate |
 | `del` | Clear step |
+| `\` / `|` | Microtiming nudge earlier / later (clamped to ±½ step) |
+| `z` | Cycle trig condition (Always / 1:2 / 1:3 / 1:4 / Fill / !Fill / 1st / !1st) |
+| `a` / `_` | Lane swing override down / up |
+| `Q` | Cycle lane clock division (/1 /2 /3 /4) |
 
 ### Drums
 
@@ -271,6 +294,50 @@ Press **`?`** in‑app for the full scrollable two-column list. `space` and `!` 
 | `z` | Toggle MIDI clock output on/off for the lane |
 | `esc` | Close route editor |
 
+### Scene Manager (`G` to open)
+
+| Key | Action |
+|-----|--------|
+| `↑` / `↓` | Select a scene |
+| `c` | Capture current state as a new scene |
+| `Enter` | Recall selected scene (quantized all-lane launch) |
+| `r` / `d` | Rename / duplicate |
+| `x` / `Del` | Delete (with confirmation) |
+| `z` | Validate — flag assignments whose pattern is missing |
+| `C` | Cancel a queued recall |
+| `G` / `Esc` | Close |
+
+### Chain Manager (`K` to open)
+
+| Key | Action |
+|-----|--------|
+| `↑` / `↓` | Select chain or entry |
+| `c` | Create new chain |
+| `r` | Rename selected chain |
+| `d` | Duplicate chain |
+| `x` | Delete chain |
+| `a` | Add focused scene as a chain entry |
+| `Tab` | Navigate entries |
+| `[` / `]` | Entry bars −1 / +1 |
+| `{` / `}` | Entry repeats −1 / +1 |
+| `m` | Toggle chain loop |
+| `Enter` | Play selected chain (starts transport) |
+| `C` | Stop chain |
+| `j` | Jump live to selected entry |
+| `K` / `Esc` | Close |
+
+### Generative Panel (`D` to open)
+
+| Key | Action |
+|-----|--------|
+| `Tab` / `Shift+Tab` | Switch between Generate / Vary |
+| `d` | Adjust density |
+| `r` | Adjust range |
+| `m` | Adjust mutation amount |
+| `z` | Reroll seed |
+| `Enter` | Commit as single undo step |
+| `Esc` | Revert |
+
 ### Global
 
 | Key | Action |
@@ -288,6 +355,9 @@ Press **`?`** in‑app for the full scrollable two-column list. `space` and `!` 
 | `l` | Open library |
 | `V` | Open live crate view |
 | `G` | Open scene manager |
+| `K` | Open chain manager (song mode) |
+| `D` | Open generative panel |
+| `W` | Select MIDI clock-in port |
 | `o` | Open set manager |
 | `s` | Save set |
 | `?` | Help overlay |
@@ -411,18 +481,7 @@ in earlier builds; only patterns that actually contain a chord become this-versi
 
 A **scene** is a snapshot of what every lane is playing — each lane's pattern plus its mute,
 solo, transpose, and octave. Scenes let you set up sections of a track and switch between them
-live. Open the scene manager with `G`:
-
-| Key | Action |
-|-----|--------|
-| `↑` / `↓` | Select a scene |
-| `c` | Capture the current state as a new scene |
-| `Enter` | Recall the selected scene (quantized all-lane launch) |
-| `r` / `d` | Rename / duplicate the selected scene |
-| `x` / `Del` | Delete the selected scene (with confirmation) |
-| `z` | Validate — flag assignments whose pattern is missing |
-| `C` | Cancel a queued recall |
-| `G` / `Esc` | Close |
+live. Open the scene manager with `G` (see [Scene Manager](#scene-manager-g-to-open) for keys).
 
 **Recall is quantized:** while playing, recalling a scene queues every lane to switch to its
 assigned pattern and state together on the next boundary (next‑bar or next‑beat, following the
@@ -430,6 +489,66 @@ assigned pattern and state together on the next boundary (next‑bar or next‑b
 once, with no hung notes. When stopped, recall applies immediately. A lane whose pattern is
 missing is left untouched and reported. Scenes are saved inside the set file; old sets simply
 have no scenes.
+
+## Song mode (chains)
+
+**Chains** let you arrange scenes into a linear song structure. Open the chain manager with `K`:
+
+- Each **chain entry** holds a scene for `bars × repeats` bars, then auto-launches the next entry
+  on a bar boundary (quantized, note-safe — no hung notes).
+- Chains can **loop**, **stop at the end**, or be **jumped live** to any entry (`j`). A manual
+  scene recall cancels the chain.
+- Multiple named chains per set. An entry whose scene was deleted shows `[MISSING]` and holds
+  its dwell without recalling.
+- Set format is backward-compatible: old sets load with no chains; chains save inside the set.
+
+See [Chain Manager](#chain-manager-k-to-open) for the full key list.
+
+## Generative tools
+
+Open with `D` on any lane:
+
+- **Generate** — builds a fresh pattern from a target density. Drums use Euclidean distribution;
+  melodic pitches are drawn within a range and **folded to the lane's current scale**.
+- **Vary** — perturbs the current pattern by a mutation amount.
+- Both modes are **seeded and reproducible** — the seed is shown, and `z` rerolls it. The
+  candidate previews live and auditions non-destructively.
+- `Enter` **commits as a single undo step**; `Esc` reverts — reusing the existing undo machinery.
+- Generation sets only rhythm, pitch, and velocity; it does not change persistence or routing.
+
+See [Generative Panel](#generative-panel-d-to-open) for the full key list.
+
+## Per-step CC, microtiming & trig conditions
+
+Available in Edit mode on any step:
+
+- **Per-step CC locks** — lock one or more MIDI CC values to a step; they fire just before the
+  NoteOn. A per-route cache suppresses redundant resends.
+- **Microtiming** (`\` earlier, `|` later) — nudge a note's timing within its step (shown
+  `µ±N`), clamped to ±½ step so a note never crosses its neighbors. The NoteOff and ratchets
+  move with it.
+- **Trig conditions** (`z`) — cycle through: Always / 1:2 / 1:3 / 1:4 / Fill / !Fill / 1st /
+  !1st. Evaluated before the probability roll. A latched **fill toggle** (`f` in Edit) drives the
+  Fill / !Fill conditions.
+- **Per-lane swing override** (`a` / `_`) — override the global swing amount for this lane only
+  (`None` = follow global).
+- **Per-lane clock division** (`Q`) — run a lane at /1, /2, /3, or /4 time (one step per N
+  global steps). Composes with polymeter.
+
+Set format is backward-compatible: old sets load with all new fields defaulted.
+
+## MIDI clock input
+
+midip can follow an external 24-PPQN MIDI clock as a slave (v0.14.0+):
+
+- Press `W` to open the **clock-in port selector**; select a port and confirm to start following.
+- The transport header shows `CLK-IN <port> [LOCKED|FREE|LOST]`.
+- Incoming clock ticks drive both tempo and step advancement. **Start** plays from the top,
+  **Continue** resumes, **Stop** halts and releases all notes.
+- If the external clock disappears, midip stops cleanly after a short timeout — no drift, no
+  hung notes.
+- The chosen port is saved with the set. This is mutually exclusive with Manual and Ableton Link
+  tempo sources. The existing clock-output, Link, and per-lane routing are unaffected.
 
 ## Configuration
 
@@ -456,7 +575,6 @@ src/
   link/              embedded Ableton Link (rusty_link) + a test fake
   ui/                transport · lanes · editor_drums · editor_melodic · library · help · theme
 assets/patterns/     vendored mpump pattern library (read-only)
-docs/                KNOWN-ISSUES · HARDWARE-ACCEPTANCE · design specs
 ```
 
 ## Testing
@@ -468,13 +586,12 @@ cargo test
 The engine writes through a `MidiSink` trait, so playback, scheduling, slides, probability,
 ratcheting, polymeter, quantized launch, favorites, crates, scale-aware editing, and the
 reducer are all tested with a recording sink — **no hardware needed**. UI views are checked
-with ratatui's `TestBackend`. 730 tests, 0 failures. (Live MIDI and Ableton Link are hardware
-paths — see [`docs/HARDWARE-ACCEPTANCE.md`](docs/HARDWARE-ACCEPTANCE.md).)
+with ratatui's `TestBackend`. 973 tests, 0 failures. (Live MIDI and Ableton Link require
+hardware and are covered by a separate acceptance checklist not included in this repo.)
 
 ## Status
 
-v0.15.0 — feature‑complete and green. See [`docs/KNOWN-ISSUES.md`](docs/KNOWN-ISSUES.md) for
-open items, and [`CHANGELOG.md`](CHANGELOG.md) for the full history.
+v1.0.0 — stable release. See [`CHANGELOG.md`](CHANGELOG.md) for the full history.
 
 ## License
 
