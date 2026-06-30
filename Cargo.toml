@@ -4,10 +4,19 @@ version = "0.13.0"
 edition = "2021"
 description = "Terminal MIDI pattern sequencer for Roland AIRA Compact T-8 and S-1"
 license = "AGPL-3.0-or-later"
+repository = "https://github.com/gdamdam/midip"
+homepage = "https://github.com/gdamdam/midip"
+readme = "README.md"
 
 [lib]
 name = "midip"
 path = "src/lib.rs"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+strip = true
+codegen-units = 1
 
 [dependencies]
 ratatui = "0.29"
