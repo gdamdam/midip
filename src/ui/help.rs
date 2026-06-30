@@ -41,7 +41,7 @@ fn left_column_lines() -> Vec<Line<'static>> {
         row("[tab / shift+tab]  next / prev lane"),
         row("[enter]  toggle step / place note"),
         row("[0-9]  velocity bucket   [+ / -]  fine vel"),
-        row("[p / P]  probability   [y / Y]  ratchet"),
+        row("[p / P]  probability −/+   [y / Y]  ratchet −/+"),
         row("[x c v]  cut/copy/paste   [r / R]  rotate"),
         row("[del]  clear step"),
         blank(),
@@ -50,6 +50,7 @@ fn left_column_lines() -> Vec<Line<'static>> {
         row("[← →]  step   [↑ ↓]  voice row"),
         row("[e / E]  euclid pulses +/−"),
         row("[[ / ]]  euclid rotation"),
+        row("[`]  toggle voice mute on cursor row"),
         blank(),
         // ── Melodic ───────────────────────────────────────────────────
         header("Melodic"),
@@ -81,10 +82,11 @@ fn left_column_lines() -> Vec<Line<'static>> {
         blank(),
         // ── Per-step ──────────────────────────────────────────────────
         header("Per-step"),
-        row("[p / P]  probability up / down"),
-        row("[y / Y]  ratchet up / down"),
-        row("[\\ / |]  micro timing − / +   [z]  cycle trig cond"),
-        row("[@]  add CC lock   [#]  remove   [$]  CC val +   [^]  CC val −"),
+        row("[p / P]  probability −/+   [y / Y]  ratchet −/+"),
+        row("[\\ / |]  micro timing − / +"),
+        row("[z]  cycle trig condition (Always / 1:2 / 1:3 / Fill / …)"),
+        row("[@]  add CC lock   [#]  remove CC lock"),
+        row("[$]  CC val +   [^]  CC val −"),
         blank(),
         // ── Per-lane ──────────────────────────────────────────────────
         header("Per-lane"),
@@ -98,7 +100,8 @@ fn right_column_lines() -> Vec<Line<'static>> {
     vec![
         // ── Global ────────────────────────────────────────────────────
         header("Global"),
-        row("[ctrl+z] / [u]  undo   [ctrl+y]  redo"),
+        row("[ctrl+z] / [u]  undo"),
+        row("[ctrl+y] / [ctrl+r] / [ctrl+shift+z]  redo"),
         row("[m]  mute   [S]  solo   [M]  mirror output"),
         row("[l]  library   [o]  open set   [s]  save"),
         row("[?]  help   [q]  quit (twice while playing)"),
@@ -175,7 +178,7 @@ fn right_column_lines() -> Vec<Line<'static>> {
         blank(),
         // ── Generative  [D] ───────────────────────────────────────────
         header("Generative  [D] to open"),
-        row("[tab]  toggle mode: Generate / Vary"),
+        row("[tab]  mode: Vary   [shift+tab]  mode: Generate"),
         row("[d / D]  density −/+   [r / R]  range −/+"),
         row("[m / M]  mutate −/+    [z]  reroll seed"),
         row("[enter]  commit (undoable)   [esc]  cancel"),
