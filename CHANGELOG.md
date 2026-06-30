@@ -7,6 +7,17 @@ feature milestone is a minor bump).
 
 ## [Unreleased]
 
+## [0.15.0] — 2026-06-29 — Ember theme
+
+### Changed
+- **New "Ember" color palette** — a warm, cozy dark theme replaces the previous mostly-grayscale
+  look. Colors are now centralized in a single `Palette` (cream text on a warm-dark background;
+  orange/pink/aqua lane accents; amber for pending, green for active/locked, red for errors), so
+  the whole UI is cohesive and every surface is recolored from one place. The velocity ramp now
+  shades warm (ember→cream) instead of flat gray. Still fully static (no flashing, no
+  hue-from-audio) and degrades to monochrome on terminals without color.
+- The transport header now shows the version next to the name (` midip v0.15.0 `).
+
 ## [0.14.0] — 2026-06-29 — MIDI Clock Input
 
 ### Added

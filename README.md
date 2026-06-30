@@ -5,9 +5,9 @@
 **A terminal MIDI sequencer & live groovebox for the Roland AIRA Compact T‑8 and S‑1**
 
 [![License](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.14.0-success.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.15.0-success.svg)](CHANGELOG.md)
 [![Rust](https://img.shields.io/badge/rust-2021%20edition-orange.svg)](https://www.rust-lang.org)
-[![Tests](https://img.shields.io/badge/tests-972%20passing-brightgreen.svg)](docs/HARDWARE-ACCEPTANCE.md)
+[![Tests](https://img.shields.io/badge/tests-973%20passing-brightgreen.svg)](docs/HARDWARE-ACCEPTANCE.md)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg)](#build--run)
 [![Built with ratatui](https://img.shields.io/badge/TUI-ratatui-blueviolet.svg)](https://ratatui.rs)
 
@@ -473,7 +473,7 @@ paths — see [`docs/HARDWARE-ACCEPTANCE.md`](docs/HARDWARE-ACCEPTANCE.md).)
 
 ## Status
 
-v0.14.0 — feature‑complete and green. See [`docs/KNOWN-ISSUES.md`](docs/KNOWN-ISSUES.md) for
+v0.15.0 — feature‑complete and green. See [`docs/KNOWN-ISSUES.md`](docs/KNOWN-ISSUES.md) for
 open items, and [`CHANGELOG.md`](CHANGELOG.md) for the full history.
 
 ## License
