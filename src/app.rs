@@ -1816,7 +1816,7 @@ impl App {
                                 .unwrap_or("set")
                                 .to_string();
                             self.current_set_path = Some(self.set_files[self.set_sel].clone());
-                            self.load_set_document(set, stem);
+                            cmds.extend(self.load_set_document(set, stem));
                             self.mode = Mode::Edit;
                             cmds.push(UiCommand::SetSet(self.set.clone()));
                         }
@@ -3586,7 +3586,10 @@ impl App {
     /// Switch to a freshly-loaded document. Replaces the Set and CLEARS undo/redo
     /// (you cannot undo across documents). Warns in the status if unsaved edits were
     /// discarded so the loss is not silent. (Full confirm-prompt is deferred to M3.)
-    fn load_set_document(&mut self, set: Set, name: String) {
+    ///
+    /// Returns commands that must be forwarded to the engine, including `SetClockInPort`
+    /// when the loaded Set carries a saved clock-in port (M10 persistence wiring).
+    fn load_set_document(&mut self, set: Set, name: String) -> Vec<UiCommand> {
         let had_unsaved = self.dirty;
         let n = set.lanes.len();
         self.set = set;
@@ -3601,6 +3604,16 @@ impl App {
         } else {
             format!("Loaded {}", name)
         });
+
+        // M10 persistence fix: restore the saved clock-in port so the engine opens
+        // the MIDI input connection and the transport indicator reflects it.
+        // Source-on-load: we leave the engine's internal tempo source as-is (Manual);
+        // the engine transitions to ClockIn automatically once ticks arrive.
+        self.clock_in_port = self.set.clock_in_port.clone();
+        // Reset indicator — a fresh load has no confirmed lock yet.
+        self.clock_in_locked = None;
+        self.clock_in_tempo = 0.0;
+        vec![UiCommand::SetClockInPort(self.clock_in_port.clone())]
     }
 
     fn undo(&mut self) {
@@ -6045,7 +6058,7 @@ mod tests {
         // warns about discarded unsaved edits.
         let other =
             crate::pattern::model::Set::default_set(crate::devices::profiles::default_profiles());
-        app.load_set_document(other, "other".into());
+        let _ = app.load_set_document(other, "other".into());
         assert!(app.undo.is_empty(), "loading a set must clear undo");
         assert!(app.redo.is_empty(), "loading a set must clear redo");
         assert!(
@@ -11228,6 +11241,86 @@ mod tests {
         assert_eq!(
             key_to_action(key, Mode::Edit, LaneKind::Drums),
             Action::OpenClockInSelector
+        );
+    }
+
+    // --- M10 T6 Part A: clock-in port restored on load -------------------
+
+    /// A Set saved with `clock_in_port = Some(...)` must have that port
+    /// re-populated on `app.clock_in_port` after `load_set_document`, AND
+    /// `SetClockInPort(Some(...))` must be in the returned command list so
+    /// the engine opens the MIDI connection immediately.
+    #[test]
+    fn load_set_document_restores_clock_in_port() {
+        use crate::engine::UiCommand;
+        use crate::pattern::model::PortRef;
+
+        let port = PortRef {
+            stable_key: "IAC Bus 1".into(),
+            name: "IAC Bus 1".into(),
+        };
+
+        // Build a Set that has a clock-in port saved.
+        let mut set =
+            crate::pattern::model::Set::default_set(crate::devices::profiles::default_profiles());
+        set.clock_in_port = Some(port.clone());
+
+        let mut app = new_app();
+        // Ensure app starts with no clock-in port so we're testing the restore.
+        assert!(
+            app.clock_in_port.is_none(),
+            "precondition: no port selected"
+        );
+
+        let cmds = app.load_set_document(set, "saved-set".into());
+
+        // App field must mirror the loaded Set's port.
+        assert_eq!(
+            app.clock_in_port,
+            Some(port.clone()),
+            "app.clock_in_port must be populated from the loaded Set"
+        );
+
+        // Engine must receive SetClockInPort(Some(...)) so it opens the connection.
+        let dispatched = cmds.iter().any(
+            |c| matches!(c, UiCommand::SetClockInPort(Some(p)) if p.stable_key == port.stable_key),
+        );
+        assert!(
+            dispatched,
+            "expected SetClockInPort(Some(...)) in returned commands; got {cmds:?}"
+        );
+    }
+
+    /// A Set saved with `clock_in_port = None` must clear the app port on
+    /// load and dispatch `SetClockInPort(None)`.
+    #[test]
+    fn load_set_document_clears_clock_in_port_when_none() {
+        use crate::engine::UiCommand;
+        use crate::pattern::model::PortRef;
+
+        let mut app = new_app();
+        // Start with a port selected so we verify it is cleared.
+        app.clock_in_port = Some(PortRef {
+            stable_key: "old".into(),
+            name: "old".into(),
+        });
+        app.clock_in_locked = Some(true);
+
+        let set =
+            crate::pattern::model::Set::default_set(crate::devices::profiles::default_profiles());
+        // set.clock_in_port is None by default.
+
+        let cmds = app.load_set_document(set, "fresh".into());
+
+        assert!(
+            app.clock_in_port.is_none(),
+            "app.clock_in_port must be None after loading a set with no port"
+        );
+        assert!(app.clock_in_locked.is_none(), "indicator must be reset");
+        assert!(
+            cmds.iter()
+                .any(|c| matches!(c, UiCommand::SetClockInPort(None))),
+            "expected SetClockInPort(None) command; got {cmds:?}"
         );
     }
 }

@@ -20,7 +20,7 @@
 
 use midip::devices::profiles;
 use midip::engine::scheduler::{step_dur_micros, Quant, Sequencer};
-use midip::engine::{run_engine_headless, EngineEvent, UiCommand};
+use midip::engine::{run_engine_headless, run_engine_headless_clocked, EngineEvent, UiCommand};
 use midip::link::{step_from_beat, FakeLink};
 use midip::midi::message::MidiMessage;
 use midip::midi::ports::RecordingSink;
@@ -2209,6 +2209,242 @@ fn m8_per_step_cc_microtiming_cond_clock_div_roundtrip() {
         cc123_sent,
         "Stop must emit CC123 (all-notes-off) on ch 0 to release held notes"
     );
+
+    // Clean up.
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// M10 cross-feature integration: clock-in follow / loss / persistence.
+//
+// Features combined (M10 T1–T6):
+//   - External MIDI clock port selection + engine wiring (SetClockInPort)
+//   - Clock-driven step advance (no double-step from internal timer)
+//   - Start / Continue / Stop transport messages via ClockInMsg
+//   - Loss detection (timeout → stop + release all notes)
+//   - Note-safety (M1): registry balance across Stop and loss
+//   - Persistence v4: clock_in_port round-trips through save → load
+//
+// Timing constants (120 BPM):
+//   step_dur  = 125_000 µs  (16th note)
+//   tick_us   = 20_833 µs   (1/24 beat)
+//   6 ticks → 1 step;  24 ticks → 4 steps (1 beat)
+//   MIN_SAMPLES = 24 intervals → need 25 ticks for lock
+//   loss timeout floor = 500_000 µs
+// ═════════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn m10_clock_in_follow_loss_persistence() {
+    use midip::engine::clock_in::ClockInMsg;
+    use midip::pattern::store::{load_set, save_set, CURRENT_SET_VERSION};
+    use std::collections::HashMap;
+
+    // ── Fixture ──────────────────────────────────────────────────────────────
+    let dir = unique_dir("m10-clock");
+    let set = three_lane_set();
+
+    let port = PortRef {
+        stable_key: "FakeClock".into(),
+        name: "FakeClock".into(),
+    };
+
+    // ── (a) Persistence: clock_in_port round-trips at schema v4 ─────────────
+    {
+        let mut saveable = set.clone();
+        saveable.clock_in_port = Some(port.clone());
+        let path = save_set(&dir, &mut saveable).unwrap();
+
+        let raw: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(
+            raw["version"].as_u64().unwrap(),
+            CURRENT_SET_VERSION as u64,
+            "saved set must carry schema version {CURRENT_SET_VERSION}"
+        );
+        assert_eq!(
+            raw["clock_in_port"]["stable_key"].as_str().unwrap(),
+            "FakeClock",
+            "clock_in_port must be serialised into the JSON"
+        );
+
+        let loaded = load_set(&path).unwrap();
+        assert_eq!(
+            loaded.clock_in_port,
+            Some(port.clone()),
+            "clock_in_port must survive save → load"
+        );
+    }
+
+    // ── Timing helpers (120 BPM) ──────────────────────────────────────────────
+    // tick_us = 60_000_000 / (120 * 24) = 20_833 µs
+    let tick_us: u64 = 60_000_000 / (120 * 24);
+    // loss timeout floor = 500_000 µs; add slack so the iteration fires
+    let loss_timeout_us: u64 = 500_000 + 2 * tick_us;
+
+    // ── Phase 1: Start → 25 ticks → Continue → Stop ──────────────────────────
+    //
+    // 25 ticks → 24 inter-tick intervals → MIN_SAMPLES satisfied → lock
+    // 24 ticks (steps 1-24 after Start) / 6 ticks-per-step = 4 steps advanced
+    // Continue while already playing is a no-op (engine stays playing)
+    // Stop releases all sounding notes
+    {
+        let mut link = FakeLink::new();
+        let mut sink = RecordingSink::new();
+
+        let stop_at = tick_us * 25 + 2;
+        let total = stop_at + tick_us;
+
+        let cmds: Vec<(u64, UiCommand)> = vec![(0, UiCommand::SetClockInPort(Some(port.clone())))];
+        let mut clock_in: Vec<(u64, ClockInMsg)> = vec![(0, ClockInMsg::Start)];
+        for i in 1..=25u64 {
+            clock_in.push((tick_us * i, ClockInMsg::Tick));
+        }
+        clock_in.push((tick_us * 25 + 1, ClockInMsg::Continue));
+        clock_in.push((stop_at, ClockInMsg::Stop));
+
+        let events = run_engine_headless_clocked(
+            set.clone(),
+            &mut link,
+            &mut sink,
+            cmds,
+            clock_in,
+            total,
+            1_000,
+        );
+
+        // Started from MIDI Start.
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, EngineEvent::Started { .. })),
+            "expected Started event from MIDI Start"
+        );
+
+        // Lock acquired after 25 ticks.
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, EngineEvent::ClockInStatus { locked: true, .. })),
+            "expected ClockInStatus{{locked:true}} after 25 ticks"
+        );
+
+        // Playhead count: 1 initial emit (step 0 on first playing tick, last_step=None)
+        // + 4 tick-driven advances (24 ticks / 6 ticks-per-step = 4) = 5 total.
+        // If the internal timer were also advancing steps (double-advance), the count
+        // would exceed 5. This confirms the clock-driven path is the sole step source
+        // while ClockIn is active (T4's set_clock_driven guard).
+        let step_count = events
+            .iter()
+            .filter(|e| matches!(e, EngineEvent::Playhead { .. }))
+            .count();
+        assert_eq!(
+            step_count, 5,
+            "25 ticks at 120 BPM must produce exactly 5 Playhead events \
+             (1 initial + 4 tick-driven, no double-advance); got {step_count}"
+        );
+
+        // Stopped from MIDI Stop.
+        assert!(
+            events.iter().any(|e| matches!(e, EngineEvent::Stopped)),
+            "expected Stopped event from MIDI Stop"
+        );
+
+        // Note-safety: registry balance after Stop.
+        let mut net: HashMap<(u8, u8), i32> = HashMap::new();
+        for (_, msg) in &sink.events {
+            match msg {
+                MidiMessage::NoteOn { channel, note, vel } if *vel > 0 => {
+                    *net.entry((*channel, *note)).or_insert(0) += 1;
+                }
+                MidiMessage::NoteOn { channel, note, .. } => {
+                    *net.entry((*channel, *note)).or_insert(0) -= 1;
+                }
+                MidiMessage::NoteOff { channel, note, .. } => {
+                    *net.entry((*channel, *note)).or_insert(0) -= 1;
+                }
+                _ => {}
+            }
+        }
+        let hung: Vec<_> = net.iter().filter(|(_, &v)| v > 0).collect();
+        assert!(
+            hung.is_empty(),
+            "no hung notes after MIDI Stop; leftover: {hung:?}"
+        );
+    }
+
+    // ── Phase 2: loss detection → auto-stop + all-notes-off ──────────────────
+    {
+        let mut link = FakeLink::new();
+        let mut sink = RecordingSink::new();
+
+        let last_tick_at = tick_us * 25;
+        let total = last_tick_at + loss_timeout_us + tick_us;
+
+        let cmds: Vec<(u64, UiCommand)> = vec![(0, UiCommand::SetClockInPort(Some(port.clone())))];
+        let mut clock_in: Vec<(u64, ClockInMsg)> = vec![(0, ClockInMsg::Start)];
+        for i in 1..=25u64 {
+            clock_in.push((tick_us * i, ClockInMsg::Tick));
+        }
+        // No more ticks → engine detects loss after timeout.
+
+        let events = run_engine_headless_clocked(
+            set.clone(),
+            &mut link,
+            &mut sink,
+            cmds,
+            clock_in,
+            total,
+            1_000,
+        );
+
+        // ClockInStatus{locked:false} emitted on loss.
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, EngineEvent::ClockInStatus { locked: false, .. })),
+            "expected ClockInStatus{{locked:false}} after tick silence"
+        );
+
+        // Stopped emitted on loss.
+        assert!(
+            events.iter().any(|e| matches!(e, EngineEvent::Stopped)),
+            "expected Stopped event after clock loss"
+        );
+
+        // Note-safety after loss: registry balance.
+        let mut net: HashMap<(u8, u8), i32> = HashMap::new();
+        for (_, msg) in &sink.events {
+            match msg {
+                MidiMessage::NoteOn { channel, note, vel } if *vel > 0 => {
+                    *net.entry((*channel, *note)).or_insert(0) += 1;
+                }
+                MidiMessage::NoteOn { channel, note, .. } => {
+                    *net.entry((*channel, *note)).or_insert(0) -= 1;
+                }
+                MidiMessage::NoteOff { channel, note, .. } => {
+                    *net.entry((*channel, *note)).or_insert(0) -= 1;
+                }
+                _ => {}
+            }
+        }
+        let hung: Vec<_> = net.iter().filter(|(_, &v)| v > 0).collect();
+        assert!(
+            hung.is_empty(),
+            "no hung notes after clock loss; leftover: {hung:?}"
+        );
+
+        // Loss path must emit CC123 (all-notes-off) via release_all.
+        assert!(
+            sink.events.iter().any(|(_, m)| matches!(
+                m,
+                MidiMessage::ControlChange {
+                    controller: 123,
+                    ..
+                }
+            )),
+            "loss path must emit CC123 (all-notes-off)"
+        );
+    }
 
     // Clean up.
     let _ = std::fs::remove_dir_all(&dir);

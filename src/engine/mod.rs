@@ -1144,8 +1144,7 @@ fn run_clock_in_watcher(
 ///
 /// Returns `(JoinHandle, Sender<ClockInCmd>, Receiver<ClockInMsg>)`.
 /// The engine holds the `Sender` to send `SetPort`/`Quit` commands and holds the
-/// `Receiver` to drain `ClockInMsg` values from the timing loop (T4 will act on them;
-/// for now they are available but not yet consumed by the engine logic).
+/// `Receiver` to drain `ClockInMsg` values from the timing loop.
 fn spawn_clock_in_watcher(
     initial_port: Option<String>,
 ) -> (
