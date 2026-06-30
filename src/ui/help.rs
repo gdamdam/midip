@@ -1,7 +1,8 @@
 //! Keybinding help overlay.
 
+use crate::ui::theme::EMBER;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
@@ -10,7 +11,7 @@ fn header(title: &'static str) -> Line<'static> {
     Line::from(Span::styled(
         title,
         Style::default()
-            .fg(Color::Cyan)
+            .fg(EMBER.synth)
             .add_modifier(Modifier::BOLD),
     ))
 }
@@ -266,7 +267,7 @@ pub fn render_help(f: &mut Frame, area: Rect, scroll: u16) {
         "? close".to_string()
     };
     f.render_widget(
-        Paragraph::new(hint).style(Style::default().fg(Color::DarkGray)),
+        Paragraph::new(hint).style(Style::default().fg(EMBER.dim)),
         hint_area,
     );
 }

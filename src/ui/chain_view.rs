@@ -1,7 +1,8 @@
 //! Chain manager overlay: list chains, show entries, display live playback status.
 
+use crate::ui::theme::EMBER;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
@@ -59,7 +60,7 @@ pub fn render_chain_view(f: &mut Frame, area: Rect, app: &App) {
                 pb.entry_idx + 1,
             ),
             Style::default()
-                .fg(Color::Green)
+                .fg(EMBER.ok)
                 .add_modifier(Modifier::BOLD),
         )));
     } else {

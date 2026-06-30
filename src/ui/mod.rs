@@ -14,8 +14,9 @@ pub mod scene_view;
 pub mod theme;
 pub mod transport;
 
+use crate::ui::theme::EMBER;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
@@ -56,8 +57,8 @@ fn context_footer(app: &App) -> Line<'static> {
         Mode::ClockInSelector => "[↑↓]select port  [enter]confirm  [esc]cancel",
     };
     let label_style = Style::default()
-        .fg(Color::Black)
-        .bg(Color::Cyan)
+        .fg(EMBER.bg)
+        .bg(EMBER.synth)
         .add_modifier(Modifier::BOLD);
     Line::from(vec![
         Span::styled(format!(" {label} "), label_style),

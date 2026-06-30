@@ -4,42 +4,38 @@
 //! Line 2: status/toast (app.status), blank when empty.
 
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 
 use crate::app::{App, Mode};
-use crate::ui::theme::lane_color;
+use crate::ui::theme::{lane_color, EMBER};
 
 // --- static styles -----------------------------------------------------------
 
 fn sep_style() -> Style {
-    Style::default().fg(Color::DarkGray)
+    Style::default().fg(EMBER.dim)
 }
 
 fn muted_style() -> Style {
-    Style::default().fg(Color::Gray)
+    Style::default().fg(EMBER.dim)
 }
 
 fn bright_style() -> Style {
-    Style::default()
-        .fg(Color::White)
-        .add_modifier(Modifier::BOLD)
+    Style::default().fg(EMBER.fg).add_modifier(Modifier::BOLD)
 }
 
 fn ok_style() -> Style {
-    // Subtle green for SAVED
-    Style::default().fg(Color::Rgb(0x7A, 0xC9, 0x80))
+    Style::default().fg(EMBER.ok)
 }
 
 fn warn_style() -> Style {
-    // Amber for EDITED — draws the eye without alarming
-    Style::default().fg(Color::Rgb(0xF5, 0xB0, 0x41))
+    Style::default().fg(EMBER.warn)
 }
 
 fn toast_style() -> Style {
-    Style::default().fg(Color::Rgb(0xCC, 0xCC, 0xCC))
+    Style::default().fg(EMBER.fg)
 }
 
 /// Render the transport header into `area`.
@@ -48,7 +44,10 @@ fn toast_style() -> Style {
 ///   row 0 — state bar (play/BPM/LINK/position/swing/save)
 ///   row 1 — status/toast line
 pub fn render_transport(f: &mut Frame, area: Rect, app: &App) {
-    let block = Block::default().borders(Borders::ALL).title(" midip ");
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" midip v{} ", env!("CARGO_PKG_VERSION")))
+        .title_style(Style::default().fg(EMBER.fg).add_modifier(Modifier::BOLD));
 
     // Accent on the play indicator = focused lane's static color (spec §7).
     let accent = lane_color(app.focused_lane().profile.id);

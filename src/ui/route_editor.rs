@@ -1,7 +1,8 @@
 //! Route editor overlay: per-lane port / channel / clock-out assignment + connection status.
 
+use crate::ui::theme::EMBER;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
@@ -31,31 +32,31 @@ pub fn render_route_editor(f: &mut Frame, area: Rect, app: &App) {
         Span::styled(
             format!("{:<12}", "LANE"),
             Style::default()
-                .fg(Color::Cyan)
+                .fg(EMBER.synth)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
             format!("{:<26}", "PORT"),
             Style::default()
-                .fg(Color::Cyan)
+                .fg(EMBER.synth)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
             format!("{:<5}", "CH"),
             Style::default()
-                .fg(Color::Cyan)
+                .fg(EMBER.synth)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
             format!("{:<6}", "CLK"),
             Style::default()
-                .fg(Color::Cyan)
+                .fg(EMBER.synth)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
             "CON",
             Style::default()
-                .fg(Color::Cyan)
+                .fg(EMBER.synth)
                 .add_modifier(Modifier::BOLD),
         ),
     ]));
@@ -69,7 +70,7 @@ pub fn render_route_editor(f: &mut Frame, area: Rect, app: &App) {
             .cloned()
             .unwrap_or((false, String::new()));
         let conn_glyph = if connected { CONNECTED } else { MISSING };
-        let conn_color = if connected { Color::Green } else { Color::Red };
+        let conn_color = if connected { EMBER.ok } else { EMBER.err };
 
         let effective = lane.effective_route();
         // Port display: show explicit port name, or "(default: <profile port>)" when None.
@@ -91,8 +92,8 @@ pub fn render_route_editor(f: &mut Frame, area: Rect, app: &App) {
             Style::default()
         };
         let sel_style = Style::default()
-            .fg(Color::Black)
-            .bg(Color::Cyan)
+            .fg(EMBER.bg)
+            .bg(EMBER.synth)
             .add_modifier(Modifier::BOLD);
 
         let port_style = if selected && app.route_editor_field == RouteField::Port {
@@ -128,7 +129,7 @@ pub fn render_route_editor(f: &mut Frame, area: Rect, app: &App) {
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         "[↑↓]lane  [←→]field  [c]cycle port  [[ /]]channel  [z]clock-out  [esc]close",
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(EMBER.dim),
     )));
 
     f.render_widget(Paragraph::new(lines), inner);

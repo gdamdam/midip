@@ -1,7 +1,8 @@
 //! Crash-recovery prompt overlay.
 
+use crate::ui::theme::EMBER;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
@@ -11,9 +12,7 @@ pub fn render_recovery_prompt(f: &mut Frame, area: Rect) {
     let lines: Vec<Line> = vec![
         Line::from(Span::styled(
             "  Unsaved work was recovered from an unclean shutdown.",
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(EMBER.warn).add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
         Line::from("  What would you like to do?"),
@@ -21,16 +20,14 @@ pub fn render_recovery_prompt(f: &mut Frame, area: Rect) {
         Line::from(vec![
             Span::styled(
                 "  [r] / [Enter]  ",
-                Style::default()
-                    .fg(Color::Green)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(EMBER.ok).add_modifier(Modifier::BOLD),
             ),
             Span::raw("Recover — load the autosaved work"),
         ]),
         Line::from(vec![
             Span::styled(
                 "  [d] / [Esc]    ",
-                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                Style::default().fg(EMBER.err).add_modifier(Modifier::BOLD),
             ),
             Span::raw("Discard — start fresh (unsaved work will be lost)"),
         ]),
@@ -38,7 +35,7 @@ pub fn render_recovery_prompt(f: &mut Frame, area: Rect) {
             Span::styled(
                 "  [o]            ",
                 Style::default()
-                    .fg(Color::Cyan)
+                    .fg(EMBER.synth)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw("Open saved — browse your saved sets"),
@@ -46,9 +43,9 @@ pub fn render_recovery_prompt(f: &mut Frame, area: Rect) {
         Line::from(""),
         Line::from(vec![
             Span::raw("  "),
-            Span::styled("[space]", Style::default().fg(Color::DarkGray)),
+            Span::styled("[space]", Style::default().fg(EMBER.dim)),
             Span::raw(" play/stop   "),
-            Span::styled("[!]", Style::default().fg(Color::DarkGray)),
+            Span::styled("[!]", Style::default().fg(EMBER.dim)),
             Span::raw(" panic"),
         ]),
     ];
@@ -56,9 +53,7 @@ pub fn render_recovery_prompt(f: &mut Frame, area: Rect) {
     f.render_widget(Clear, area);
     let block = Block::default().borders(Borders::ALL).title(Span::styled(
         " RECOVERY ",
-        Style::default()
-            .fg(Color::Yellow)
-            .add_modifier(Modifier::BOLD),
+        Style::default().fg(EMBER.warn).add_modifier(Modifier::BOLD),
     ));
     f.render_widget(Paragraph::new(lines).block(block), area);
 }

@@ -1,5 +1,6 @@
 //! Melodic editor: monophonic note/length/velocity step lane (bass, synth).
 
+use crate::ui::theme::EMBER;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
@@ -32,10 +33,8 @@ fn superscript_count(n: usize) -> &'static str {
 
 /// Combined style when cursor and playhead coincide: keep playhead bg, add cursor modifiers.
 fn combined_cursor_playhead_style() -> Style {
-    // Fall back to DarkGray if the theme ever drops the playhead bg, so we never panic.
-    let bg = playhead_style()
-        .bg
-        .unwrap_or(ratatui::style::Color::DarkGray);
+    // Fall back to EMBER.dim if the theme ever drops the playhead bg, so we never panic.
+    let bg = playhead_style().bg.unwrap_or(EMBER.dim);
     cursor_style().bg(bg)
 }
 

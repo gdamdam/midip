@@ -1,7 +1,8 @@
 //! Generative tool overlay: mode selector, parameter knobs, candidate summary, live preview.
 
+use crate::ui::theme::EMBER;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
@@ -23,7 +24,7 @@ pub fn render_generative_panel(f: &mut Frame, area: Rect, app: &App) {
     let outer = Block::default().borders(Borders::ALL).title(Span::styled(
         title,
         Style::default()
-            .fg(Color::Cyan)
+            .fg(EMBER.synth)
             .add_modifier(Modifier::BOLD),
     ));
     let inner = outer.inner(area);
@@ -40,14 +41,10 @@ pub fn render_generative_panel(f: &mut Frame, area: Rect, app: &App) {
         PatternData::Melodic(steps) => steps.len(),
     };
 
-    let header_style = Style::default()
-        .fg(Color::Yellow)
-        .add_modifier(Modifier::BOLD);
-    let key_style = Style::default().fg(Color::Cyan);
-    let val_style = Style::default()
-        .fg(Color::White)
-        .add_modifier(Modifier::BOLD);
-    let dim_style = Style::default().fg(Color::DarkGray);
+    let header_style = Style::default().fg(EMBER.warn).add_modifier(Modifier::BOLD);
+    let key_style = Style::default().fg(EMBER.synth);
+    let val_style = Style::default().fg(EMBER.fg).add_modifier(Modifier::BOLD);
+    let dim_style = Style::default().fg(EMBER.dim);
 
     let mut lines: Vec<Line> = Vec::new();
 

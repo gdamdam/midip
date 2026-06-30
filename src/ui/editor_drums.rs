@@ -1,5 +1,6 @@
 //! TR-style drum editor: voices (rows) × steps (columns).
 
+use crate::ui::theme::EMBER;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
@@ -33,10 +34,8 @@ fn hit_at(
 
 /// Combined style when cursor and playhead coincide: keep playhead bg, add cursor modifiers.
 fn combined_cursor_playhead_style() -> Style {
-    // Fall back to DarkGray if the theme ever drops the playhead bg, so we never panic.
-    let bg = playhead_style()
-        .bg
-        .unwrap_or(ratatui::style::Color::DarkGray);
+    // Fall back to EMBER.dim if the theme ever drops the playhead bg, so we never panic.
+    let bg = playhead_style().bg.unwrap_or(EMBER.dim);
     cursor_style().bg(bg)
 }
 
@@ -126,7 +125,7 @@ pub fn render_drum_editor(f: &mut Frame, area: Rect, app: &App) {
         let voice_muted = lane.muted_voices.contains(&voice.note);
         let mute_marker = if voice_muted { "M" } else { " " };
         let label_style = if voice_muted {
-            Style::default().fg(ratatui::style::Color::DarkGray)
+            Style::default().fg(EMBER.dim)
         } else {
             Style::default()
         };

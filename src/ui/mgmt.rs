@@ -1,8 +1,9 @@
 //! Overlays for name-entry, confirm dialogs, and note-input banner
 //! (Mode::NameEntry / Mode::Confirm / Mode::NoteInput).
 
+use crate::ui::theme::EMBER;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
@@ -28,9 +29,7 @@ pub fn render_name_entry(f: &mut Frame, area: Rect, app: &App) {
         Line::from(Span::raw(prompt)),
         Line::from(Span::styled(
             cursor_line,
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(EMBER.warn).add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
         Line::from(Span::raw("[enter] confirm  [esc] cancel")),
@@ -99,9 +98,7 @@ pub fn render_note_input(f: &mut Frame, area: Rect, app: &App) {
     let lines: Vec<Line> = vec![
         Line::from(Span::styled(
             format!("white: a s d f g h j k   black: w e t y u   {}", octave_str),
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(EMBER.warn).add_modifier(Modifier::BOLD),
         )),
         Line::from(Span::raw("[z]oct-  [x]oct+  [bksp]del step  [esc]exit")),
     ];

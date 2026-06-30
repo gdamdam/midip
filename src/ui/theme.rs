@@ -1,4 +1,6 @@
 //! Visual ramps and note naming. Pure, hardware-free, unit-tested.
+// Never hue-from-audio, never flashing. The Ember palette is static and semantic;
+// terminals without truecolor degrade automatically — no extra code needed.
 
 use crate::config;
 
@@ -90,34 +92,64 @@ pub fn note_name(midi: u8) -> String {
     format!("{name}{octave}")
 }
 
-// --- static color theme (spec §7) -----------------------------------------
-// Never hue-from-audio, never flashing. Each lane has a fixed accent (mpump's device
-// hues); the cursor and playhead are reverse/bright. The terminal degrades to monochrome
-// automatically when it reports no color support — no extra code is needed for that.
+// --- Ember palette (spec §7) -----------------------------------------------
+// Static, semantic, truecolor. Never hue-from-audio, never flashing.
+// Terminals without truecolor degrade automatically.
 
 use ratatui::style::{Color, Modifier, Style};
 
+/// Centralized Ember color palette. All UI color choices route through here.
+pub struct Palette {
+    pub bg: Color,
+    pub panel: Color,
+    pub fg: Color,
+    pub dim: Color,
+    pub drums: Color,
+    pub bass: Color,
+    pub synth: Color,
+    pub warn: Color,
+    pub err: Color,
+    pub ok: Color,
+    pub selection: Color,
+    pub playhead: Color,
+}
+
+pub const EMBER: Palette = Palette {
+    bg: Color::Rgb(29, 32, 33),        // #1D2021
+    panel: Color::Rgb(40, 40, 40),     // #282828
+    fg: Color::Rgb(235, 219, 178),     // #EBDBB2 cream
+    dim: Color::Rgb(102, 92, 84),      // #665C54
+    drums: Color::Rgb(254, 128, 25),   // #FE8019 warm orange
+    bass: Color::Rgb(211, 134, 155),   // #D3869B pink
+    synth: Color::Rgb(131, 165, 152),  // #83A598 cool aqua
+    warn: Color::Rgb(250, 189, 47),    // #FABD2F amber
+    err: Color::Rgb(251, 73, 52),      // #FB4934 red
+    ok: Color::Rgb(184, 187, 38),      // #B8BB26 green
+    selection: Color::Rgb(80, 73, 69), // #504945
+    playhead: Color::Rgb(60, 56, 54),  // #3C3836
+};
+
 /// Distinct static accent color per lane, keyed by `DeviceProfile::id`. Unknown ids fall
-/// back to `Color::Gray` so an added profile still renders (just without a custom hue).
+/// back to `dim` so an added profile still renders (just without a custom hue).
 pub fn lane_color(profile_id: &str) -> Color {
     match profile_id {
-        "s1" => Color::Rgb(0x6E, 0xC6, 0xFF), // S-1 synth: cool cyan-blue
-        "t8-drums" => Color::Rgb(0xFF, 0x8A, 0x3D), // T-8 drums: warm orange
-        "t8-bass" => Color::Rgb(0xB6, 0x8C, 0xFF), // T-8 bass: violet
-        _ => Color::Gray,
+        "s1" => EMBER.synth,       // S-1 synth: cool aqua
+        "t8-drums" => EMBER.drums, // T-8 drums: warm orange
+        "t8-bass" => EMBER.bass,   // T-8 bass: pink
+        _ => EMBER.dim,
     }
 }
 
-/// Velocity -> intensity color (dim -> bright), banded to match `vel_glyph`. Reinforces
-/// the `░▒▓█` shading with a parallel brightness ramp.
+/// Velocity -> intensity color (dim -> cream), banded to match `vel_glyph`.
+/// Ramps from ember dim toward cream — not flat gray.
 pub fn vel_color(vel: u8) -> Color {
     match vel {
-        0 => Color::DarkGray,
-        1..=25 => Color::Rgb(0x55, 0x55, 0x55),
-        26..=51 => Color::Rgb(0x80, 0x80, 0x80),
-        52..=89 => Color::Rgb(0xAA, 0xAA, 0xAA),
-        90..=115 => Color::Rgb(0xD0, 0xD0, 0xD0),
-        _ => Color::Rgb(0xFF, 0xFF, 0xFF), // 116..=127, brightest
+        0 => EMBER.dim,                        // #665C54
+        1..=25 => Color::Rgb(124, 111, 100),   // #7C6F64
+        26..=51 => Color::Rgb(146, 131, 116),  // #928374
+        52..=89 => Color::Rgb(189, 174, 147),  // #BDAE93
+        90..=115 => Color::Rgb(213, 196, 161), // #D5C4A1
+        _ => EMBER.fg,                         // #EBDBB2 cream, brightest
     }
 }
 
@@ -128,9 +160,9 @@ pub fn cursor_style() -> Style {
         .add_modifier(Modifier::BOLD)
 }
 
-/// The live playhead column: a bright background sweep.
+/// The live playhead column: a warm dark background sweep.
 pub fn playhead_style() -> Style {
-    Style::default().bg(Color::Rgb(0x33, 0x44, 0x55))
+    Style::default().bg(EMBER.playhead)
 }
 
 #[cfg(test)]
@@ -215,8 +247,7 @@ mod tests {
     }
 
     #[test]
-    fn lane_color_is_distinct_per_known_id_and_gray_for_unknown() {
-        use ratatui::style::Color;
+    fn lane_color_is_distinct_per_known_id_and_dim_for_unknown() {
         let drums = lane_color("t8-drums");
         let bass = lane_color("t8-bass");
         let synth = lane_color("s1");
@@ -224,8 +255,8 @@ mod tests {
         assert_ne!(drums, bass);
         assert_ne!(bass, synth);
         assert_ne!(drums, synth);
-        // Unknown id -> Gray fallback.
-        assert_eq!(lane_color("j6"), Color::Gray);
+        // Unknown id -> dim fallback (not Gray).
+        assert_eq!(lane_color("j6"), EMBER.dim);
     }
 
     #[test]
@@ -236,8 +267,17 @@ mod tests {
 
     #[test]
     fn cursor_and_playhead_styles_are_non_default() {
-        use ratatui::style::Style;
         assert_ne!(cursor_style(), Style::default());
         assert_ne!(playhead_style(), Style::default());
+    }
+
+    #[test]
+    fn palette_roles_distinct() {
+        let p = &EMBER;
+        assert_ne!(p.warn, p.err);
+        assert_ne!(p.ok, p.warn);
+        assert_ne!(p.drums, p.bass);
+        assert_ne!(p.synth, p.drums);
+        assert_ne!(p.fg, p.dim);
     }
 }

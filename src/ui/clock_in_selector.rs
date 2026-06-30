@@ -4,12 +4,13 @@
 //! revert to manual tempo). Dispatches UiCommand::SetClockInPort on Enter.
 
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
 use crate::app::App;
+use crate::ui::theme::EMBER;
 
 pub fn render_clock_in_selector(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(Clear, area);
@@ -25,7 +26,7 @@ pub fn render_clock_in_selector(f: &mut Frame, area: Rect, app: &App) {
 
     lines.push(Line::from(Span::styled(
         "Select MIDI input port for external clock (MIDI Clock / F8):",
-        Style::default().fg(Color::Gray),
+        Style::default().fg(EMBER.dim),
     )));
     lines.push(Line::from(""));
 
@@ -38,11 +39,9 @@ pub fn render_clock_in_selector(f: &mut Frame, area: Rect, app: &App) {
             "  (none — manual tempo)"
         },
         if none_sel {
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD)
+            Style::default().fg(EMBER.warn).add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Color::DarkGray)
+            Style::default().fg(EMBER.dim)
         },
     )));
 
@@ -54,7 +53,7 @@ pub fn render_clock_in_selector(f: &mut Frame, area: Rect, app: &App) {
             format!("{} {}", if selected { "▶" } else { " " }, port),
             if selected {
                 Style::default()
-                    .fg(Color::Cyan)
+                    .fg(EMBER.synth)
                     .add_modifier(Modifier::BOLD)
             } else {
                 Style::default()
@@ -65,14 +64,14 @@ pub fn render_clock_in_selector(f: &mut Frame, area: Rect, app: &App) {
     if app.clock_in_ports.is_empty() {
         lines.push(Line::from(Span::styled(
             "  (no MIDI input ports found)",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(EMBER.dim),
         )));
     }
 
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         "[↑↓] select  [enter] confirm  [esc] cancel",
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(EMBER.dim),
     )));
 
     f.render_widget(Paragraph::new(lines), inner);
