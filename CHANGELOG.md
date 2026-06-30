@@ -7,6 +7,26 @@ feature milestone is a minor bump).
 
 ## [Unreleased]
 
+## [1.2.0] — 2026-06-30 — Device library & picker
+
+### Added
+- **Device library** — device profiles are now data-driven: a bundled
+  `assets/devices/catalog.json` is embedded at build time, and an optional user `devices.json`
+  in the data dir is layered on top (user entries override shipped ones by id; the three
+  built-in T-8/S-1 profiles stay reserved). Ships profiles for the AIRA Compact T-8/S-1/J-6,
+  Behringer RD-8 & TD-3, Arturia DrumBrute Impact & MicroFreak, Korg monologue & minilogue xd,
+  Elektron Digitakt, Novation Circuit Tracks (synth + drums), and generic GM-drum / mono / poly
+  fallbacks. Third-party note maps were sourced from each device's MIDI implementation chart.
+- **Device picker** (`d`) — assign any catalog device to a lane from an overlay, filtered to the
+  lane's kind (drum lanes list drum machines, melodic lanes list synths) so the lane's pattern
+  stays valid. Selecting a device swaps the lane's profile and re-routes it to that device's
+  port + default channel; the engine reconnects automatically.
+- **Printable cheat sheet** — a single-page `midip-cheatsheet.pdf`, linked from the README.
+
+### Changed
+- Loading a set that references an unknown device id (e.g. a removed custom profile) now falls
+  back to a same-kind generic profile and reports a repair note, instead of failing the load.
+
 ## [1.1.0] — 2026-06-30 — Routing & persistence fixes
 
 ### Fixed

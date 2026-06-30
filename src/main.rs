@@ -82,6 +82,9 @@ fn send_or_toast(
 }
 
 fn run(mut terminal: Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
+    // Layer the user's optional devices.json over the shipped catalog before any
+    // profile lookup (the device picker and saved-set loading read the catalog).
+    midip::devices::profiles::init_user_catalog(&midip::config::data_dir());
     let profiles = default_profiles();
 
     // Library (fall back to empty with a status note).

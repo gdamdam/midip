@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::devices::profiles::profile_by_id;
 #[cfg(test)]
 use crate::pattern::model::TrigCond;
-use crate::pattern::model::{Chain, Lane, LaneRoute, Pattern, PortRef, Scene, Set};
+use crate::pattern::model::{Chain, Lane, LaneKind, LaneRoute, Pattern, PortRef, Scene, Set};
 use crate::pattern::refs::PatternRef;
 use crate::persist;
 
@@ -249,9 +249,29 @@ pub fn load_set_with_report(path: &Path) -> anyhow::Result<(Set, Vec<String>)> {
     migrate_set_value(&mut value).context("migrating set")?;
     let dto: SetDto = serde_json::from_value(value).context("deserializing set")?;
     let mut lanes = Vec::with_capacity(dto.lanes.len());
+    let mut profile_notes: Vec<String> = Vec::new();
     for l in dto.lanes {
-        let profile = profile_by_id(&l.profile_id)
-            .ok_or_else(|| anyhow!("unknown profile id: {}", l.profile_id))?;
+        let profile = match profile_by_id(&l.profile_id) {
+            Some(p) => p,
+            None => {
+                // The set references a device no longer in the catalog (e.g. a
+                // user-defined profile removed from devices.json, or a set shared
+                // from another machine). Fall back to a same-kind generic so the
+                // set still loads, and record the swap — never fail the whole load
+                // over one missing device.
+                let fallback_id = match l.pattern.kind() {
+                    LaneKind::Drums => "generic-gm-drums",
+                    LaneKind::Melodic => "generic-poly-synth",
+                };
+                let fallback = profile_by_id(fallback_id)
+                    .ok_or_else(|| anyhow!("missing built-in fallback profile {fallback_id}"))?;
+                profile_notes.push(format!(
+                    "unknown device '{}' → {}",
+                    l.profile_id, fallback.label
+                ));
+                fallback
+            }
+        };
         lanes.push(Lane {
             profile,
             pattern: l.pattern,
@@ -277,7 +297,8 @@ pub fn load_set_with_report(path: &Path) -> anyhow::Result<(Set, Vec<String>)> {
         chains: dto.chains,
         clock_in_port: dto.clock_in_port,
     };
-    let notes = validate_and_repair(&mut set);
+    let mut notes = profile_notes;
+    notes.extend(validate_and_repair(&mut set));
     Ok((set, notes))
 }
 
@@ -1289,19 +1310,26 @@ mod tests {
     }
 
     #[test]
-    fn load_set_errors_on_unknown_profile_id() {
+    fn load_set_falls_back_on_unknown_profile_id() {
         let dir = unique_dir("unknown-profile");
         let mut set = Set::default_set(default_profiles());
         let path = save_set(&dir, &mut set).unwrap();
 
-        // Mutate the saved JSON to introduce a bogus profile_id
+        // Mutate the saved JSON to introduce a bogus profile_id on lane 0 (drums).
         let json_str = std::fs::read_to_string(&path).unwrap();
         let mut json: serde_json::Value = serde_json::from_str(&json_str).unwrap();
         json["lanes"][0]["profile_id"] = serde_json::json!("nonexistent-id");
         std::fs::write(&path, json.to_string()).unwrap();
 
-        // Loading should fail with an unknown profile id error
-        assert!(load_set(&path).is_err());
+        // Loading must SUCCEED, swapping the missing device for a same-kind generic
+        // and reporting a repair note — instead of failing the whole set.
+        let (loaded, notes) = load_set_with_report(&path).unwrap();
+        assert_eq!(loaded.lanes[0].profile.id, "generic-gm-drums");
+        assert_eq!(loaded.lanes[0].pattern.kind(), LaneKind::Drums);
+        assert!(
+            notes.iter().any(|n| n.contains("nonexistent-id")),
+            "expected a repair note mentioning the unknown id; got: {notes:?}"
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }

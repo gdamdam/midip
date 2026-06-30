@@ -1,6 +1,7 @@
 pub mod chain_view;
 pub mod clock_in_selector;
 pub mod crate_view;
+pub mod device_picker;
 pub mod editor_drums;
 pub mod editor_melodic;
 pub mod generative_view;
@@ -55,6 +56,7 @@ fn context_footer(app: &App) -> Line<'static> {
             "[tab]mode  [d/D]density  [r/R]range  [m/M]mutate  [z]reroll  [enter]commit  [esc]cancel"
         }
         Mode::ClockInSelector => "[↑↓]select port  [enter]confirm  [esc]cancel",
+        Mode::DevicePicker => "[↑↓]device  [enter]select  [esc]cancel",
     };
     let label_style = Style::default()
         .fg(EMBER.bg)
@@ -149,6 +151,7 @@ pub fn render(f: &mut Frame, app: &App) {
         Mode::ClockInSelector => {
             clock_in_selector::render_clock_in_selector(f, centered(area, 60, 60), app)
         }
+        Mode::DevicePicker => device_picker::render_device_picker(f, centered(area, 70, 70), app),
         Mode::Edit | Mode::TempoEntry => {}
     }
 }

@@ -272,6 +272,15 @@ pub fn key_to_action(key: KeyEvent, mode: Mode, kind: LaneKind) -> Action {
                 _ => Action::None,
             };
         }
+        Mode::DevicePicker => {
+            return match key.code {
+                KeyCode::Esc => Action::CloseDevicePicker,
+                KeyCode::Up => Action::DevicePickerNav(-1),
+                KeyCode::Down => Action::DevicePickerNav(1),
+                KeyCode::Enter => Action::DevicePickerConfirm,
+                _ => Action::None,
+            };
+        }
     }
 
     // '?' works in any non-Library mode.
@@ -337,6 +346,9 @@ pub fn key_to_action(key: KeyEvent, mode: Mode, kind: LaneKind) -> Action {
                     'l' => return Action::OpenLibrary,
                     'o' => return Action::OpenSetBrowser,
                     'w' => return Action::OpenRouteEditor,
+                    // 'd' (lowercase) opens the per-lane device picker (swap the
+                    // lane's instrument). 'D' (Shift+d) is the generative tool.
+                    'd' => return Action::OpenDevicePicker,
                     's' => return Action::Save,
                     'q' => return Action::Quit,
                     'b' => return Action::ToggleLaunchQuant, // toggle next-bar / next-beat launch quant

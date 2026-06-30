@@ -1,4 +1,6 @@
 use crate::pattern::model::LaneKind;
+use std::path::Path;
+use std::sync::OnceLock;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DrumVoice {
@@ -119,8 +121,138 @@ pub fn default_profiles() -> [DeviceProfile; 3] {
     [T8_DRUMS, T8_BASS, S1]
 }
 
+/// The three built-in profiles, always present and reserved: their ids cannot
+/// be shadowed by the catalog file. A fresh set is `[T8_DRUMS, T8_BASS, S1]`.
+const BUILTINS: [DeviceProfile; 3] = [T8_DRUMS, T8_BASS, S1];
+
+/// Additional shipped device profiles, embedded at compile time so the catalog
+/// is always available — including in unit tests and when the assets dir is
+/// missing — without touching the filesystem.
+const EMBEDDED_CATALOG: &str = include_str!("../../assets/devices/catalog.json");
+
+#[derive(serde::Deserialize)]
+struct CatalogFile {
+    profiles: Vec<DeviceProfileDto>,
+}
+
+#[derive(serde::Deserialize)]
+struct DeviceProfileDto {
+    id: String,
+    label: String,
+    port_match: String,
+    kind: String, // "drums" | "melodic"
+    channel: u8,
+    #[serde(default)]
+    root_note: u8,
+    #[serde(default)]
+    gate_fraction: f32,
+    #[serde(default)]
+    drum_gate_fraction: f32,
+    #[serde(default = "default_true")]
+    send_clock: bool,
+    #[serde(default)]
+    drum_voices: Vec<DrumVoiceDto>,
+    #[serde(default)]
+    poly: bool,
+}
+
+#[derive(serde::Deserialize)]
+struct DrumVoiceDto {
+    label: String,
+    note: u8,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// Leak an owned string to obtain a `'static` reference. Used only while
+/// building the process-lifetime device catalog — a small, one-time leak that
+/// lets `DeviceProfile` stay `Copy` and free of lifetime parameters, so the
+/// ~200 existing call sites that pass profiles by value are untouched.
+fn leak_str(s: String) -> &'static str {
+    Box::leak(s.into_boxed_str())
+}
+
+fn to_profile(dto: DeviceProfileDto) -> DeviceProfile {
+    let kind = match dto.kind.to_ascii_lowercase().as_str() {
+        "drums" => LaneKind::Drums,
+        _ => LaneKind::Melodic,
+    };
+    let voices: Vec<DrumVoice> = dto
+        .drum_voices
+        .into_iter()
+        .map(|v| DrumVoice {
+            label: leak_str(v.label),
+            note: v.note,
+        })
+        .collect();
+    DeviceProfile {
+        id: leak_str(dto.id),
+        label: leak_str(dto.label),
+        port_match: leak_str(dto.port_match),
+        kind,
+        channel: dto.channel,
+        root_note: dto.root_note,
+        gate_fraction: dto.gate_fraction,
+        drum_gate_fraction: dto.drum_gate_fraction,
+        send_clock: dto.send_clock,
+        drum_voices: Box::leak(voices.into_boxed_slice()),
+        poly: dto.poly,
+    }
+}
+
+/// Parse a catalog JSON document (`{ "profiles": [...] }`) into profiles.
+fn parse_catalog(json: &str) -> anyhow::Result<Vec<DeviceProfile>> {
+    let file: CatalogFile = serde_json::from_str(json)?;
+    Ok(file.profiles.into_iter().map(to_profile).collect())
+}
+
+static CATALOG: OnceLock<Vec<DeviceProfile>> = OnceLock::new();
+
+/// Build the full catalog: built-ins first (reserved), then user-supplied
+/// profiles, then the embedded shipped profiles. Entries whose id is already
+/// present are skipped — so built-ins always win, and a user entry shadows the
+/// embedded one with the same id.
+fn build_catalog(user_json: Option<&str>) -> Vec<DeviceProfile> {
+    let mut out: Vec<DeviceProfile> = BUILTINS.to_vec();
+    let push = |p: DeviceProfile, out: &mut Vec<DeviceProfile>| {
+        if !out.iter().any(|e| e.id == p.id) {
+            out.push(p);
+        }
+    };
+    if let Some(json) = user_json {
+        // A malformed user file must not take the app down: ignore on parse error.
+        if let Ok(profiles) = parse_catalog(json) {
+            for p in profiles {
+                push(p, &mut out);
+            }
+        }
+    }
+    let embedded = parse_catalog(EMBEDDED_CATALOG).expect("embedded device catalog must parse");
+    for p in embedded {
+        push(p, &mut out);
+    }
+    out
+}
+
+/// The full device catalog: built-ins + shipped profiles + any user additions.
+/// Lazily built from the embedded catalog on first use; call
+/// [`init_user_catalog`] once at startup to layer in the user's `devices.json`.
+pub fn catalog() -> &'static [DeviceProfile] {
+    CATALOG.get_or_init(|| build_catalog(None)).as_slice()
+}
+
+/// Layer the user's `devices.json` (in `data_dir`) on top of the shipped
+/// profiles. Call once at startup before any catalog use; a no-op if the
+/// catalog was already built.
+pub fn init_user_catalog(data_dir: &Path) {
+    let user = std::fs::read_to_string(data_dir.join("devices.json")).ok();
+    let _ = CATALOG.set(build_catalog(user.as_deref()));
+}
+
 pub fn profile_by_id(id: &str) -> Option<DeviceProfile> {
-    default_profiles().into_iter().find(|p| p.id == id)
+    catalog().iter().copied().find(|p| p.id == id)
 }
 
 /// Playback pitch for a melodic note: root + semi + transpose + 12*octave, clamped 0..=127.
@@ -236,5 +368,99 @@ mod tests {
                 "T-8 DRUMS poly is false (irrelevant for drum lanes)"
             );
         }
+    }
+
+    // --- catalog (data-driven profiles) ---
+
+    #[test]
+    fn embedded_catalog_parses() {
+        // The bundled catalog.json must always be well-formed; build_catalog
+        // expects this and panics otherwise.
+        let profiles = parse_catalog(EMBEDDED_CATALOG).expect("embedded catalog parses");
+        assert!(!profiles.is_empty());
+    }
+
+    #[test]
+    fn catalog_includes_builtins_and_shipped_with_unique_ids() {
+        let cat = catalog();
+        let ids: Vec<&str> = cat.iter().map(|p| p.id).collect();
+        // Built-ins present and first.
+        assert_eq!(&ids[..3], &["t8-drums", "t8-bass", "s1"]);
+        // A sampling of shipped devices and the generic fallbacks.
+        for id in [
+            "j-6",
+            "rd-8",
+            "drumbrute-impact",
+            "td-3",
+            "monologue",
+            "microfreak",
+            "minilogue-xd",
+            "digitakt",
+            "circuit-tracks-synth",
+            "circuit-tracks-drums",
+            "generic-gm-drums",
+            "generic-mono-synth",
+            "generic-poly-synth",
+        ] {
+            assert!(ids.contains(&id), "catalog missing {id}; got {ids:?}");
+        }
+        // No duplicate ids.
+        let mut sorted = ids.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), ids.len(), "duplicate ids in catalog: {ids:?}");
+    }
+
+    #[test]
+    fn profile_by_id_resolves_shipped_devices() {
+        // RD-8 drum map was verified against the manual: snare is note 40 (not 38).
+        let rd8 = profile_by_id("rd-8").expect("rd-8 in catalog");
+        assert_eq!(rd8.kind, LaneKind::Drums);
+        assert!(!rd8.drum_voices.is_empty());
+        assert_eq!(drum_label(&rd8, 40), "SD");
+        assert_eq!(drum_label(&rd8, 36), "BD");
+
+        // TD-3 is a mono bass synth rooted at C2 (36).
+        let td3 = profile_by_id("td-3").expect("td-3 in catalog");
+        assert_eq!(td3.kind, LaneKind::Melodic);
+        assert!(!td3.poly);
+        assert_eq!(td3.root_note, 36);
+        assert!(td3.drum_voices.is_empty());
+
+        // minilogue xd is polyphonic.
+        assert!(profile_by_id("minilogue-xd").unwrap().poly);
+
+        assert_eq!(profile_by_id("does-not-exist"), None);
+    }
+
+    #[test]
+    fn user_profiles_add_but_cannot_shadow_builtins() {
+        let user = r#"{ "profiles": [
+            { "id": "t8-drums", "label": "HACKED", "port_match": "X", "kind": "melodic", "channel": 5 },
+            { "id": "my-synth", "label": "MY SYNTH", "port_match": "MySynth", "kind": "melodic", "channel": 3, "root_note": 50, "poly": true }
+        ] }"#;
+        let cat = build_catalog(Some(user));
+
+        // Built-in id is reserved: the real T-8 DRUM profile wins, not the user's.
+        let t8 = cat.iter().find(|p| p.id == "t8-drums").unwrap();
+        assert_eq!(t8.label, "T-8 DRUM");
+        assert_eq!(t8.channel, 9);
+
+        // A genuinely new user profile is added.
+        let mine = cat
+            .iter()
+            .find(|p| p.id == "my-synth")
+            .expect("user profile added");
+        assert_eq!(mine.channel, 3);
+        assert_eq!(mine.root_note, 50);
+        assert!(mine.poly);
+    }
+
+    #[test]
+    fn malformed_user_catalog_is_ignored() {
+        // Garbage user JSON must not panic or drop the shipped catalog.
+        let cat = build_catalog(Some("{ not json"));
+        assert!(cat.iter().any(|p| p.id == "t8-drums"));
+        assert!(cat.iter().any(|p| p.id == "td-3"));
     }
 }

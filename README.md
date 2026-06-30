@@ -2,12 +2,12 @@
 
 # midip
 
-**A terminal MIDI sequencer & live groovebox for the Roland AIRA Compact T‑8 and S‑1**
+**A terminal MIDI sequencer & live groovebox — built‑in profiles for the Roland AIRA Compact T‑8 & S‑1, plus a device library for any class‑compliant USB‑MIDI gear**
 
 [![License](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.0.0-success.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.2.0-success.svg)](CHANGELOG.md)
 [![Rust](https://img.shields.io/badge/rust-2021%20edition-orange.svg)](https://www.rust-lang.org)
-[![Tests](https://img.shields.io/badge/tests-973%20passing-brightgreen.svg)](CHANGELOG.md)
+[![Tests](https://img.shields.io/badge/tests-990%20passing-brightgreen.svg)](CHANGELOG.md)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg)](#build--run)
 [![Built with ratatui](https://img.shields.io/badge/TUI-ratatui-blueviolet.svg)](https://ratatui.rs)
 
@@ -29,6 +29,8 @@ Step 1 · BD · Velocity 120 [-/+] · Probability 100% [p/P] · Ratchet x1 [y/Y]
 midip is **MIDI‑only**: it makes *your* devices play the notes. It is the sequencer; your
 gear is the sound. (It never triggers a device's own internal pattern — see
 [Devices & MIDI](#devices--midi).)
+
+📄 **[Printable cheat sheet (PDF)](midip-cheatsheet.pdf)** — every keybinding on a single page.
 
 ---
 
@@ -61,6 +63,10 @@ gear is the sound. (It never triggers a device's own internal pattern — see
 
 ## Features
 
+- **Device library & picker** — built‑in profiles for the AIRA Compact T‑8/S‑1/J‑6, Behringer
+  RD‑8 & TD‑3, Arturia DrumBrute Impact & MicroFreak, Korg monologue & minilogue xd, Elektron
+  Digitakt and Novation Circuit Tracks, plus generic GM‑drum/mono/poly fallbacks. Press `d` to
+  swap any device onto a lane (filtered to the lane's kind); add your own via `devices.json`.
 - **3‑lane groovebox** — T‑8 drums + T‑8 bass + S‑1 synth play together, each with its own
   pattern, with **polymeter** (lanes can have different lengths and drift in and out of phase).
 - **Built‑in library** — hundreds of named patterns across 20 genres (a vendored snapshot of
@@ -126,7 +132,7 @@ gear is the sound. (It never triggers a device's own internal pattern — see
 - A **terminal** at least **60×16** (it shows a resize hint if smaller).
 - **MIDI**: macOS (CoreMIDI) or any platform [`midir`](https://crates.io/crates/midir)
   supports. The first build downloads crates from crates.io.
-- **Hardware** is optional — without a T‑8/S‑1 connected, midip still runs (silently) so you
+- **Hardware** is optional — without any device connected, midip still runs (silently) so you
   can browse and edit.
 
 ## Build & run
@@ -140,7 +146,7 @@ Other commands:
 
 ```sh
 cargo build --release        # just build the binary (target/release/midip)
-cargo test                   # run the test suite (973 tests, no hardware needed)
+cargo test                   # run the test suite (990 tests, no hardware needed)
 ```
 
 > Run it in a real terminal (not piped) — it takes over the screen while running and restores
@@ -367,8 +373,7 @@ Press **`?`** in‑app for the full scrollable two-column list. `space` and `!` 
 
 ## Devices & MIDI
 
-midip auto‑detects output ports by name (`T-8`, `S-1`). The default lane → channel map
-(matching the AIRA Compacts):
+A fresh set opens as three lanes matching the AIRA Compacts, each auto‑detected by port name:
 
 | Lane | Device | MIDI channel |
 |------|--------|--------------|
@@ -376,8 +381,28 @@ midip auto‑detects output ports by name (`T-8`, `S-1`). The default lane → c
 | BASS | T‑8 (bass part) | 2 |
 | SYNTH | S‑1 | 1 |
 
-The two T‑8 lanes share one physical connection (distinguished by channel). You can reassign
-any lane's port, channel, and clock‑out in the **route editor** (`w`).
+The two T‑8 lanes share one physical connection (distinguished by channel).
+
+### Device library & picker (`d`)
+
+midip is not limited to the AIRA Compacts. Press **`d`** on any lane to open the **device
+picker** and swap in another instrument — the list is filtered to the lane's kind (drum lanes
+show drum machines, melodic lanes show synths) so the pattern stays valid, and the lane
+re‑routes to the new device's port and default channel automatically.
+
+Built‑in profiles (note maps sourced from each device's MIDI implementation chart; channel and
+port stay adjustable per lane):
+
+| Kind | Devices |
+|------|---------|
+| Drums | T‑8 · Behringer RD‑8 · Arturia DrumBrute Impact · Novation Circuit (drums) · **Generic GM drums** |
+| Synth | S‑1 · Roland J‑6 · Behringer TD‑3 · Korg monologue · Arturia MicroFreak · Korg minilogue xd · Elektron Digitakt · Novation Circuit (synth) · **Generic mono / poly** |
+
+The generic profiles drive *any* class‑compliant USB‑MIDI device immediately — pick a generic,
+then set its port/channel in the route editor. To ship named profiles of your own, drop a
+`devices.json` in the data dir (same schema as [`assets/devices/catalog.json`](assets/devices/catalog.json));
+your entries layer on top of the built‑in catalog. Any lane's port, channel, and clock‑out
+remain adjustable in the **route editor** (`w`).
 
 midip sends **MIDI Clock** (24 PPQN, so the devices' delays/arps follow its tempo) but **not**
 transport Start/Stop — so your gear plays *only* the notes midip sends, never its own stored
@@ -571,12 +596,13 @@ src/
   input.rs           key → Action mapping
   config.rs          env-var configuration
   pattern/           model · library loader · store (save/load/user patterns) · euclid
-  devices/           T‑8 / S‑1 profiles (channels, drum voices, pitch/velocity)
+  devices/           device profiles + catalog loader (channels, drum voices, pitch/velocity)
   midi/              MidiMessage · MidiSink (RecordingSink / MidirSink / NullSink)
   engine/            scheduler (timing/swing/slide/ratchet) · clock · transport · thread
   link/              embedded Ableton Link (rusty_link) + a test fake
   ui/                transport · lanes · editor_drums · editor_melodic · library · help · theme
 assets/patterns/     vendored mpump pattern library (read-only)
+assets/devices/      device profile catalog (catalog.json)
 ```
 
 ## Testing
@@ -588,12 +614,12 @@ cargo test
 The engine writes through a `MidiSink` trait, so playback, scheduling, slides, probability,
 ratcheting, polymeter, quantized launch, favorites, crates, scale-aware editing, and the
 reducer are all tested with a recording sink — **no hardware needed**. UI views are checked
-with ratatui's `TestBackend`. 973 tests, 0 failures. (Live MIDI and Ableton Link require
+with ratatui's `TestBackend`. 990 tests, 0 failures. (Live MIDI and Ableton Link require
 hardware and are covered by a separate acceptance checklist not included in this repo.)
 
 ## Status
 
-v1.0.0 — stable release. See [`CHANGELOG.md`](CHANGELOG.md) for the full history.
+v1.2.0 — stable release. See [`CHANGELOG.md`](CHANGELOG.md) for the full history.
 
 ## License
 

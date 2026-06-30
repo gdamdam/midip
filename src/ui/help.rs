@@ -109,6 +109,7 @@ fn right_column_lines() -> Vec<Line<'static>> {
         // ── Routing / Performance ─────────────────────────────────────
         header("Routing / Performance"),
         row("[w]  route editor (port / channel / clock-out)"),
+        row("[d]  device picker (swap a lane's instrument)"),
         row("[W]  clock-in source selector (external MIDI clock input)"),
         row("[b]  launch quant: next bar / next beat"),
         row("[C]  cancel queued launch on focused lane"),
@@ -135,6 +136,10 @@ fn right_column_lines() -> Vec<Line<'static>> {
         row("[Z]  clear focused lane pattern"),
         blank(),
         // ── Route Editor  [w] ─────────────────────────────────────────
+        header("Device Picker  [d] to open"),
+        row("[↑ ↓]  select device (filtered to the lane's kind)"),
+        row("[enter]  assign to focused lane + re-route"),
+        row("[esc]  cancel"),
         header("Route Editor  [w] to open"),
         row("[↑ ↓]  select lane"),
         row("[← →]  move between fields"),

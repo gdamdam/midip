@@ -91,6 +91,10 @@ pub enum Mode {
     /// M10 T5: clock-in source selector overlay. Opened via [W] from Edit mode.
     /// User picks an input MIDI port (or "(none)" to revert to manual tempo).
     ClockInSelector,
+    /// Per-lane device picker overlay. Opened via [d] from Edit; lists the
+    /// device catalog filtered to the focused lane's kind. Selecting a device
+    /// swaps the lane's profile and re-routes it to that device.
+    DevicePicker,
 }
 
 /// Which field is focused in the route editor (cycles Left/Right).
@@ -198,6 +202,11 @@ pub enum Action {
     RouteCyclePort(i32),
     RouteAdjustChannel(i32),
     RouteToggleClockOut,
+    /// Device picker (Mode::DevicePicker): open/close, move selection, confirm.
+    OpenDevicePicker,
+    CloseDevicePicker,
+    DevicePickerNav(i32),
+    DevicePickerConfirm,
     RecoveryRecover,
     RecoveryDiscard,
     RecoveryOpenSaved,
@@ -602,6 +611,13 @@ pub struct App {
     pub route_editor_field: RouteField,
     /// Available MIDI output port names, refreshed when the editor opens.
     pub route_editor_ports: Vec<String>,
+
+    // --- Device picker state (Mode::DevicePicker) ---
+    /// Lane being assigned a device in the picker.
+    pub device_picker_lane: usize,
+    /// Selected index into the kind-filtered catalog list.
+    pub device_picker_index: usize,
+
     pub mirror_on: bool,
 
     // --- M3 Task 2: clip-launcher queue ---
@@ -739,6 +755,8 @@ impl App {
             route_editor_lane: 0,
             route_editor_field: RouteField::Port,
             route_editor_ports: Vec::new(),
+            device_picker_lane: 0,
+            device_picker_index: 0,
             mirror_on: false,
             launch_quant: Quant::NextBar,
             queued: vec![None; n],
@@ -2020,6 +2038,59 @@ impl App {
                 ));
                 let route = self.set.lanes[lane].route.clone();
                 cmds.push(UiCommand::SetRoute { lane, route });
+            }
+            Action::OpenDevicePicker => {
+                let lane = self.focus;
+                self.device_picker_lane = lane;
+                // Open on the lane's current device so it is pre-selected.
+                let kind = self.set.lanes[lane].profile.kind;
+                let choices = crate::ui::device_picker::choices(kind);
+                let cur_id = self.set.lanes[lane].profile.id;
+                self.device_picker_index = choices.iter().position(|p| p.id == cur_id).unwrap_or(0);
+                self.mode = Mode::DevicePicker;
+            }
+            Action::CloseDevicePicker => {
+                self.mode = Mode::Edit;
+            }
+            Action::DevicePickerNav(d) => {
+                let kind = self.set.lanes[self.device_picker_lane].profile.kind;
+                let n = crate::ui::device_picker::choices(kind).len();
+                if n > 0 {
+                    self.device_picker_index =
+                        (self.device_picker_index as i32 + d).rem_euclid(n as i32) as usize;
+                }
+            }
+            Action::DevicePickerConfirm => {
+                let lane = self.device_picker_lane;
+                if lane >= self.set.lanes.len() {
+                    self.mode = Mode::Edit;
+                    return cmds;
+                }
+                let kind = self.set.lanes[lane].profile.kind;
+                let choices = crate::ui::device_picker::choices(kind);
+                if let Some(&new_profile) = choices.get(self.device_picker_index) {
+                    if new_profile.id != self.set.lanes[lane].profile.id {
+                        self.snapshot();
+                        self.set.lanes[lane].profile = new_profile;
+                        // Re-route to the new device's port + default channel so the engine
+                        // reconnects (a new port_match re-plans the device watcher).
+                        let route = LaneRoute {
+                            port: PortRef {
+                                stable_key: new_profile.port_match.to_string(),
+                                name: new_profile.port_match.to_string(),
+                            },
+                            channel: new_profile.channel,
+                            clock_out: new_profile.send_clock,
+                        };
+                        self.set.lanes[lane].route = Some(route.clone());
+                        cmds.push(UiCommand::SetRoute {
+                            lane,
+                            route: Some(route),
+                        });
+                        self.set_status(format!("Lane {lane}: device → {}", new_profile.label));
+                    }
+                }
+                self.mode = Mode::Edit;
             }
             Action::Quit => {
                 if self.playing && !self.quit_armed {
@@ -3585,6 +3656,7 @@ impl App {
             Mode::Chains => "CHAINS",
             Mode::NoteInput => "NOTE INPUT",
             Mode::Generative => "GENERATIVE",
+            Mode::DevicePicker => "DEVICE",
             Mode::ClockInSelector => "CLK-IN",
         }
     }
