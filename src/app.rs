@@ -86,6 +86,9 @@ pub enum Mode {
     /// machinery as `ToggleFill`). Snapshot is deferred to `GenCommit` (one undo entry).
     /// `GenCancel`/`Esc` reverts without adding any snapshot.
     Generative,
+    /// M10 T5: clock-in source selector overlay. Opened via [W] from Edit mode.
+    /// User picks an input MIDI port (or "(none)" to revert to manual tempo).
+    ClockInSelector,
 }
 
 /// Which field is focused in the route editor (cycles Left/Right).
@@ -470,6 +473,15 @@ pub enum Action {
     ClearLaneSwing,
     /// Cycle the focused lane's clock_div: None→1→2→3→4→None.
     CycleClockDiv,
+    // ── M10 T5: clock-in source selector ────────────────────────────────────
+    /// Open the clock-in source selector overlay (Mode::ClockInSelector).
+    OpenClockInSelector,
+    /// Close the clock-in source selector without committing.
+    CloseClockInSelector,
+    /// Move selection ±1 in the clock-in selector list.
+    ClockInNavPort(i32),
+    /// Confirm the highlighted port (or "(none)") in the clock-in selector.
+    ClockInConfirm,
     None,
 }
 
@@ -654,6 +666,20 @@ pub struct App {
     /// boundary (see `tick_chain`) and recalls the next entry's scene via the existing
     /// quantized `recall_scene` path. `None` when idle/stopped/overridden.
     pub chain_playback: Option<crate::pattern::chain::ChainPlayback>,
+
+    // --- M10 T5: clock-in selector state ---
+    /// Tracks the followed external clock port (None = manual tempo).
+    /// Set by ClockInConfirm; cleared by ClockInConfirm with sel=0.
+    pub clock_in_port: Option<PortRef>,
+    /// Transport indicator state: None = ClockIn not active; Some(true) = LOCKED;
+    /// Some(false) = LOST. Updated by on_engine_event(ClockInStatus).
+    pub clock_in_locked: Option<bool>,
+    /// Last followed BPM from external clock (for display). 0.0 when unlocked.
+    pub clock_in_tempo: f64,
+    /// Available MIDI input port names, refreshed when selector opens.
+    pub clock_in_ports: Vec<String>,
+    /// Currently highlighted index in selector: 0 = "(none/manual)", 1..N = port.
+    pub clock_in_sel: usize,
 }
 
 /// Default melodic velocity multiplier when placing a note (1.0 -> MIDI 100).
@@ -729,6 +755,11 @@ impl App {
             chain_sel: 0,
             chain_entry_sel: 0,
             chain_playback: None,
+            clock_in_port: None,
+            clock_in_locked: None,
+            clock_in_tempo: 0.0,
+            clock_in_ports: Vec::new(),
+            clock_in_sel: 0,
         }
     }
 
@@ -3278,6 +3309,51 @@ impl App {
                 self.mode = Mode::Edit;
                 self.set_status("Generative: cancelled");
             }
+            // ── M10 T5: clock-in source selector ─────────────────────────
+            Action::OpenClockInSelector => {
+                self.clock_in_ports = crate::midi::ports::list_input_ports();
+                self.clock_in_sel = match &self.clock_in_port {
+                    None => 0,
+                    Some(pr) => self
+                        .clock_in_ports
+                        .iter()
+                        .position(|p| p == &pr.stable_key)
+                        .map(|i| i + 1)
+                        .unwrap_or(0),
+                };
+                self.mode = Mode::ClockInSelector;
+            }
+            Action::CloseClockInSelector => {
+                self.mode = Mode::Edit;
+            }
+            Action::ClockInNavPort(d) => {
+                let total = self.clock_in_ports.len() + 1; // +1 for the "(none)" slot
+                self.clock_in_sel =
+                    (self.clock_in_sel as i32 + d).rem_euclid(total as i32) as usize;
+            }
+            Action::ClockInConfirm => {
+                if self.clock_in_sel == 0 {
+                    self.clock_in_port = None;
+                    self.clock_in_locked = None;
+                    self.clock_in_tempo = 0.0;
+                    cmds.push(UiCommand::SetClockInPort(None));
+                    self.set_status("CLK-IN cleared — manual tempo");
+                } else {
+                    let name = self
+                        .clock_in_ports
+                        .get(self.clock_in_sel - 1)
+                        .cloned()
+                        .unwrap_or_default();
+                    let pr = PortRef {
+                        stable_key: name.clone(),
+                        name: name.clone(),
+                    };
+                    self.clock_in_port = Some(pr.clone());
+                    cmds.push(UiCommand::SetClockInPort(Some(pr)));
+                    self.set_status(format!("CLK-IN → {name}"));
+                }
+                self.mode = Mode::Edit;
+            }
             Action::None => {}
         }
         cmds
@@ -3365,13 +3441,19 @@ impl App {
                     *slot = None;
                 }
             }
-            // M10 T4: external MIDI clock-in lock/loss. The persistent status display + key
-            // binding are T5; for now surface a toast so the user sees lock/loss feedback.
+            // M10 T5: persist clock-in status for the transport indicator and emit toasts.
             EngineEvent::ClockInStatus { locked, tempo, .. } => {
-                if locked {
-                    self.set_status(format!("Clock in: locked {} BPM", tempo.round() as u32));
+                // Only track state when a port is actually selected.
+                self.clock_in_locked = if self.clock_in_port.is_some() {
+                    Some(locked)
                 } else {
-                    self.set_status("Clock in: lost");
+                    None
+                };
+                self.clock_in_tempo = tempo;
+                if locked {
+                    self.set_status(format!("CLK-IN locked {:.0} BPM", tempo));
+                } else {
+                    self.set_status("CLK-IN lost");
                 }
             }
         }
@@ -3451,6 +3533,7 @@ impl App {
             Mode::Chains => "CHAINS",
             Mode::NoteInput => "NOTE INPUT",
             Mode::Generative => "GENERATIVE",
+            Mode::ClockInSelector => "CLK-IN",
         }
     }
 
@@ -11030,6 +11113,121 @@ mod tests {
             app.undo.len(),
             before_undo,
             "GenSetMode must NOT add an undo entry"
+        );
+    }
+
+    // --- M10 T5: clock-in selector -------------------------------------------
+
+    #[test]
+    fn clock_in_status_locked_updates_app_state() {
+        let mut app = new_app();
+        app.clock_in_port = Some(crate::pattern::model::PortRef {
+            stable_key: "dev".into(),
+            name: "dev".into(),
+        });
+        app.on_engine_event(crate::engine::EngineEvent::ClockInStatus {
+            locked: true,
+            tempo: 130.0,
+            deviation: 0.5,
+        });
+        assert_eq!(app.clock_in_locked, Some(true));
+        assert!((app.clock_in_tempo - 130.0).abs() < 0.01);
+        assert!(
+            app.status.contains("locked"),
+            "expected lock toast: {:?}",
+            app.status
+        );
+    }
+
+    #[test]
+    fn clock_in_status_lost_updates_app_state() {
+        let mut app = new_app();
+        app.clock_in_port = Some(crate::pattern::model::PortRef {
+            stable_key: "dev".into(),
+            name: "dev".into(),
+        });
+        app.on_engine_event(crate::engine::EngineEvent::ClockInStatus {
+            locked: false,
+            tempo: 0.0,
+            deviation: 0.0,
+        });
+        assert_eq!(app.clock_in_locked, Some(false));
+        assert!(
+            app.status.contains("lost"),
+            "expected lost toast: {:?}",
+            app.status
+        );
+    }
+
+    #[test]
+    fn clock_in_status_without_port_does_not_set_locked() {
+        let mut app = new_app();
+        // No port selected.
+        app.on_engine_event(crate::engine::EngineEvent::ClockInStatus {
+            locked: true,
+            tempo: 120.0,
+            deviation: 0.0,
+        });
+        assert_eq!(
+            app.clock_in_locked, None,
+            "clock_in_locked must stay None when no port"
+        );
+    }
+
+    #[test]
+    fn clock_in_confirm_dispatches_set_clock_in_port() {
+        let mut app = new_app();
+        app.clock_in_ports = vec!["FakePort".to_string()];
+        app.clock_in_sel = 1;
+        let cmds = app.apply(Action::ClockInConfirm);
+        assert!(
+            cmds.iter()
+                .any(|c| matches!(c, crate::engine::UiCommand::SetClockInPort(Some(_)))),
+            "expected SetClockInPort(Some) command"
+        );
+        assert!(app.clock_in_port.is_some());
+        assert_eq!(app.mode, Mode::Edit);
+    }
+
+    #[test]
+    fn clock_in_confirm_none_clears_port() {
+        let mut app = new_app();
+        app.clock_in_port = Some(crate::pattern::model::PortRef {
+            stable_key: "x".into(),
+            name: "x".into(),
+        });
+        app.clock_in_locked = Some(true);
+        app.clock_in_sel = 0;
+        let cmds = app.apply(Action::ClockInConfirm);
+        assert!(
+            cmds.iter()
+                .any(|c| matches!(c, crate::engine::UiCommand::SetClockInPort(None))),
+            "expected SetClockInPort(None) command"
+        );
+        assert!(app.clock_in_port.is_none());
+        assert_eq!(app.clock_in_locked, None);
+        assert_eq!(app.mode, Mode::Edit);
+    }
+
+    #[test]
+    fn clock_in_nav_port_wraps() {
+        let mut app = new_app();
+        app.clock_in_ports = vec!["A".into(), "B".into()];
+        app.clock_in_sel = 0;
+        app.apply(Action::ClockInNavPort(-1));
+        // total = 3 (none + A + B); 0 + (-1) = -1 rem 3 = 2
+        assert_eq!(app.clock_in_sel, 2);
+    }
+
+    #[test]
+    fn w_uppercase_opens_clock_in_selector() {
+        use crate::input::key_to_action;
+        use crate::pattern::model::LaneKind;
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let key = KeyEvent::new(KeyCode::Char('W'), KeyModifiers::SHIFT);
+        assert_eq!(
+            key_to_action(key, Mode::Edit, LaneKind::Drums),
+            Action::OpenClockInSelector
         );
     }
 }

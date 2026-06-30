@@ -84,6 +84,17 @@ pub fn render_transport(f: &mut Frame, area: Rect, app: &App) {
         "LINK off".to_string()
     };
 
+    // --- CLK-IN -------------------------------------------------------------
+    let clk_in_field: Option<String> = app.clock_in_port.as_ref().map(|port| {
+        let port_short = port.name.split_whitespace().next().unwrap_or(&port.name);
+        let state = match app.clock_in_locked {
+            Some(true) => "LOCKED",
+            Some(false) => "LOST",
+            None => "FREE",
+        };
+        format!("CLK-IN {} {}", port_short, state)
+    });
+
     // --- position: bar.beat.sixteenth (all 1-based) -------------------------
     let sixteenth = app.playhead % 4 + 1;
     let beat = (app.playhead / 4) % 4 + 1;
@@ -112,12 +123,18 @@ pub fn render_transport(f: &mut Frame, area: Rect, app: &App) {
         Span::styled(bpm_field, bright_style()),
         sep.clone(),
         Span::styled(link_field, muted_style()),
+    ];
+    if let Some(clk) = clk_in_field {
+        top_spans.push(sep.clone());
+        top_spans.push(Span::styled(clk, muted_style()));
+    }
+    top_spans.extend([
         sep.clone(),
         Span::styled(pos_field, muted_style()),
         sep.clone(),
         Span::styled(swing_field, muted_style()),
         sep.clone(),
-    ];
+    ]);
     if saved {
         top_spans.push(Span::styled("SAVED", ok_style()));
     } else {
@@ -383,5 +400,57 @@ mod tests {
             text.contains("MIR"),
             "MIR must appear when mirror_on=true, got: {text:?}"
         );
+    }
+
+    // --- CLK-IN indicator (M10 T5) ------------------------------------------
+
+    #[test]
+    fn clk_in_hidden_when_no_port() {
+        let app = make_app();
+        let text = render(&app);
+        assert!(
+            !text.contains("CLK-IN"),
+            "CLK-IN must not appear when no port set: {text:?}"
+        );
+    }
+
+    #[test]
+    fn clk_in_shows_locked_state() {
+        let mut app = make_app();
+        app.clock_in_port = Some(crate::pattern::model::PortRef {
+            stable_key: "MyDevice".to_string(),
+            name: "MyDevice".to_string(),
+        });
+        app.clock_in_locked = Some(true);
+        let text = render(&app);
+        assert!(text.contains("CLK-IN"), "expected CLK-IN: {text:?}");
+        assert!(text.contains("LOCKED"), "expected LOCKED: {text:?}");
+    }
+
+    #[test]
+    fn clk_in_shows_lost_state() {
+        let mut app = make_app();
+        app.clock_in_port = Some(crate::pattern::model::PortRef {
+            stable_key: "MyDevice".to_string(),
+            name: "MyDevice".to_string(),
+        });
+        app.clock_in_locked = Some(false);
+        let text = render(&app);
+        assert!(text.contains("CLK-IN"), "expected CLK-IN: {text:?}");
+        assert!(text.contains("LOST"), "expected LOST: {text:?}");
+    }
+
+    #[test]
+    fn clk_in_shows_free_when_port_set_but_no_lock() {
+        let mut app = make_app();
+        app.clock_in_port = Some(crate::pattern::model::PortRef {
+            stable_key: "MyDevice".to_string(),
+            name: "MyDevice".to_string(),
+        });
+        // clock_in_locked is None (no status received yet) → FREE
+        app.clock_in_locked = None;
+        let text = render(&app);
+        assert!(text.contains("CLK-IN"), "expected CLK-IN: {text:?}");
+        assert!(text.contains("FREE"), "expected FREE: {text:?}");
     }
 }

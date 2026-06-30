@@ -263,6 +263,15 @@ pub fn key_to_action(key: KeyEvent, mode: Mode, kind: LaneKind) -> Action {
                 _ => Action::None,
             };
         }
+        Mode::ClockInSelector => {
+            return match key.code {
+                KeyCode::Esc => Action::CloseClockInSelector,
+                KeyCode::Up => Action::ClockInNavPort(-1),
+                KeyCode::Down => Action::ClockInNavPort(1),
+                KeyCode::Enter => Action::ClockInConfirm,
+                _ => Action::None,
+            };
+        }
     }
 
     // '?' works in any non-Library mode.
@@ -343,6 +352,9 @@ pub fn key_to_action(key: KeyEvent, mode: Mode, kind: LaneKind) -> Action {
                     // 'D' (Shift+d) was unbound in Edit; chosen for "Draft" — opens the
                     // generative tool panel to generate or vary the focused lane pattern.
                     'D' => return Action::OpenGenerative,
+                    // 'W' (Shift+w) opens the clock-in source selector. Lowercase 'w' is
+                    // OpenRouteEditor. Both are output/input routing surfaces.
+                    'W' => return Action::OpenClockInSelector,
                     // 'i' was unbound; chosen for "in-sync" — re-sync the focused lane's
                     // phase at the next bar/beat without changing its pattern.
                     'i' => return Action::RestartLane,

@@ -105,6 +105,7 @@ fn right_column_lines() -> Vec<Line<'static>> {
         // ── Routing / Performance ─────────────────────────────────────
         header("Routing / Performance"),
         row("[w]  route editor (port / channel / clock-out)"),
+        row("[W]  clock-in source selector (external MIDI clock input)"),
         row("[b]  launch quant: next bar / next beat"),
         row("[C]  cancel queued launch on focused lane"),
         row("[i]  restart lane phase at next bar/beat (re-sync)"),
@@ -177,6 +178,12 @@ fn right_column_lines() -> Vec<Line<'static>> {
         row("[d / D]  density −/+   [r / R]  range −/+"),
         row("[m / M]  mutate −/+    [z]  reroll seed"),
         row("[enter]  commit (undoable)   [esc]  cancel"),
+        blank(),
+        // ── Clock-In Selector  [W] ────────────────────────────────────
+        header("Clock-In Selector  [W] to open"),
+        row("[↑ ↓]  select input port"),
+        row("[enter]  confirm (activates external MIDI clock)"),
+        row("[esc]   cancel"),
     ]
 }
 
@@ -356,10 +363,14 @@ mod tests {
     fn help_scroll_reveals_bottom_content() {
         let short_scroll0 = render_help_to_string(110, 12, 0);
         let short_scrolled = render_help_to_string(110, 12, 999);
-        // At max scroll, the bottom-most groups (Crate/Live and Favorites) appear.
+        // At max scroll, one of the bottom-most groups appears. The right column ends
+        // with Clock-In Selector (M10 T5), so accept that along with the older anchors.
         assert!(
-            short_scrolled.contains("Favorites") || short_scrolled.contains("Crate"),
-            "scrolled view should show bottom sections (Crate/Favorites); got: {short_scrolled:?}"
+            short_scrolled.contains("Favorites")
+                || short_scrolled.contains("Crate")
+                || short_scrolled.contains("Clock-In")
+                || short_scrolled.contains("clock-in"),
+            "scrolled view should show bottom sections; got: {short_scrolled:?}"
         );
         assert_ne!(
             short_scroll0, short_scrolled,
@@ -486,6 +497,21 @@ mod tests {
         assert!(
             whole.contains("stack"),
             "expected note-input poly-stacking hint; got: {whole:?}"
+        );
+    }
+
+    #[test]
+    fn help_shows_clock_in_selector_key() {
+        let whole = render_help_to_string(110, 120, 0);
+        assert!(
+            whole.contains("Clock-In Selector") || whole.contains("clock-in"),
+            "expected clock-in selector section in help; got (truncated): {}",
+            &whole[..whole.len().min(200)]
+        );
+        assert!(
+            whole.contains("[W]"),
+            "expected [W] key in help; got (truncated): {}",
+            &whole[..whole.len().min(200)]
         );
     }
 }

@@ -1,4 +1,5 @@
 pub mod chain_view;
+pub mod clock_in_selector;
 pub mod crate_view;
 pub mod editor_drums;
 pub mod editor_melodic;
@@ -52,6 +53,7 @@ fn context_footer(app: &App) -> Line<'static> {
         Mode::Generative => {
             "[tab]mode  [d/D]density  [r/R]range  [m/M]mutate  [z]reroll  [enter]commit  [esc]cancel"
         }
+        Mode::ClockInSelector => "[↑↓]select port  [enter]confirm  [esc]cancel",
     };
     let label_style = Style::default()
         .fg(Color::Black)
@@ -142,6 +144,9 @@ pub fn render(f: &mut Frame, app: &App) {
         Mode::NoteInput => mgmt::render_note_input(f, centered(area, 60, 20), app),
         Mode::Generative => {
             generative_view::render_generative_panel(f, centered(area, 70, 70), app)
+        }
+        Mode::ClockInSelector => {
+            clock_in_selector::render_clock_in_selector(f, centered(area, 60, 60), app)
         }
         Mode::Edit | Mode::TempoEntry => {}
     }
