@@ -1,7 +1,7 @@
 //! 3-lane overview (groovebox mixer row).
 
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
@@ -10,7 +10,7 @@ use crate::app::App;
 #[cfg(test)]
 use crate::pattern::model::TrigCond;
 use crate::pattern::model::{Lane, PatternData};
-use crate::ui::theme::{lane_color, playhead_style};
+use crate::ui::theme::{lane_color, playhead_style, EMBER};
 
 /// Compact label derived from profile id: "T-8 DRUM" -> "DRUM", "T-8 BASS" -> "BASS",
 /// "S-1 SYNTH" -> "SYNTH". Falls back to the raw label for unknown profiles.
@@ -100,10 +100,10 @@ fn lane_line(idx: usize, app: &App) -> Line<'static> {
     );
 
     // S glyph gets a brighter accent when solo is active.
+    // EMBER.ok (green) signals "this lane is the active/soloed one" — distinct from
+    // QUEUED amber and from the lane's own hue. Green reads as "go / this one is live".
     let s_style = if lane.solo {
-        Style::default()
-            .fg(Color::Rgb(0xFF, 0xFF, 0x80))
-            .add_modifier(Modifier::BOLD)
+        Style::default().fg(EMBER.ok).add_modifier(Modifier::BOLD)
     } else {
         base_style
     };
@@ -131,11 +131,9 @@ fn lane_line(idx: usize, app: &App) -> Line<'static> {
     spans.push(Span::styled("]".to_string(), base_style));
 
     // QUEUED marker: shown after the activity strip when a launch is pending.
-    // Distinct amber style so it reads clearly as "not yet active".
+    // EMBER.warn (amber) is the right role: pending/attention, not yet committed.
     if let Some(name) = queued_name {
-        let queued_style = Style::default()
-            .fg(Color::Rgb(0xF5, 0xB0, 0x41))
-            .add_modifier(Modifier::BOLD);
+        let queued_style = Style::default().fg(EMBER.warn).add_modifier(Modifier::BOLD);
         spans.push(Span::styled(
             format!("  QUEUED\u{27f6}{}", name),
             queued_style,
@@ -143,16 +141,16 @@ fn lane_line(idx: usize, app: &App) -> Line<'static> {
     }
 
     // FILL indicator: shown when a temporary fill is active on this lane.
-    // Magenta/bold so it reads clearly as a live, non-committed transformation.
+    // Reuse EMBER.bass (#D3869B, pink) — closest in-palette hue to the original
+    // magenta, avoids adding a new palette field for a single indicator. Bold keeps
+    // it visually distinct from the lane's own bass-track color at a glance.
     let has_fill = app
         .temp_transform
         .as_ref()
         .map(|tt| tt.lane == idx)
         .unwrap_or(false);
     if has_fill {
-        let fill_style = Style::default()
-            .fg(Color::Rgb(0xFF, 0x44, 0xCC))
-            .add_modifier(Modifier::BOLD);
+        let fill_style = Style::default().fg(EMBER.bass).add_modifier(Modifier::BOLD);
         spans.push(Span::styled("  FILL", fill_style));
     }
 

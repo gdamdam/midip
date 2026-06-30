@@ -29,7 +29,8 @@ pub fn render_name_entry(f: &mut Frame, area: Rect, app: &App) {
         Line::from(Span::raw(prompt)),
         Line::from(Span::styled(
             cursor_line,
-            Style::default().fg(EMBER.warn).add_modifier(Modifier::BOLD),
+            // fg+BOLD for active input cursor — warn (amber) is reserved for warnings/pending.
+            Style::default().fg(EMBER.fg).add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
         Line::from(Span::raw("[enter] confirm  [esc] cancel")),
@@ -98,7 +99,8 @@ pub fn render_note_input(f: &mut Frame, area: Rect, app: &App) {
     let lines: Vec<Line> = vec![
         Line::from(Span::styled(
             format!("white: a s d f g h j k   black: w e t y u   {}", octave_str),
-            Style::default().fg(EMBER.warn).add_modifier(Modifier::BOLD),
+            // fg+BOLD for keymap banner — not a warning, warn (amber) stays for attention states.
+            Style::default().fg(EMBER.fg).add_modifier(Modifier::BOLD),
         )),
         Line::from(Span::raw("[z]oct-  [x]oct+  [bksp]del step  [esc]exit")),
     ];

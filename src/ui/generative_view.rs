@@ -41,7 +41,8 @@ pub fn render_generative_panel(f: &mut Frame, area: Rect, app: &App) {
         PatternData::Melodic(steps) => steps.len(),
     };
 
-    let header_style = Style::default().fg(EMBER.warn).add_modifier(Modifier::BOLD);
+    // fg+BOLD for section headers — warn (amber) is reserved for genuine warnings/pending.
+    let header_style = Style::default().fg(EMBER.fg).add_modifier(Modifier::BOLD);
     let key_style = Style::default().fg(EMBER.synth);
     let val_style = Style::default().fg(EMBER.fg).add_modifier(Modifier::BOLD);
     let dim_style = Style::default().fg(EMBER.dim);
