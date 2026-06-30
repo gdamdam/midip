@@ -7,6 +7,16 @@ feature milestone is a minor bump).
 
 ## [Unreleased]
 
+## [1.0.0] — 2026-06-29 — First stable release
+
+First stable release. The full planned feature set (milestones M1–M10) is complete:
+safety/note-ownership foundations, versioned persistence + configurable routing, quantized
+launch · audition · set/pattern management, favorites · crates · setlists · performance controls,
+scale-aware + chord-capable editing, scenes, song mode / chaining, per-step CC · microtiming ·
+trig conditions · per-lane swing/division, generative tools, and MIDI clock input. This release
+finalizes the README and the in-app `?` help to cover every feature and keybinding; there are no
+functional changes since 0.15.0.
+
 ## [0.15.0] — 2026-06-29 — Ember theme
 
 ### Changed
