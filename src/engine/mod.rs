@@ -912,6 +912,48 @@ fn route_targets_with_mirror(
     targets
 }
 
+/// Port indices a CHANNEL message from `lane` targets, with the virtual mirror folded in.
+/// Pure; UNIT-TESTED via the `send_lane` path.
+///
+/// Channel messages (NoteOn/NoteOff/ControlChange) route to the EMITTING lane's port
+/// (`lane_to_port[lane]`) — NOT by channel — so two lanes sharing a MIDI channel on different
+/// ports deliver independently. Non-channel messages fall back to `route_targets` (Clock →
+/// clock-out ports). The mirror fold matches `route_targets_with_mirror` exactly.
+fn route_targets_lane_with_mirror(
+    msg: &crate::midi::message::MidiMessage,
+    lane: usize,
+    lane_to_port: &[usize],
+    channel_to_port: &[Option<usize>; 16],
+    clock_ports: &[usize],
+    virtual_idx: Option<usize>,
+    mirror_on: bool,
+) -> Vec<usize> {
+    use crate::midi::message::MidiMessage;
+    let mut targets: Vec<usize> = match msg {
+        MidiMessage::NoteOn { .. }
+        | MidiMessage::NoteOff { .. }
+        | MidiMessage::ControlChange { .. } => {
+            lane_to_port.get(lane).copied().into_iter().collect()
+        }
+        _ => route_targets(msg, channel_to_port, clock_ports),
+    };
+    if mirror_on {
+        if let Some(vidx) = virtual_idx {
+            let mirrorable = matches!(
+                msg,
+                MidiMessage::NoteOn { .. }
+                    | MidiMessage::NoteOff { .. }
+                    | MidiMessage::ControlChange { .. }
+                    | MidiMessage::Clock
+            );
+            if mirrorable && !targets.contains(&vidx) {
+                targets.push(vidx);
+            }
+        }
+    }
+    targets
+}
+
 /// All lanes that resolve to the given port index, in lane order. Used to release the
 /// correct notes when a port connects/disconnects/fails (lanes sharing a port move
 /// together — the registry tracks per-lane ownership). Pure; UNIT-TESTED.
@@ -1308,6 +1350,7 @@ pub fn spawn_engine(set: Set, mut link: Box<dyn LinkClock>) -> EngineHandle {
                                 ports: &mut port_sinks,
                                 channel_to_port: &channel_to_port,
                                 clock_ports: &clock_ports,
+                                lane_to_port: &lane_to_port,
                                 virtual_idx,
                                 mirror_on: false,
                             };
@@ -1330,6 +1373,7 @@ pub fn spawn_engine(set: Set, mut link: Box<dyn LinkClock>) -> EngineHandle {
                             ports: &mut port_sinks,
                             channel_to_port: &channel_to_port,
                             clock_ports: &clock_ports,
+                            lane_to_port: &lane_to_port,
                             virtual_idx,
                             mirror_on: false,
                         };
@@ -1366,6 +1410,7 @@ pub fn spawn_engine(set: Set, mut link: Box<dyn LinkClock>) -> EngineHandle {
                     ports: &mut port_sinks,
                     channel_to_port: &channel_to_port,
                     clock_ports: &clock_ports,
+                    lane_to_port: &lane_to_port,
                     virtual_idx,
                     mirror_on: st.mirror_on,
                 };
@@ -1398,6 +1443,7 @@ pub fn spawn_engine(set: Set, mut link: Box<dyn LinkClock>) -> EngineHandle {
                         ports: &mut port_sinks,
                         channel_to_port: &channel_to_port,
                         clock_ports: &clock_ports,
+                        lane_to_port: &lane_to_port,
                         virtual_idx,
                         mirror_on: false,
                     };
@@ -1490,6 +1536,7 @@ pub fn spawn_engine(set: Set, mut link: Box<dyn LinkClock>) -> EngineHandle {
                             ports: &mut port_sinks,
                             channel_to_port: &channel_to_port,
                             clock_ports: &clock_ports,
+                            lane_to_port: &lane_to_port,
                             virtual_idx: None,
                             mirror_on: false,
                         };
@@ -1570,6 +1617,11 @@ struct PortFanoutSink<'a> {
     ports: &'a mut Vec<PortSink>,
     channel_to_port: &'a [Option<usize>; 16],
     clock_ports: &'a [usize],
+    /// Per-lane destination: `lane_to_port[lane]` is the port index a lane delivers to.
+    /// Channel messages route by lane (not channel) via `send_lane`, so two lanes sharing a
+    /// MIDI channel on different ports deliver independently. Clock keeps the `clock_ports`
+    /// path through the unchanged `send`.
+    lane_to_port: &'a [usize],
     /// Index of the engine-managed virtual "midip" port in `ports`, if present.
     virtual_idx: Option<usize>,
     /// When true, mirror the full stream to `virtual_idx` (in addition to routing).
@@ -1580,6 +1632,25 @@ impl<'a> MidiSink for PortFanoutSink<'a> {
     fn send(&mut self, msg: crate::midi::message::MidiMessage, at_micros: u64) {
         for idx in route_targets_with_mirror(
             &msg,
+            self.channel_to_port,
+            self.clock_ports,
+            self.virtual_idx,
+            self.mirror_on,
+        ) {
+            if let Some(ps) = self.ports.get_mut(idx) {
+                ps.sink.send(msg.clone(), at_micros);
+            }
+        }
+    }
+
+    /// Per-lane routing: a channel message is delivered to the EMITTING lane's port (via
+    /// `lane_to_port`), so two lanes sharing a MIDI channel on different ports stay
+    /// independent. The mirror is folded in identically to `send`.
+    fn send_lane(&mut self, msg: crate::midi::message::MidiMessage, lane: usize, at_micros: u64) {
+        for idx in route_targets_lane_with_mirror(
+            &msg,
+            lane,
+            self.lane_to_port,
             self.channel_to_port,
             self.clock_ports,
             self.virtual_idx,
@@ -2664,6 +2735,7 @@ mod tests {
                 ports: &mut ports,
                 channel_to_port: &channel_to_port,
                 clock_ports: &clock_ports,
+                lane_to_port: &[],
                 virtual_idx: Some(vidx),
                 mirror_on: true,
             };
@@ -2684,6 +2756,103 @@ mod tests {
         );
         // Hardware port (idx 0) byte-identical: the note (routed) + the clock (clock_ports).
         assert_eq!(hw_probe.len(), 2, "hardware path unaffected by the mirror");
+    }
+
+    /// PER-LANE ROUTING (no hardware): two lanes share a MIDI channel but route to DIFFERENT
+    /// ports. Each lane's notes must reach ONLY its own port. The old channel-keyed delivery
+    /// (`channel_to_port[channel]`) collapsed both onto the LAST lane's port; `send_lane`
+    /// routes by the emitting lane's `lane_to_port`, so the two lanes stay independent.
+    #[test]
+    fn fanout_send_lane_routes_same_channel_to_distinct_ports() {
+        use crate::pattern::model::{LaneRoute, PortRef};
+        // Two lanes, SAME channel 0, DIFFERENT ports.
+        let mut set = default_set();
+        set.lanes[0].route = Some(LaneRoute {
+            port: PortRef {
+                stable_key: "PortA".into(),
+                name: "PortA".into(),
+            },
+            channel: 0,
+            clock_out: false,
+        });
+        set.lanes[1].route = Some(LaneRoute {
+            port: PortRef {
+                stable_key: "PortB".into(),
+                name: "PortB".into(),
+            },
+            channel: 0,
+            clock_out: false,
+        });
+        // Only the two lanes under test (default_set's 3rd lane also defaults to channel 0,
+        // which would otherwise claim channel_to_port[0]).
+        set.lanes.truncate(2);
+        let plan = build_route_plan(&set.lanes);
+        // Sanity: lane_to_port keeps the lanes apart; the channel-keyed map collides on the
+        // last lane (this collision is exactly the bug `send_lane` fixes).
+        assert_eq!(plan.lane_to_port[0], 0, "lane 0 -> PortA (port index 0)");
+        assert_eq!(plan.lane_to_port[1], 1, "lane 1 -> PortB (port index 1)");
+        assert_eq!(
+            plan.channel_to_port[0],
+            Some(1),
+            "channel-keyed map collides: ch0 -> last lane's port"
+        );
+
+        let probe_a = RecordingProbe::new();
+        let probe_b = RecordingProbe::new();
+        let mut ports = vec![
+            PortSink {
+                sink: Box::new(probe_a.clone()),
+                connected: true,
+                port_name: "PortA".into(),
+            },
+            PortSink {
+                sink: Box::new(probe_b.clone()),
+                connected: true,
+                port_name: "PortB".into(),
+            },
+        ];
+        {
+            let mut fanout = PortFanoutSink {
+                ports: &mut ports,
+                channel_to_port: &plan.channel_to_port,
+                clock_ports: &plan.clock_ports,
+                lane_to_port: &plan.lane_to_port,
+                virtual_idx: None,
+                mirror_on: false,
+            };
+            fanout.send_lane(
+                crate::midi::MidiMessage::NoteOn {
+                    channel: 0,
+                    note: 60,
+                    vel: 100,
+                },
+                0,
+                1,
+            );
+            fanout.send_lane(
+                crate::midi::MidiMessage::NoteOn {
+                    channel: 0,
+                    note: 64,
+                    vel: 100,
+                },
+                1,
+                2,
+            );
+        }
+        let a = probe_a.events.lock().unwrap();
+        let b = probe_b.events.lock().unwrap();
+        assert!(
+            a.len() == 1
+                && a.iter()
+                    .any(|(_, m)| matches!(m, crate::midi::MidiMessage::NoteOn { note: 60, .. })),
+            "PortA (lane 0) must receive ONLY note 60; got {a:?}"
+        );
+        assert!(
+            b.len() == 1
+                && b.iter()
+                    .any(|(_, m)| matches!(m, crate::midi::MidiMessage::NoteOn { note: 64, .. })),
+            "PortB (lane 1) must receive ONLY note 64; got {b:?}"
+        );
     }
 
     /// Rewritten M2.5 mirror test (was `tee_no_mirror_when_none`): when there is NO virtual

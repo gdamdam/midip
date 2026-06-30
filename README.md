@@ -11,6 +11,8 @@
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg)](#build--run)
 [![Built with ratatui](https://img.shields.io/badge/TUI-ratatui-blueviolet.svg)](https://ratatui.rs)
 
+![midip demo](midip.gif)
+
 </div>
 
 ```

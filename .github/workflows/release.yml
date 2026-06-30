@@ -84,6 +84,7 @@ jobs:
           [ -f README.md ]   && cp README.md   "${STAGING}/"
           [ -f LICENSE ]     && cp LICENSE      "${STAGING}/"
           [ -f CHANGELOG.md ] && cp CHANGELOG.md "${STAGING}/"
+          [ -d assets ] && cp -R assets "${STAGING}/"
 
       - name: Stage release artifacts (Windows)
         if: matrix.os == 'windows-latest'
@@ -95,6 +96,7 @@ jobs:
           if (Test-Path README.md)    { Copy-Item README.md    $staging\ }
           if (Test-Path LICENSE)      { Copy-Item LICENSE      $staging\ }
           if (Test-Path CHANGELOG.md) { Copy-Item CHANGELOG.md $staging\ }
+          if (Test-Path assets) { Copy-Item -Recurse assets $staging\ }
 
       - name: Create archive (tar.gz)
         if: matrix.archive_ext == 'tar.gz'

@@ -263,7 +263,9 @@ impl Sequencer {
             }
             _ => {}
         }
-        sink.send(msg, at_micros);
+        // Per-lane routing: deliver to the EMITTING lane's port, so two lanes sharing a MIDI
+        // channel on different ports stay independent (PortFanoutSink::send_lane).
+        sink.send_lane(msg, lane, at_micros);
     }
 
     /// Release every currently-sounding note, then send CC123 + CC120 per distinct
@@ -274,37 +276,37 @@ impl Sequencer {
         // NoteOff for every sounding note.
         let sounding = std::mem::take(&mut self.sounding);
         for s in &sounding {
-            sink.send(
+            sink.send_lane(
                 MidiMessage::NoteOff {
                     channel: s.channel,
                     note: s.note,
                 },
+                s.lane,
                 at_micros,
             );
         }
-        // CC123 + CC120 per distinct ROUTE channel in the set (the channel notes are
-        // actually emitted on), so the sweep clears the same channels that sound.
-        let mut sent: Vec<u8> = Vec::new();
-        for lane in &self.set.lanes {
+        // CC123 (All Notes Off) + CC120 (All Sound Off) on each lane's ROUTE channel, routed
+        // to that lane's port. Per-lane (NOT deduped by channel): two lanes sharing a channel
+        // on DIFFERENT ports must each be swept; if they share a port the extra send is an
+        // idempotent all-notes-off, so it is harmless.
+        for (lane_idx, lane) in self.set.lanes.iter().enumerate() {
             let ch = lane.route_channel();
-            if sent.contains(&ch) {
-                continue;
-            }
-            sent.push(ch);
-            sink.send(
+            sink.send_lane(
                 MidiMessage::ControlChange {
                     channel: ch,
                     controller: 123,
                     value: 0,
                 },
+                lane_idx,
                 at_micros,
             );
-            sink.send(
+            sink.send_lane(
                 MidiMessage::ControlChange {
                     channel: ch,
                     controller: 120,
                     value: 0,
                 },
+                lane_idx,
                 at_micros,
             );
         }
@@ -320,11 +322,12 @@ impl Sequencer {
         let mut remaining = Vec::with_capacity(self.sounding.len());
         for s in std::mem::take(&mut self.sounding) {
             if s.domain == d {
-                sink.send(
+                sink.send_lane(
                     MidiMessage::NoteOff {
                         channel: s.channel,
                         note: s.note,
                     },
+                    s.lane,
                     at_micros,
                 );
             } else {
@@ -339,11 +342,12 @@ impl Sequencer {
         let mut remaining = Vec::with_capacity(self.sounding.len());
         for s in std::mem::take(&mut self.sounding) {
             if lanes.contains(&s.lane) {
-                sink.send(
+                sink.send_lane(
                     MidiMessage::NoteOff {
                         channel: s.channel,
                         note: s.note,
                     },
+                    s.lane,
                     at_micros,
                 );
                 // Also clear the legato active slot for this lane.
@@ -368,13 +372,14 @@ impl Sequencer {
         sounding: &mut Vec<SoundingNote>,
         channel: u8,
         note: u8,
+        lane: usize,
         at: u64,
         sink: &mut dyn MidiSink,
     ) {
         let before = sounding.len();
         sounding.retain(|s| !(s.channel == channel && s.note == note));
         if sounding.len() < before {
-            sink.send(MidiMessage::NoteOff { channel, note }, at);
+            sink.send_lane(MidiMessage::NoteOff { channel, note }, lane, at);
         }
     }
 
@@ -406,7 +411,7 @@ impl Sequencer {
                 .get(lane)
                 .map(|l| l.route_channel())
                 .unwrap_or(0);
-            Self::release_note(&mut self.sounding, channel, note, at, sink);
+            Self::release_note(&mut self.sounding, channel, note, lane, at, sink);
         }
     }
 

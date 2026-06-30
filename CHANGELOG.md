@@ -7,6 +7,24 @@ feature milestone is a minor bump).
 
 ## [Unreleased]
 
+## [1.1.0] — 2026-06-30 — Routing & persistence fixes
+
+### Fixed
+- **Per-lane MIDI routing** — note/CC delivery now routes by the *emitting lane's* port
+  rather than by MIDI channel. Two lanes sharing a channel on different ports no longer
+  collapse onto a single port. MIDI Clock is unchanged (still sent once per clock-out port).
+- **Clock-input persistence** — choosing a clock-in port now marks the set dirty and is saved
+  with it; loading a set emits `SetSet` before `SetClockInPort` so the clock-in source lands on
+  the freshly-built sequencer (previously the rebuild reset it to Manual); recovery now restores
+  the saved clock-in port instead of dropping it.
+- **Confirm before discarding unsaved work** — loading a set from the browser while there are
+  unsaved edits now prompts a confirmation (matching the documented guarantee); cancelling
+  returns to the browser with the work intact.
+- **Rename / duplicate are non-destructive with an active fill** — both now serialize the
+  committed view (a latched fill reverted), consistent with Save / Save-as.
+- **Release archives ship the pattern library** — the release workflow now stages `assets/`
+  (the vendored patterns) beside the binary, so published builds no longer start empty.
+
 ## [1.0.0] — 2026-06-29 — First stable release
 
 First stable release. The full planned feature set (milestones M1–M10) is complete:

@@ -42,6 +42,8 @@ pub enum NamePurpose {
 pub enum ConfirmAction {
     NewSet,
     DeleteSet(std::path::PathBuf),
+    /// Load the set at this path, discarding unsaved work (after user confirmation).
+    LoadSet(std::path::PathBuf),
     ClearPattern,
     /// Fold all out-of-scale notes in the focused melodic lane to the lane's scale.
     /// The `usize` is the count of notes that will be folded (used in the confirm prompt).
@@ -182,6 +184,9 @@ pub enum Action {
     OpenSetBrowser,
     SetBrowserNav(i32),
     SetBrowserLoad,
+    /// Perform the actual load of a set file (re-entrant target of `SetBrowserLoad`
+    /// and the `LoadSet` confirmation). Carries the path so it can run post-confirm.
+    DoLoadSet(std::path::PathBuf),
     CloseSetBrowser,
     Save,
     Help,
@@ -1808,22 +1813,38 @@ impl App {
             }
             Action::SetBrowserLoad => {
                 if !self.set_files.is_empty() {
-                    match crate::pattern::store::load_set(&self.set_files[self.set_sel]) {
-                        Ok(set) => {
-                            let stem = self.set_files[self.set_sel]
-                                .file_stem()
-                                .and_then(|s| s.to_str())
-                                .unwrap_or("set")
-                                .to_string();
-                            self.current_set_path = Some(self.set_files[self.set_sel].clone());
-                            cmds.extend(self.load_set_document(set, stem));
-                            self.mode = Mode::Edit;
-                            cmds.push(UiCommand::SetSet(self.set.clone()));
-                        }
-                        Err(e) => {
-                            self.set_status(format!("Load failed: {e}"));
-                            // stay in SetBrowser
-                        }
+                    let path = self.set_files[self.set_sel].clone();
+                    if self.dirty {
+                        // Confirm before discarding unsaved work: loading is destructive
+                        // (it replaces the live Set and clears undo/redo).
+                        self.mode = Mode::Confirm(ConfirmAction::LoadSet(path));
+                    } else {
+                        cmds.extend(self.apply(Action::DoLoadSet(path)));
+                    }
+                }
+            }
+            Action::DoLoadSet(path) => {
+                match crate::pattern::store::load_set(&path) {
+                    Ok(set) => {
+                        let stem = path
+                            .file_stem()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("set")
+                            .to_string();
+                        self.current_set_path = Some(path.clone());
+                        // `load_set_document` sets `self.set` and returns the SetClockInPort
+                        // command. Emit SetSet FIRST so the engine rebuilds the sequencer,
+                        // THEN SetClockInPort so the clock-in source / clock-driven flag land
+                        // on the NEW sequencer — otherwise SetSet resets the source to Manual
+                        // and the freshly-built sequencer loses its clock-driven state.
+                        let clk_cmds = self.load_set_document(set, stem);
+                        self.mode = Mode::Edit;
+                        cmds.push(UiCommand::SetSet(self.set.clone()));
+                        cmds.extend(clk_cmds);
+                    }
+                    Err(e) => {
+                        self.set_status(format!("Load failed: {e}"));
+                        // stay in SetBrowser / current mode
                     }
                 }
             }
@@ -2018,11 +2039,20 @@ impl App {
                         self.undo.clear();
                         self.redo.clear();
                         self.audition = None;
+                        // Restore the recovered set's clock-in port (UI field + reset the
+                        // lock indicator), mirroring load_set_document so recovery re-opens
+                        // the MIDI input instead of silently dropping it.
+                        self.clock_in_port = self.set.clock_in_port.clone();
+                        self.clock_in_locked = None;
+                        self.clock_in_tempo = 0.0;
                         self.clamp_cursor();
                         self.mode = Mode::Edit;
                         self.set_status("Recovered unsaved work");
                         crate::pattern::store::clear_recovery(&dir);
+                        // SetSet FIRST (rebuilds the sequencer), THEN SetClockInPort so the
+                        // clock-in source lands on the new sequencer (same ordering as load).
                         cmds.push(UiCommand::SetSet(self.set.clone()));
+                        cmds.push(UiCommand::SetClockInPort(self.clock_in_port.clone()));
                     }
                     Err(e) => {
                         self.set_status(format!("Recovery failed: {e}"));
@@ -2589,7 +2619,16 @@ impl App {
                 let dir = crate::config::data_dir().join("sets");
                 let old_path = self.current_set_path.clone();
                 self.set.name = name.clone();
-                match crate::pattern::store::save_set(&dir, &mut self.set) {
+                // Ensure stable ids on the LIVE set first (so the committed view inherits
+                // them and re-saves keep the same filename), then write the committed view
+                // — any latched fill reverted — so a temporary fill is never baked into the
+                // renamed file. Consistent with Save / SaveSetAs.
+                self.set.ensure_id();
+                for l in &mut self.set.lanes {
+                    l.pattern.ensure_id();
+                }
+                let mut committed = self.committed_set();
+                match crate::pattern::store::save_set(&dir, &mut committed) {
                     Ok(new_path) => {
                         // Remove the old file if it differs (best-effort).
                         if let Some(ref op) = old_path {
@@ -2608,7 +2647,9 @@ impl App {
                 // Clone with a fresh id and " copy" suffix; write a new file.
                 // The current document stays unchanged.
                 let dir = crate::config::data_dir().join("sets");
-                let mut clone = self.set.clone();
+                // Duplicate the committed view (any latched fill reverted) so a temporary
+                // fill is never baked into the copy — consistent with Save / SaveSetAs.
+                let mut clone = self.committed_set();
                 let copy_name = format!("{} copy", clone.name);
                 clone.name = copy_name.clone();
                 clone.id = crate::persist::Id::nil();
@@ -2706,6 +2747,7 @@ impl App {
                 let sub = match action {
                     ConfirmAction::NewSet => Action::NewSet,
                     ConfirmAction::DeleteSet(path) => Action::DeleteSet(path),
+                    ConfirmAction::LoadSet(path) => Action::DoLoadSet(path),
                     ConfirmAction::ClearPattern => Action::ClearPattern,
                     ConfirmAction::ConformToScale(_) => Action::ConformToScale,
                     ConfirmAction::DeleteScene(idx) => Action::DoDeleteScene(idx),
@@ -2724,6 +2766,8 @@ impl App {
                 self.mode = match action {
                     ConfirmAction::DeleteScene(_) => Mode::Scenes,
                     ConfirmAction::DeleteChain(_) => Mode::Chains,
+                    // Cancelling a load returns to the browser so the user can pick again.
+                    ConfirmAction::LoadSet(_) => Mode::SetBrowser,
                     _ => Mode::Edit,
                 };
                 self.set_status("Cancelled");
@@ -3336,6 +3380,10 @@ impl App {
                     self.clock_in_port = None;
                     self.clock_in_locked = None;
                     self.clock_in_tempo = 0.0;
+                    // Persist into the live Set + mark dirty so a Save writes the choice
+                    // to disk and it survives a reload (M10 persistence).
+                    self.set.clock_in_port = None;
+                    self.dirty = true;
                     cmds.push(UiCommand::SetClockInPort(None));
                     self.set_status("CLK-IN cleared — manual tempo");
                 } else {
@@ -3349,6 +3397,10 @@ impl App {
                         name: name.clone(),
                     };
                     self.clock_in_port = Some(pr.clone());
+                    // Persist into the live Set + mark dirty so a Save writes the choice
+                    // to disk and it survives a reload (M10 persistence).
+                    self.set.clock_in_port = Some(pr.clone());
+                    self.dirty = true;
                     cmds.push(UiCommand::SetClockInPort(Some(pr)));
                     self.set_status(format!("CLK-IN → {name}"));
                 }
@@ -11242,6 +11294,231 @@ mod tests {
             key_to_action(key, Mode::Edit, LaneKind::Drums),
             Action::OpenClockInSelector
         );
+    }
+
+    // --- review fixes: clock-in persistence, load-confirm, rename/dup fill ---
+
+    /// Confirming a clock-in port must persist into the LIVE set and mark dirty,
+    /// otherwise a subsequent Save writes a file with no clock-in port.
+    #[test]
+    fn clock_in_confirm_persists_into_set_and_marks_dirty() {
+        let mut app = new_app();
+        app.clock_in_ports = vec!["FakePort".to_string()];
+        app.clock_in_sel = 1;
+        assert!(!app.dirty);
+        app.apply(Action::ClockInConfirm);
+        assert!(
+            app.set.clock_in_port.is_some(),
+            "selection must persist into the live set so Save writes it"
+        );
+        assert!(
+            app.dirty,
+            "selecting a clock-in port must mark the doc dirty"
+        );
+    }
+
+    /// Clearing the clock-in port ("(none)") must also persist into the live set.
+    #[test]
+    fn clock_in_confirm_none_persists_clear_into_set() {
+        let mut app = new_app();
+        app.set.clock_in_port = Some(crate::pattern::model::PortRef {
+            stable_key: "x".into(),
+            name: "x".into(),
+        });
+        app.clock_in_sel = 0;
+        app.apply(Action::ClockInConfirm);
+        assert!(
+            app.set.clock_in_port.is_none(),
+            "clearing must persist into the live set"
+        );
+        assert!(app.dirty);
+    }
+
+    /// Loading a set must emit `SetSet` BEFORE `SetClockInPort`, so the clock-in
+    /// source/clock-driven flag land on the freshly-built sequencer (SetSet resets
+    /// the transport source to Manual, so it must run first).
+    #[test]
+    fn load_emits_setset_before_setclockinport() {
+        let tok = unique_token("load-order");
+        let mut app = new_app();
+        app.set.clock_in_port = Some(crate::pattern::model::PortRef {
+            stable_key: "ckport".into(),
+            name: "ckport".into(),
+        });
+        app.apply(Action::SaveSetAs(format!("loadorder{}", tok)));
+        let path = app.current_set_path.clone().expect("path after save");
+
+        let mut app2 = new_app();
+        let cmds = app2.apply(Action::DoLoadSet(path.clone()));
+        let set_idx = cmds.iter().position(|c| matches!(c, UiCommand::SetSet(_)));
+        let clk_idx = cmds
+            .iter()
+            .position(|c| matches!(c, UiCommand::SetClockInPort(_)));
+        assert!(
+            set_idx.is_some() && clk_idx.is_some(),
+            "load must emit both SetSet and SetClockInPort"
+        );
+        assert!(
+            set_idx < clk_idx,
+            "SetSet must precede SetClockInPort (cmds: {:?})",
+            cmds
+        );
+        assert!(
+            app2.clock_in_port.is_some(),
+            "clock-in port must be restored from the loaded set"
+        );
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// Loading from the browser while there are unsaved edits must NOT discard them
+    /// silently — it must prompt a confirmation first (CHANGELOG guarantee).
+    #[test]
+    fn load_when_dirty_prompts_confirm_then_loads_on_yes() {
+        let tok = unique_token("load-confirm");
+        let mut app = new_app();
+        app.apply(Action::SaveSetAs(format!("loadconfirm{}", tok)));
+        let path = app.current_set_path.clone().expect("path after save");
+        app.set_files = vec![path.clone()];
+        app.set_sel = 0;
+        app.mode = Mode::SetBrowser;
+        app.dirty = true;
+
+        let cmds = app.apply(Action::SetBrowserLoad);
+        assert_eq!(
+            app.mode,
+            Mode::Confirm(ConfirmAction::LoadSet(path.clone())),
+            "dirty load must prompt confirmation"
+        );
+        assert!(app.dirty, "must not have loaded yet");
+        assert!(cmds.is_empty(), "no engine commands until confirmed");
+
+        let cmds = app.apply(Action::ConfirmYes);
+        assert_eq!(
+            app.mode,
+            Mode::Edit,
+            "confirm-yes loads and returns to Edit"
+        );
+        assert!(!app.dirty);
+        assert!(cmds.iter().any(|c| matches!(c, UiCommand::SetSet(_))));
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// Cancelling the load confirmation must preserve unsaved work and return to
+    /// the browser (not load).
+    #[test]
+    fn load_when_dirty_cancel_preserves_work() {
+        let tok = unique_token("load-cancel");
+        let mut app = new_app();
+        app.apply(Action::SaveSetAs(format!("loadcancel{}", tok)));
+        let path = app.current_set_path.clone().expect("path after save");
+        app.set_files = vec![path.clone()];
+        app.set_sel = 0;
+        app.mode = Mode::SetBrowser;
+        app.dirty = true;
+
+        app.apply(Action::SetBrowserLoad);
+        assert!(matches!(app.mode, Mode::Confirm(ConfirmAction::LoadSet(_))));
+        app.apply(Action::ConfirmNo);
+        assert_eq!(app.mode, Mode::SetBrowser, "cancel returns to the browser");
+        assert!(app.dirty, "cancel must not discard unsaved work");
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// A clean (non-dirty) load skips the prompt and loads immediately.
+    #[test]
+    fn load_when_clean_loads_immediately() {
+        let tok = unique_token("load-clean");
+        let mut app = new_app();
+        app.apply(Action::SaveSetAs(format!("loadclean{}", tok)));
+        let path = app.current_set_path.clone().expect("path after save");
+        app.set_files = vec![path.clone()];
+        app.set_sel = 0;
+        app.mode = Mode::SetBrowser;
+        app.dirty = false;
+
+        let cmds = app.apply(Action::SetBrowserLoad);
+        assert_eq!(app.mode, Mode::Edit, "clean load goes straight to Edit");
+        assert!(cmds.iter().any(|c| matches!(c, UiCommand::SetSet(_))));
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// Rename must serialize the committed view (fill reverted), never the active
+    /// uncommitted fill — consistent with Save / SaveSetAs.
+    #[test]
+    fn rename_with_active_fill_persists_committed_not_fill() {
+        let tok = unique_token("rename-fill");
+        let mut app = new_app();
+        app.apply(Action::FocusLane(0));
+        let original = drum_pattern_with_hit();
+        app.set.lanes[0].pattern = original.clone();
+        app.apply(Action::SaveSetAs(format!("renfill{}", tok)));
+
+        app.apply(Action::ToggleFill);
+        assert!(app.temp_transform.is_some(), "fill must be latched");
+        let filled = app.set.lanes[0].pattern.clone();
+        assert_ne!(
+            filled.data, original.data,
+            "fill must differ from original for a meaningful test"
+        );
+
+        app.apply(Action::RenameSet(format!("renfillnew{}", tok)));
+        let new_path = app.current_set_path.clone().expect("path after rename");
+        let loaded = crate::pattern::store::load_set(&new_path).expect("load renamed");
+        assert_eq!(
+            loaded.lanes[0].pattern.data, original.data,
+            "renamed file must hold the committed pattern, not the uncommitted fill"
+        );
+        assert!(
+            app.temp_transform.is_some(),
+            "rename must not drop the live fill"
+        );
+        assert_eq!(
+            app.set.lanes[0].pattern.data, filled.data,
+            "live set must still hold the fill"
+        );
+        std::fs::remove_file(&new_path).ok();
+    }
+
+    /// Duplicate must serialize the committed view (fill reverted), never the active
+    /// uncommitted fill.
+    #[test]
+    fn duplicate_with_active_fill_persists_committed_not_fill() {
+        use crate::pattern::store;
+        let tok = unique_token("dup-fill");
+        let mut app = new_app();
+        app.apply(Action::FocusLane(0));
+        let original = drum_pattern_with_hit();
+        app.set.lanes[0].pattern = original.clone();
+        app.apply(Action::SaveSetAs(format!("dupfill{}", tok)));
+        let orig_path = app.current_set_path.clone().expect("path");
+        let sets_dir = orig_path.parent().expect("parent").to_path_buf();
+
+        app.apply(Action::ToggleFill);
+        let filled = app.set.lanes[0].pattern.clone();
+        assert_ne!(filled.data, original.data);
+
+        let before: std::collections::HashSet<_> = store::list_sets(&sets_dir)
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
+        app.apply(Action::DuplicateSet);
+        let after = store::list_sets(&sets_dir).unwrap_or_default();
+        let copy_file = after
+            .iter()
+            .find(|p| !before.contains(*p))
+            .expect("DuplicateSet must create a new file");
+
+        let copy = store::load_set(copy_file).expect("load copy");
+        assert_eq!(
+            copy.lanes[0].pattern.data, original.data,
+            "duplicated file must hold the committed pattern, not the uncommitted fill"
+        );
+        assert!(
+            app.temp_transform.is_some(),
+            "duplicate must not drop the live fill"
+        );
+        std::fs::remove_file(copy_file).ok();
+        std::fs::remove_file(&orig_path).ok();
     }
 
     // --- M10 T6 Part A: clock-in port restored on load -------------------

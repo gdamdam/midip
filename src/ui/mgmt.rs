@@ -48,6 +48,10 @@ pub fn render_confirm(f: &mut Frame, area: Rect, app: &App) {
         Mode::Confirm(ConfirmAction::DeleteSet(_)) => {
             (" DELETE SET ", "Delete this set file permanently?".into())
         }
+        Mode::Confirm(ConfirmAction::LoadSet(_)) => (
+            " LOAD SET ",
+            "Unsaved changes will be lost. Load this set?".into(),
+        ),
         Mode::Confirm(ConfirmAction::ClearPattern) => {
             (" CLEAR PATTERN ", "Clear the focused lane pattern?".into())
         }

@@ -26,6 +26,13 @@ use midir::{MidiInput, MidiInputConnection, MidiOutput, MidiOutputConnection};
 /// the engine only calls `send()` when an event is already due.
 pub trait MidiSink: Send {
     fn send(&mut self, msg: MidiMessage, at_micros: u64);
+    /// Route-aware send: deliver `msg` on behalf of `lane`. The default ignores the lane
+    /// and delegates to `send`, so byte-writing sinks (MidirSink, NullSink, RecordingSink)
+    /// need no per-lane logic. `PortFanoutSink` overrides this to route by the lane's mapped
+    /// port, so two lanes sharing a MIDI channel on different ports deliver independently.
+    fn send_lane(&mut self, msg: MidiMessage, _lane: usize, at_micros: u64) {
+        self.send(msg, at_micros);
+    }
     /// Returns `false` after the first failed `send` (hardware disconnect / buffer full).
     /// Default: always healthy (used by `NullSink` and `RecordingSink`).
     fn health(&self) -> bool {
