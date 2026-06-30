@@ -2,3 +2,6 @@
 /data
 /.superpowers
 /docs
+
+# internal SDD artifacts (never track)
+.superpowers-dist-report.md
