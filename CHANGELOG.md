@@ -7,6 +7,23 @@ feature milestone is a minor bump).
 
 ## [Unreleased]
 
+## [0.14.0] — 2026-06-29 — MIDI Clock Input
+
+### Added
+- **MIDI clock input** — midip can now follow an external 24-PPQN clock as a slave. Select a
+  clock-in port with `W`; the transport header shows `CLK-IN <port> [LOCKED|FREE|LOST]`. While
+  following, incoming clock ticks (6 per step) drive both tempo and step advancement, and the
+  transport messages Start / Continue / Stop are obeyed (Start plays from the top, Continue
+  resumes, Stop halts and releases all notes). If the external clock disappears, midip stops
+  cleanly after a short timeout (no drift, no hung notes). Song Position Pointer is parsed
+  (SPP-ready) but does not yet reposition. The chosen clock-in port is saved with the set.
+- This is midip's first MIDI **input** path; it never disturbs the existing clock-output, Link,
+  or per-lane routing — the tempo source (Manual / Link / Clock-In) is mutually exclusive.
+
+### Changed
+- Set format version bumped 3 → 4 (**backward-compatible**: old sets load with no clock-in port;
+  additive migration).
+
 ## [0.13.0] — 2026-06-29 — Per-step CC · Microtiming · Trig Conditions · Per-lane Swing/Division
 
 ### Added
