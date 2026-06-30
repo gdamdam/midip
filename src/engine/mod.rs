@@ -27,6 +27,10 @@ pub enum UiCommand {
     Play,
     Stop,
     SetBpm(f64),
+    /// Like `SetBpm`, but for undo/redo: restore the stored BPM WITHOUT changing the active
+    /// tempo source. `SetBpm` is an explicit manual override (it disables Link/ClockIn);
+    /// undoing an unrelated edit must never drop the user out of Link or Clock-In.
+    RestoreBpm(f64),
     Tap,
     SetSwing(f32),
     ToggleLink(bool),
@@ -251,6 +255,18 @@ fn disengage_clock_in(st: &mut EngineState) {
     st.clock_in_state.reset();
 }
 
+/// Disable Ableton Link if engaged. Mirrors `disengage_clock_in`: used when an explicit
+/// manual tempo (SetBpm / Tap) takes over, so tempo sources stay mutually exclusive —
+/// manual BPM and Link must never both drive the playhead (Link would keep phase-syncing
+/// the position even while the BPM reads manual). Flips the LinkClock session off, not just
+/// the local flag; the periodic `LinkStatus` event then updates the UI.
+fn disengage_link(st: &mut EngineState, link: &mut dyn LinkClock) {
+    if st.link_enabled {
+        st.link_enabled = false;
+        link.set_enabled(false);
+    }
+}
+
 /// Apply a single UI command to engine state at time `now`.
 /// Returns `true` if a `Quit` was processed (signals loop exit).
 fn apply_command(
@@ -284,15 +300,29 @@ fn apply_command(
             events.push(EngineEvent::Stopped);
         }
         UiCommand::SetBpm(bpm) => {
-            // 3-way exclusivity: an explicit manual BPM takes over from Link/ClockIn.
+            // 3-way exclusivity: an explicit manual BPM takes over from Link AND ClockIn,
+            // so the two never both drive the playhead (Link would keep phase-syncing).
             disengage_clock_in(st);
+            disengage_link(st, link);
             st.transport.manual_bpm = bpm;
             st.transport.source = TempoSource::Manual(bpm);
             st.seq.set_bpm(bpm);
         }
+        UiCommand::RestoreBpm(bpm) => {
+            // Undo/redo path: refresh the stored manual BPM WITHOUT changing the active tempo
+            // source (unlike SetBpm). Applies to playback only when already Manual; under Link
+            // or ClockIn the external source keeps driving and only manual_bpm is updated (used
+            // if the user later leaves that source). Prevents undo from dropping out of Link.
+            st.transport.manual_bpm = bpm;
+            if let TempoSource::Manual(_) = st.transport.source {
+                st.transport.source = TempoSource::Manual(bpm);
+                st.seq.set_bpm(bpm);
+            }
+        }
         UiCommand::Tap => {
-            // 3-way exclusivity: tapping a tempo takes over from Link/ClockIn.
+            // 3-way exclusivity: tapping a tempo takes over from Link AND ClockIn.
             disengage_clock_in(st);
+            disengage_link(st, link);
             st.transport.tap(now);
             st.transport.source = TempoSource::Manual(st.transport.manual_bpm);
             st.seq.set_bpm(st.transport.manual_bpm);
@@ -372,8 +402,30 @@ fn apply_command(
         UiCommand::SyncLanes(lanes) => {
             // Restore all lane state from an undo/redo snapshot without disturbing the
             // clock or playhead — the engine keeps playing from the current position.
+            //
+            // Undo/redo can also revert a lane's route or device profile (the device
+            // picker and route editor both snapshot). For any lane whose effective
+            // route changed, release its sounding notes BEFORE swapping in the restored
+            // lane — so the NoteOffs go out on the still-active pre-undo channel — and
+            // flag a port re-plan. Without this the engine keeps routing to the
+            // post-change device and held notes hang on the wrong port. Lanes whose
+            // routing is unchanged (e.g. undoing a step edit) are left untouched so a
+            // plain edit-undo never needlessly cuts sounding notes.
+            let mut routing_changed = false;
             for (i, lane) in lanes.into_iter().enumerate() {
+                let route_changed = st
+                    .seq
+                    .lane(i)
+                    .map(|cur| cur.effective_route() != lane.effective_route())
+                    .unwrap_or(false);
+                if route_changed {
+                    st.seq.release_lanes(&[i], now, sink);
+                    routing_changed = true;
+                }
                 st.seq.update_lane(i, lane);
+            }
+            if routing_changed {
+                st.route_dirty = true;
             }
         }
         UiCommand::SetOctave { lane, octave } => {
@@ -1027,11 +1079,24 @@ fn run_port_watcher(
     let mut first = true;
     loop {
         if !first {
-            std::thread::sleep(std::time::Duration::from_millis(WATCHER_SCAN_MS));
+            // Wait up to one scan interval for a request, but wake IMMEDIATELY on
+            // Quit/Reconnect. Teardown sends Quit then joins this thread; a plain
+            // sleep here made that join (which runs on the timing loop) block for the
+            // whole interval. recv_timeout returns the moment Quit arrives.
+            match requests.recv_timeout(std::time::Duration::from_millis(WATCHER_SCAN_MS)) {
+                Ok(PortRequest::Reconnect(idx)) => {
+                    if let Some(c) = connected.get_mut(idx) {
+                        *c = false;
+                    }
+                }
+                Ok(PortRequest::Quit) => return,
+                Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
+                Err(crossbeam_channel::RecvTimeoutError::Disconnected) => return,
+            }
         }
         first = false;
 
-        // Drain engine requests: Reconnect marks a port stale so the planner rebuilds it;
+        // Drain any further queued requests without blocking (multiple Reconnects coalesce);
         // Quit (or a dropped sender) ends the thread.
         loop {
             match requests.try_recv() {
@@ -3730,6 +3795,136 @@ mod tests {
             matches!(st.transport.source, TempoSource::Manual(_)),
             "clearing the clock-in port reverts to Manual; got {:?}",
             st.transport.source
+        );
+    }
+
+    /// Undo/redo (SyncLanes) must flag a port re-plan when a lane's route changed, so MIDI
+    /// follows the restored device/port instead of staying on the post-change one.
+    #[test]
+    fn sync_lanes_replans_when_a_lane_route_changed() {
+        let set = default_set();
+        let lanes = set.lanes.clone();
+        let mut st = EngineState::new(set);
+        let mut link = FakeLink::new();
+        let mut sink = RecordingSink::new();
+        let mut events = Vec::new();
+
+        // Restore a lane set where lane 0's route changed (different channel).
+        let mut restored = lanes.clone();
+        let mut r = restored[0].effective_route();
+        r.channel = (r.channel + 1) % 16;
+        restored[0].route = Some(r);
+
+        st.route_dirty = false;
+        apply_command(
+            &mut st,
+            UiCommand::SyncLanes(restored),
+            0,
+            &mut link,
+            &mut sink,
+            &mut events,
+        );
+        assert!(
+            st.route_dirty,
+            "a route change via SyncLanes must flag a port re-plan"
+        );
+    }
+
+    /// A SyncLanes that changes no routing (e.g. undoing a step edit) must NOT re-plan ports
+    /// — that would needlessly cut sounding notes.
+    #[test]
+    fn sync_lanes_no_replan_when_routes_unchanged() {
+        let set = default_set();
+        let lanes = set.lanes.clone();
+        let mut st = EngineState::new(set);
+        let mut link = FakeLink::new();
+        let mut sink = RecordingSink::new();
+        let mut events = Vec::new();
+
+        st.route_dirty = false;
+        apply_command(
+            &mut st,
+            UiCommand::SyncLanes(lanes),
+            0,
+            &mut link,
+            &mut sink,
+            &mut events,
+        );
+        assert!(
+            !st.route_dirty,
+            "an unchanged SyncLanes must not trigger a re-plan"
+        );
+    }
+
+    /// An explicit manual BPM disables Link (tempo sources are mutually exclusive).
+    #[test]
+    fn set_bpm_disables_link() {
+        let set = default_set();
+        let mut st = EngineState::new(set);
+        let mut link = FakeLink::new();
+        let mut sink = RecordingSink::new();
+        let mut events = Vec::new();
+
+        apply_command(
+            &mut st,
+            UiCommand::ToggleLink(true),
+            0,
+            &mut link,
+            &mut sink,
+            &mut events,
+        );
+        assert!(st.link_enabled && link.enabled());
+
+        apply_command(
+            &mut st,
+            UiCommand::SetBpm(140.0),
+            0,
+            &mut link,
+            &mut sink,
+            &mut events,
+        );
+        assert!(!st.link_enabled, "manual BPM must disable Link");
+        assert!(!link.enabled(), "Link clock must be turned off");
+        assert!(matches!(st.transport.source, TempoSource::Manual(_)));
+    }
+
+    /// Undo/redo's RestoreBpm refreshes the stored BPM but must NOT change the active tempo
+    /// source — undoing an edit while Link is on must not drop the user out of Link.
+    #[test]
+    fn restore_bpm_preserves_active_source() {
+        let set = default_set();
+        let mut st = EngineState::new(set);
+        let mut link = FakeLink::new();
+        let mut sink = RecordingSink::new();
+        let mut events = Vec::new();
+
+        apply_command(
+            &mut st,
+            UiCommand::ToggleLink(true),
+            0,
+            &mut link,
+            &mut sink,
+            &mut events,
+        );
+        assert_eq!(st.transport.source, TempoSource::Link);
+
+        apply_command(
+            &mut st,
+            UiCommand::RestoreBpm(140.0),
+            0,
+            &mut link,
+            &mut sink,
+            &mut events,
+        );
+        assert_eq!(
+            st.transport.source,
+            TempoSource::Link,
+            "RestoreBpm must not change the tempo source"
+        );
+        assert!(st.link_enabled, "RestoreBpm must not disable Link");
+        assert_eq!(
+            st.transport.manual_bpm, 140.0,
+            "stored manual BPM is still refreshed for when Link is later left"
         );
     }
 

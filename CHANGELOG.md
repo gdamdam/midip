@@ -7,6 +7,24 @@ feature milestone is a minor bump).
 
 ## [Unreleased]
 
+## [1.2.1] — 2026-06-30 — Routing/undo, tempo-source & persistence fixes
+
+### Fixed
+- **Undo/redo re-routes correctly** — restoring a snapshot that changed a lane's device or
+  route now re-plans the engine's output ports and releases the affected notes, instead of
+  leaving MIDI flowing to the post-change port (held notes could hang on the wrong port).
+  A plain step-edit undo (no routing change) is left untouched, so it never cuts sounding notes.
+- **Tempo-source exclusivity** — a manual BPM change or Tap now disables Ableton Link (as it
+  already did for Clock-In), so manual tempo and Link can't both drive the playhead. Undo/redo
+  restores the stored BPM without changing the active tempo source, so undoing an unrelated
+  edit no longer silently drops you out of Link.
+- **Device/route changes no longer stall timing** — the MIDI device-watcher parks on a timed
+  receive, so tearing it down on a port change wakes it immediately instead of blocking the
+  timing loop for up to the scan interval (~250 ms).
+- **Persistence failures are surfaced** — favorites, crates, and autosave now report a
+  "save failed" status when a write fails (e.g. a read-only data dir) instead of silently
+  reporting success.
+
 ## [1.2.0] — 2026-06-30 — Device library & picker
 
 ### Added

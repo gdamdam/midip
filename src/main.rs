@@ -164,10 +164,12 @@ fn run(mut terminal: Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
         // Debounced autosave to a separate recovery file (never overwrites deliberate saves).
         // Best-effort: a failed autosave is silently dropped so it never disrupts the UI thread.
         if app.tick_autosave() {
-            let _ = midip::pattern::store::save_recovery(
+            if let Err(e) = midip::pattern::store::save_recovery(
                 &midip::config::data_dir(),
                 &app.committed_set(),
-            );
+            ) {
+                app.set_status(format!("autosave failed: {e}"));
+            }
         }
 
         if app.should_quit {
