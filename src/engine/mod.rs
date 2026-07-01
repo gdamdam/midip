@@ -182,6 +182,15 @@ fn clock_in_timeout_micros(bpm: f64) -> u64 {
     (tick_interval * CLOCK_IN_TIMEOUT_TICKS).max(CLOCK_IN_TIMEOUT_FLOOR_MICROS)
 }
 
+/// Shared-timeline bar index for a Link `beat` at the given `quantum` (beats/bar):
+/// `floor(beat / quantum)`. Negative for the pre-start count-in (a quantized
+/// `request_start` runs beats up from a negative value to 0 at the next bar), so
+/// a Link-gated start fires exactly when this index advances — the same test for
+/// the local count-in and for joining an already-playing session at its next bar.
+fn bar_index(beat: f64, quantum: f64) -> i64 {
+    (beat / quantum).floor() as i64
+}
+
 /// Mutable engine state shared by both drivers.
 struct EngineState {
     seq: Sequencer,
@@ -192,6 +201,14 @@ struct EngineState {
     /// actually starting the sequencer. While armed, `seq.playing` is false so no
     /// notes escape.
     armed: bool,
+    /// Shared bar index (`bar_index(beat)`) captured when `armed` was set. The
+    /// sequencer starts once the Link beat crosses into a LATER bar than this, so
+    /// both a local count-in and a remote-session join begin on a bar boundary.
+    armed_at_bar: i64,
+    /// Last observed Link session playing state (meaningful only while
+    /// `link_enabled`). Used to follow remote start/stop transitions and to
+    /// suppress command echo (our own start is recorded here, not re-followed).
+    link_playing: bool,
     last_step: Option<usize>,
     bar: u32,
     tick_count: u64,
@@ -231,6 +248,8 @@ impl EngineState {
             transport,
             link_enabled: false,
             armed: false,
+            armed_at_bar: 0,
+            link_playing: false,
             last_step: None,
             bar: 0,
             tick_count: 0,
@@ -282,9 +301,20 @@ fn apply_command(
             if link.enabled() {
                 // Link mode: defer sequencer start to the quantized bar boundary.
                 // While armed, seq.playing is false so no notes escape.
-                link.request_start(now, 4.0);
+                //
+                // Idempotent join (behavior 3/6): only issue a start when the shared
+                // session is stopped. If a peer is already playing we simply arm and
+                // join at the next bar — sending another start would remap the beat
+                // under the peers' feet and echo back as a redundant transition.
+                if !link.is_playing() {
+                    link.request_start(now, 4.0);
+                }
                 st.clock.start(now);
                 st.armed = true;
+                st.armed_at_bar = bar_index(link.beat_at(now, 4.0), 4.0);
+                // Record that the session is (about to be) playing on our account so
+                // step_engine's transition check does not re-follow our own start.
+                st.link_playing = true;
                 events.push(EngineEvent::Armed);
             } else {
                 // Manual mode: start immediately and confirm.
@@ -352,6 +382,10 @@ fn apply_command(
                 st.armed = false;
                 events.push(EngineEvent::Started { at_step: 0 });
             }
+            // Reset the remote-transport tracker on every toggle. Left false so that
+            // enabling Link into an already-playing session is seen as a stopped→playing
+            // transition next tick and joins at the next bar (behavior 3).
+            st.link_playing = false;
         }
         UiCommand::LoadPattern { lane, pattern } => {
             if let Some(existing) = st.seq.lane(lane) {
@@ -655,9 +689,42 @@ fn step_engine(
     };
     let bpm = st.transport.effective_bpm(link_tempo, st.clock_in_bpm);
 
-    // Link-gated start: once the quantized bar boundary is reached (beat >= 0),
-    // fire the sequencer. While armed, seq.playing is false so tick emits nothing.
-    if st.armed && st.link_enabled && link.beat_at(now, 4.0) >= 0.0 {
+    // Follow remote transport (Link start/stop sync). While Link is enabled, watch
+    // the shared session's playing state and react to transitions only — a steady
+    // state (and our own locally-initiated start, recorded in `link_playing`) does
+    // nothing, so there is no command echo and no per-tick restart.
+    if st.link_enabled {
+        let remote_playing = link.is_playing();
+        if remote_playing != st.link_playing {
+            if remote_playing {
+                // stopped → playing: a peer started (or we joined an already-playing
+                // session via ToggleLink). Arm to join at the NEXT shared bar; do NOT
+                // issue our own start — the session is already running.
+                if !st.seq.is_playing() && !st.armed {
+                    st.armed = true;
+                    st.armed_at_bar = bar_index(link.beat_at(now, 4.0), 4.0);
+                    st.clock.start(now);
+                    events.push(EngineEvent::Armed);
+                }
+            } else {
+                // playing → stopped: follow the remote stop immediately, releasing
+                // every sounding note (all-notes-off via seq.stop) and disarming.
+                if st.seq.is_playing() || st.armed {
+                    st.seq.stop(now, sink);
+                    st.clock.stop();
+                    st.armed = false;
+                    events.push(EngineEvent::Stopped);
+                }
+            }
+            st.link_playing = remote_playing;
+        }
+    }
+
+    // Link-gated start: fire the sequencer once the Link beat crosses into a bar
+    // LATER than the one captured when we armed. This single test covers the local
+    // count-in (request_start runs beats up from negative to 0 at the next bar) and
+    // a remote join (start on the next bar after connecting mid-phrase).
+    if st.armed && st.link_enabled && bar_index(link.beat_at(now, 4.0), 4.0) > st.armed_at_bar {
         st.seq.play(now);
         st.armed = false;
         events.push(EngineEvent::Started { at_step: 0 });
@@ -2280,6 +2347,314 @@ mod tests {
             "sequencer must be playing after boundary"
         );
         assert!(!st.armed, "armed must be cleared after boundary");
+    }
+
+    // --- Remote Link transport (start/stop sync) ---------------------------
+
+    /// Run one `step_engine` iteration at `now`, applying `cmds` (all timestamped at `now`).
+    /// FakeLink's beat is static across `run_engine_headless`, so the remote-transport tests
+    /// drive single steps and mutate the fake's beat/playing between them (like
+    /// `link_play_starts_at_boundary`).
+    fn step_at(
+        st: &mut EngineState,
+        link: &mut FakeLink,
+        sink: &mut crate::midi::ports::RecordingSink,
+        now: u64,
+        cmds: Vec<UiCommand>,
+    ) -> Vec<EngineEvent> {
+        let mut pending: Vec<(u64, UiCommand)> = cmds.into_iter().map(|c| (now, c)).collect();
+        let mut clock_msgs: Vec<ClockInMsg> = Vec::new();
+        let mut events: Vec<EngineEvent> = Vec::new();
+        step_engine(st, now, &mut pending, &mut clock_msgs, link, sink, &mut events);
+        events
+    }
+
+    /// Connect (enable Link) while the shared session is STOPPED: must not arm or start.
+    #[test]
+    fn link_connect_while_stopped_does_not_start() {
+        let mut st = EngineState::new(default_set());
+        let mut link = FakeLink::new();
+        let mut sink = crate::midi::ports::RecordingSink::new();
+        link.set_beat(2.0); // mid-timeline but session not playing
+
+        let e0 = step_at(&mut st, &mut link, &mut sink, 0, vec![UiCommand::ToggleLink(true)]);
+        let mut e_rest = Vec::new();
+        for t in [1_000u64, 2_000, 3_000] {
+            e_rest.extend(step_at(&mut st, &mut link, &mut sink, t, vec![]));
+        }
+
+        assert!(!st.armed, "must not arm when session is stopped");
+        assert!(!st.seq.is_playing(), "must not start when session is stopped");
+        assert!(
+            !e0.iter()
+                .chain(e_rest.iter())
+                .any(|e| matches!(e, EngineEvent::Started { .. } | EngineEvent::Armed)),
+            "no Armed/Started when connecting to a stopped session"
+        );
+        assert!(link.started_at.is_none(), "must not send a start request");
+    }
+
+    /// Connect while a peer is ALREADY playing: arm (no start request) and join on the NEXT bar.
+    #[test]
+    fn link_connect_while_playing_joins_next_bar() {
+        let mut st = EngineState::new(default_set());
+        let mut link = FakeLink::new();
+        let mut sink = crate::midi::ports::RecordingSink::new();
+        link.set_playing(true); // peer already playing
+        link.set_beat(2.5); // mid-bar (bar 0)
+
+        let e0 = step_at(&mut st, &mut link, &mut sink, 0, vec![UiCommand::ToggleLink(true)]);
+        assert!(st.armed, "joining a playing session must arm");
+        assert!(!st.seq.is_playing(), "must not start mid-bar");
+        assert!(
+            e0.iter().any(|e| matches!(e, EngineEvent::Armed)),
+            "Armed expected on join"
+        );
+        assert!(
+            link.started_at.is_none(),
+            "joining must NOT send a redundant start request"
+        );
+
+        // Still same bar → no start.
+        link.set_beat(3.9);
+        let e1 = step_at(&mut st, &mut link, &mut sink, 1_000, vec![]);
+        assert!(!st.seq.is_playing());
+        assert!(!e1.iter().any(|e| matches!(e, EngineEvent::Started { .. })));
+
+        // Cross into the next shared bar (beat 4 → bar 1 > armed bar 0) → start once.
+        link.set_beat(4.0);
+        let e2 = step_at(&mut st, &mut link, &mut sink, 2_000, vec![]);
+        assert!(st.seq.is_playing(), "must start on the next bar boundary");
+        assert!(!st.armed);
+        assert!(e2
+            .iter()
+            .any(|e| matches!(e, EngineEvent::Started { at_step: 0 })));
+        assert!(link.started_at.is_none(), "join path never issues a start");
+    }
+
+    /// A remote start (peer presses play) schedules the sequencer exactly ONCE, at the next bar.
+    #[test]
+    fn link_remote_start_schedules_once() {
+        let mut st = EngineState::new(default_set());
+        let mut link = FakeLink::new();
+        let mut sink = crate::midi::ports::RecordingSink::new();
+        step_at(&mut st, &mut link, &mut sink, 0, vec![UiCommand::ToggleLink(true)]);
+
+        // Peer starts mid-bar.
+        link.set_beat(2.5);
+        link.set_playing(true);
+        let e1 = step_at(&mut st, &mut link, &mut sink, 1_000, vec![]);
+        assert!(st.armed, "remote start must arm");
+        assert_eq!(
+            e1.iter().filter(|e| matches!(e, EngineEvent::Armed)).count(),
+            1
+        );
+
+        // Same bar → no start, no re-arm.
+        link.set_beat(3.0);
+        let e2 = step_at(&mut st, &mut link, &mut sink, 2_000, vec![]);
+        assert!(!e2
+            .iter()
+            .any(|e| matches!(e, EngineEvent::Started { .. } | EngineEvent::Armed)));
+
+        // Next bar → start exactly once.
+        link.set_beat(5.0);
+        let e3 = step_at(&mut st, &mut link, &mut sink, 3_000, vec![]);
+        assert_eq!(
+            e3.iter()
+                .filter(|e| matches!(e, EngineEvent::Started { .. }))
+                .count(),
+            1
+        );
+
+        // Keep advancing — no further Started/Armed (single schedule).
+        link.set_beat(6.0);
+        let e4 = step_at(&mut st, &mut link, &mut sink, 4_000, vec![]);
+        assert!(!e4
+            .iter()
+            .any(|e| matches!(e, EngineEvent::Started { .. } | EngineEvent::Armed)));
+        assert!(
+            link.started_at.is_none(),
+            "following a remote start must not issue our own start request"
+        );
+    }
+
+    /// A remote stop halts the sequencer immediately and flushes (releases) sounding notes.
+    #[test]
+    fn link_remote_stop_stops_and_flushes() {
+        use crate::midi::MidiMessage;
+        let mut set = default_set();
+        put_long_note(&mut set, 0, 0); // a sustained note on lane 0 step 0
+        let mut st = EngineState::new(set);
+        let mut sink = crate::midi::ports::RecordingSink::new();
+
+        // Bootstrap a genuinely-playing sequencer with a sounding note.
+        st.seq.play(0);
+        st.seq.tick(0, &mut sink);
+        assert!(
+            sink.events
+                .iter()
+                .any(|(_, m)| matches!(m, MidiMessage::NoteOn { .. })),
+            "precondition: a note must be sounding"
+        );
+        sink.events.clear();
+
+        // We are following a playing Link session.
+        let mut link = FakeLink::new();
+        link.set_enabled(true);
+        link.set_playing(true);
+        link.set_beat(1.0);
+        st.link_enabled = true;
+        st.link_playing = true;
+
+        // Peer stops.
+        link.set_playing(false);
+        let e = step_at(&mut st, &mut link, &mut sink, 1_000, vec![]);
+
+        assert!(!st.seq.is_playing(), "remote stop must halt the sequencer");
+        assert!(
+            e.iter().any(|ev| matches!(ev, EngineEvent::Stopped)),
+            "remote stop must emit Stopped"
+        );
+        assert!(
+            sink.events
+                .iter()
+                .any(|(_, m)| matches!(m, MidiMessage::NoteOff { .. })),
+            "remote stop must flush (release) sounding notes"
+        );
+    }
+
+    /// Pressing local Play while the shared session is already playing sends NO redundant start.
+    #[test]
+    fn link_local_play_while_playing_no_redundant_start() {
+        let mut st = EngineState::new(default_set());
+        let mut link = FakeLink::new();
+        let mut sink = crate::midi::ports::RecordingSink::new();
+        link.set_playing(true); // peer already playing
+        link.set_beat(2.0);
+
+        step_at(
+            &mut st,
+            &mut link,
+            &mut sink,
+            0,
+            vec![UiCommand::ToggleLink(true), UiCommand::Play],
+        );
+        assert!(
+            link.started_at.is_none(),
+            "local Play must not issue a start when the session already plays"
+        );
+        assert!(st.armed, "local Play while playing should arm to join");
+    }
+
+    /// A tempo change under Link preserves the phase-derived step (the beat→step mapping is
+    /// tempo-independent), so changing BPM never jumps the playhead.
+    #[test]
+    fn link_tempo_change_preserves_phase() {
+        let mut st = EngineState::new(default_set());
+        let mut link = FakeLink::new();
+        let mut sink = crate::midi::ports::RecordingSink::new();
+        link.set_playing(true);
+        link.set_beat(6.0); // bar 1
+        step_at(&mut st, &mut link, &mut sink, 0, vec![UiCommand::ToggleLink(true)]);
+        // Cross into the next bar to start.
+        link.set_beat(8.0); // bar 2 > armed bar 1
+        step_at(&mut st, &mut link, &mut sink, 1_000, vec![]);
+        assert!(st.seq.is_playing());
+        let step_before = st.seq.current_step();
+
+        // Peer changes tempo; beat position is unchanged.
+        link.set_tempo(90.0);
+        step_at(&mut st, &mut link, &mut sink, 2_000, vec![]);
+        assert_eq!(
+            st.seq.current_step(),
+            step_before,
+            "tempo change must not shift the phase-derived step"
+        );
+    }
+
+    /// Forward beat correction jumps to the new step WITHOUT re-materializing (catching up)
+    /// the steps it skipped over.
+    #[test]
+    fn link_forward_correction_skips_missed_steps_no_catchup() {
+        use crate::midi::MidiMessage;
+        use crate::pattern::model::{DrumHit, Pattern, PatternData};
+
+        let mut set = default_set();
+        set.bpm = 120.0; // step_dur = 125_000 µs
+                         // Drum hits on step 0 (note 36) and step 2 (note 38).
+        let mut steps: Vec<Vec<DrumHit>> = vec![Vec::new(); 16];
+        for (idx, note) in [(0usize, 36u8), (2, 38)] {
+            steps[idx].push(DrumHit {
+                note,
+                vel: 100,
+                prob: 1.0,
+                ratchet: 1,
+                micro: 0,
+                cond: TrigCond::Always,
+            });
+        }
+        set.lanes[0].pattern = Pattern {
+            name: "fc".into(),
+            desc: String::new(),
+            length: 16,
+            data: PatternData::Drums(steps),
+            id: crate::persist::Id::nil(),
+            cc: Default::default(),
+        };
+
+        let mut st = EngineState::new(set);
+        let mut sink = crate::midi::ports::RecordingSink::new();
+        let mut link = FakeLink::new();
+        link.set_enabled(true);
+        link.set_playing(true);
+        st.link_enabled = true;
+        st.link_playing = true;
+
+        // Start at beat 0 → materialize step 0 (note 36 fires).
+        link.set_beat(0.0);
+        st.seq.play(0);
+        step_at(&mut st, &mut link, &mut sink, 0, vec![]);
+        assert!(
+            sink.events
+                .iter()
+                .any(|(_, m)| matches!(m, MidiMessage::NoteOn { note: 36, .. })),
+            "step 0 note must fire"
+        );
+
+        // Jump the beat forward past step 2 to step 3 (0.75 beats = step 3).
+        link.set_beat(0.75);
+        step_at(&mut st, &mut link, &mut sink, 100_000, vec![]);
+        // Advance time well past step 2's would-be fire time.
+        step_at(&mut st, &mut link, &mut sink, 400_000, vec![]);
+
+        assert!(
+            !sink
+                .events
+                .iter()
+                .any(|(_, m)| matches!(m, MidiMessage::NoteOn { note: 38, .. })),
+            "the skipped step-2 note must NOT fire (no catch-up burst)"
+        );
+    }
+
+    /// With Link DISABLED, a playing peer state is ignored — behavior is unchanged.
+    #[test]
+    fn link_disabled_ignores_remote_playing() {
+        let mut st = EngineState::new(default_set());
+        let mut link = FakeLink::new();
+        let mut sink = crate::midi::ports::RecordingSink::new();
+        link.set_playing(true); // peer playing, but engine never enabled Link
+        link.set_beat(4.0);
+
+        let mut evs = Vec::new();
+        for t in [0u64, 1_000, 2_000] {
+            evs.extend(step_at(&mut st, &mut link, &mut sink, t, vec![]));
+        }
+        assert!(!st.armed, "disabled Link must not arm from remote state");
+        assert!(!st.seq.is_playing(), "disabled Link must not start");
+        assert!(!evs
+            .iter()
+            .any(|e| matches!(e, EngineEvent::Started { .. } | EngineEvent::Armed)));
     }
 
     // --- Task 7: route channel emission + SetRoute -------------------------

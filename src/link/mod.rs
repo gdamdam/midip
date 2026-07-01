@@ -18,6 +18,10 @@ pub trait LinkClock: Send {
     /// Phase within the bar (0..`quantum`).
     fn phase_at(&self, micros: u64, quantum: f64) -> f64;
     fn num_peers(&self) -> u64;
+    /// Whether the shared Link session is currently playing (start/stop sync).
+    /// Lets the engine follow remote transport and avoid re-issuing a redundant
+    /// start when joining a session a peer is already playing.
+    fn is_playing(&self) -> bool;
     /// Quantized start: align play to the next bar boundary.
     fn request_start(&mut self, micros: u64, quantum: f64);
 }
@@ -39,6 +43,9 @@ pub struct FakeLink {
     beat: f64,
     tempo: f64,
     peers: u64,
+    /// Simulated shared-session playing state, returned by `is_playing`. Tests
+    /// drive this to model a peer starting/stopping the Link session.
+    playing: bool,
     /// Set by `request_start`; `None` until called. Tests assert on this.
     pub started_at: Option<u64>,
 }
@@ -50,6 +57,7 @@ impl FakeLink {
             beat: 0.0,
             tempo: 120.0,
             peers: 0,
+            playing: false,
             started_at: None,
         }
     }
@@ -62,6 +70,12 @@ impl FakeLink {
     /// Set the peer count returned by `num_peers`.
     pub fn set_peers(&mut self, peers: u64) {
         self.peers = peers;
+    }
+
+    /// Set the simulated shared-session playing state returned by `is_playing`.
+    /// Used by tests to model a remote peer starting or stopping transport.
+    pub fn set_playing(&mut self, on: bool) {
+        self.playing = on;
     }
 }
 
@@ -95,11 +109,17 @@ impl LinkClock for FakeLink {
     fn num_peers(&self) -> u64 {
         self.peers
     }
+    fn is_playing(&self) -> bool {
+        self.playing
+    }
     fn request_start(&mut self, micros: u64, _quantum: f64) {
         // Record the request so tests can assert it. Do NOT reset beat — the
         // real Link session handles bar-alignment externally; the fake keeps
         // whatever beat was set so position tests remain independent.
         self.started_at = Some(micros);
+        // Mirror the real session: requesting a start marks it playing, so the
+        // engine's transition check sees no spurious change after a local start.
+        self.playing = true;
     }
 }
 
@@ -192,11 +212,24 @@ impl LinkClock for AbletonLink {
         self.link.num_peers()
     }
 
+    fn is_playing(&self) -> bool {
+        let mut ss = SessionState::new();
+        self.link.capture_app_session_state(&mut ss);
+        ss.is_playing()
+    }
+
     /// Quantized start: set playing=true and request beat 0 aligned to the
-    /// next bar boundary at `micros`.
-    fn request_start(&mut self, micros: u64, quantum: f64) {
+    /// next bar boundary.
+    ///
+    /// Clock-epoch fix: the start-playing time MUST be stamped in Link's own
+    /// session-clock domain (`self.link.clock_micros()`), NOT the engine's
+    /// `Instant`-based `micros` (a different epoch). Passing the engine micros
+    /// put the start far off the shared timeline; ignoring it and using Link's
+    /// clock lands the requested beat 0 on the next bar as intended.
+    fn request_start(&mut self, _micros: u64, quantum: f64) {
         self.link.capture_app_session_state(&mut self.session_state);
-        self.session_state.set_is_playing(true, micros as i64);
+        let link_now = self.link.clock_micros();
+        self.session_state.set_is_playing(true, link_now);
         self.session_state
             .request_beat_at_start_playing_time(0.0, quantum);
         self.link.commit_app_session_state(&self.session_state);
@@ -261,5 +294,25 @@ mod tests {
         assert_eq!(link.started_at, Some(42_000));
         // beat resets to 0 on request_start.
         assert_eq!(link.beat_at(0, 4.0), 0.0);
+    }
+
+    #[test]
+    fn fake_link_playing_state_is_settable() {
+        let mut link = FakeLink::new();
+        assert!(!link.is_playing(), "sessions start stopped");
+        link.set_playing(true);
+        assert!(link.is_playing());
+        link.set_playing(false);
+        assert!(!link.is_playing());
+    }
+
+    #[test]
+    fn fake_link_request_start_marks_playing() {
+        // Mirrors the real session: requesting a start marks the session playing so the
+        // engine's transition check does not re-follow its own locally-initiated start.
+        let mut link = FakeLink::new();
+        assert!(!link.is_playing());
+        link.request_start(1_000, 4.0);
+        assert!(link.is_playing(), "request_start must mark the session playing");
     }
 }
