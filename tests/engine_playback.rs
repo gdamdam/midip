@@ -2,7 +2,7 @@ use midip::devices::profiles;
 use midip::devices::profiles::resolve_melodic_pitch;
 use midip::engine::scheduler::step_dur_micros;
 use midip::engine::{run_engine_headless, EngineEvent, UiCommand};
-use midip::link::{step_from_beat, FakeLink};
+use midip::link::FakeLink;
 use midip::midi::message::MidiMessage;
 use midip::midi::ports::RecordingSink;
 use midip::pattern::model::{
@@ -280,37 +280,13 @@ fn mute_lane_silences_only_that_lane() {
     assert_eq!(bass_ons, 2, "bass lane should still sound");
 }
 
-#[test]
-fn link_enabled_sync_drives_step_from_beat() {
-    let set = three_lane_set();
-    let mut link = FakeLink::new();
-    // Place the session at beat 2.0 -> step 8.
-    link.set_beat(2.0);
-    let mut sink = RecordingSink::new();
-    let step = step_dur_micros(120.0);
-    // Run a short window so sync places the playhead before it advances far.
-    let total = step; // one step of virtual time
-    let events = run_engine_headless(
-        set,
-        &mut link,
-        &mut sink,
-        vec![(0, UiCommand::ToggleLink(true)), (0, UiCommand::Play)],
-        total,
-        1_000,
-    );
-
-    let expected = step_from_beat(2.0) % 16; // 8
-    let first_step = events.iter().find_map(|ev| match ev {
-        EngineEvent::Playhead { step, .. } => Some(*step),
-        _ => None,
-    });
-    assert_eq!(
-        first_step,
-        Some(expected),
-        "Link sync should place playhead at step {}",
-        expected
-    );
-}
+// NOTE: the old `link_enabled_sync_drives_step_from_beat` test was removed. It
+// asserted the pre-bbf5da8 immediate-start hack (Play under Link started the
+// sequencer the moment `beat_at >= 0.0`). The current model arms and only starts
+// when the shared Link beat crosses into a LATER bar, which the static `FakeLink`
+// batch driver cannot simulate. Beat→step sync while playing is covered by the
+// step-by-step unit tests (`engine::link_forward_correction_skips_missed_steps_no_catchup`,
+// `engine::link_play_starts_at_boundary`) and `scheduler::sync_to_beat_sets_step_and_bpm`.
 
 #[test]
 fn play_with_link_enabled_requests_quantized_start() {

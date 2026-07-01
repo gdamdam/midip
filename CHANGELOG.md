@@ -7,6 +7,17 @@ feature milestone is a minor bump).
 
 ## [Unreleased]
 
+## [1.3.1] — 2026-07-01 — CI green (test + formatting)
+
+### Fixed
+- **CI is green again.** Removed the obsolete `link_enabled_sync_drives_step_from_beat`
+  integration test: it asserted the pre-1.3.0 immediate-start behaviour (Play under Link
+  started the moment `beat_at >= 0.0`), which the current arm-then-start-on-bar-crossing
+  model can't reproduce with the static `FakeLink` batch driver. The behaviour it checked
+  (beat→step sync while playing, arm/start on a bar boundary) is already covered by the
+  step-by-step unit tests in `engine`/`scheduler`.
+- Applied `cargo fmt` to the 1.3.0 Link test code so the Linux CI `fmt --check` gate passes.
+
 ## [1.2.1] — 2026-06-30 — Routing/undo, tempo-source & persistence fixes
 
 ### Fixed

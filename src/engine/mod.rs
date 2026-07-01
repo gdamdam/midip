@@ -2365,7 +2365,15 @@ mod tests {
         let mut pending: Vec<(u64, UiCommand)> = cmds.into_iter().map(|c| (now, c)).collect();
         let mut clock_msgs: Vec<ClockInMsg> = Vec::new();
         let mut events: Vec<EngineEvent> = Vec::new();
-        step_engine(st, now, &mut pending, &mut clock_msgs, link, sink, &mut events);
+        step_engine(
+            st,
+            now,
+            &mut pending,
+            &mut clock_msgs,
+            link,
+            sink,
+            &mut events,
+        );
         events
     }
 
@@ -2377,14 +2385,23 @@ mod tests {
         let mut sink = crate::midi::ports::RecordingSink::new();
         link.set_beat(2.0); // mid-timeline but session not playing
 
-        let e0 = step_at(&mut st, &mut link, &mut sink, 0, vec![UiCommand::ToggleLink(true)]);
+        let e0 = step_at(
+            &mut st,
+            &mut link,
+            &mut sink,
+            0,
+            vec![UiCommand::ToggleLink(true)],
+        );
         let mut e_rest = Vec::new();
         for t in [1_000u64, 2_000, 3_000] {
             e_rest.extend(step_at(&mut st, &mut link, &mut sink, t, vec![]));
         }
 
         assert!(!st.armed, "must not arm when session is stopped");
-        assert!(!st.seq.is_playing(), "must not start when session is stopped");
+        assert!(
+            !st.seq.is_playing(),
+            "must not start when session is stopped"
+        );
         assert!(
             !e0.iter()
                 .chain(e_rest.iter())
@@ -2403,7 +2420,13 @@ mod tests {
         link.set_playing(true); // peer already playing
         link.set_beat(2.5); // mid-bar (bar 0)
 
-        let e0 = step_at(&mut st, &mut link, &mut sink, 0, vec![UiCommand::ToggleLink(true)]);
+        let e0 = step_at(
+            &mut st,
+            &mut link,
+            &mut sink,
+            0,
+            vec![UiCommand::ToggleLink(true)],
+        );
         assert!(st.armed, "joining a playing session must arm");
         assert!(!st.seq.is_playing(), "must not start mid-bar");
         assert!(
@@ -2438,7 +2461,13 @@ mod tests {
         let mut st = EngineState::new(default_set());
         let mut link = FakeLink::new();
         let mut sink = crate::midi::ports::RecordingSink::new();
-        step_at(&mut st, &mut link, &mut sink, 0, vec![UiCommand::ToggleLink(true)]);
+        step_at(
+            &mut st,
+            &mut link,
+            &mut sink,
+            0,
+            vec![UiCommand::ToggleLink(true)],
+        );
 
         // Peer starts mid-bar.
         link.set_beat(2.5);
@@ -2446,7 +2475,9 @@ mod tests {
         let e1 = step_at(&mut st, &mut link, &mut sink, 1_000, vec![]);
         assert!(st.armed, "remote start must arm");
         assert_eq!(
-            e1.iter().filter(|e| matches!(e, EngineEvent::Armed)).count(),
+            e1.iter()
+                .filter(|e| matches!(e, EngineEvent::Armed))
+                .count(),
             1
         );
 
@@ -2556,7 +2587,13 @@ mod tests {
         let mut sink = crate::midi::ports::RecordingSink::new();
         link.set_playing(true);
         link.set_beat(6.0); // bar 1
-        step_at(&mut st, &mut link, &mut sink, 0, vec![UiCommand::ToggleLink(true)]);
+        step_at(
+            &mut st,
+            &mut link,
+            &mut sink,
+            0,
+            vec![UiCommand::ToggleLink(true)],
+        );
         // Cross into the next bar to start.
         link.set_beat(8.0); // bar 2 > armed bar 1
         step_at(&mut st, &mut link, &mut sink, 1_000, vec![]);

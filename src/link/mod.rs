@@ -313,6 +313,9 @@ mod tests {
         let mut link = FakeLink::new();
         assert!(!link.is_playing());
         link.request_start(1_000, 4.0);
-        assert!(link.is_playing(), "request_start must mark the session playing");
+        assert!(
+            link.is_playing(),
+            "request_start must mark the session playing"
+        );
     }
 }
