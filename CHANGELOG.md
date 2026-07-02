@@ -7,6 +7,11 @@ feature milestone is a minor bump).
 
 ## [Unreleased]
 
+## [1.3.3] — 2026-07-02 — CI green (formatting)
+
+### Fixed
+- Applied `cargo fmt` to the v1.3.2 test code so the Linux CI `fmt --check` gate passes.
+
 ## [1.3.2] — 2026-07-02 — HIGH-severity bug fixes (timing, Link, persistence, UI)
 
 ### Fixed
