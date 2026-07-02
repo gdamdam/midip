@@ -3625,7 +3625,10 @@ mod tests {
             &mut events,
         );
         assert!(link.is_playing(), "Play under Link must start the session");
-        assert!(st.link_playing, "Play must set the local link_playing latch");
+        assert!(
+            st.link_playing,
+            "Play must set the local link_playing latch"
+        );
 
         // Stop must publish the stop to Link and clear the latch.
         apply_command(

@@ -351,7 +351,10 @@ mod tests {
         link.request_start(1_000, 4.0);
         assert!(link.is_playing());
         link.request_stop(2_000);
-        assert!(!link.is_playing(), "request_stop must clear the playing flag");
+        assert!(
+            !link.is_playing(),
+            "request_stop must clear the playing flag"
+        );
         // A subsequent start latches playing again.
         link.request_start(3_000, 4.0);
         assert!(link.is_playing());

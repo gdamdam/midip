@@ -415,7 +415,10 @@ pub fn validate_and_repair(set: &mut Set) -> Vec<String> {
     // id (e.g. the save filename) always sees a valid 16-hex-char id. `is_valid()`
     // accepts the nil id, so a nil id is left for `ensure_id()` to mint on save.
     if !set.id.is_valid() {
-        notes.push(format!("set id '{}' malformed, regenerated", set.id.as_str()));
+        notes.push(format!(
+            "set id '{}' malformed, regenerated",
+            set.id.as_str()
+        ));
         set.id = persist::mint_id();
     }
 
@@ -901,7 +904,11 @@ mod tests {
         let mut set = Set::default_set(default_profiles());
         set.id = serde_json::from_str(r#""abc""#).unwrap();
         let notes = validate_and_repair(&mut set);
-        assert_eq!(set.id.as_str().len(), 16, "id must be repaired to canonical length");
+        assert_eq!(
+            set.id.as_str().len(),
+            16,
+            "id must be repaired to canonical length"
+        );
         assert!(set.id.as_str().chars().all(|c| c.is_ascii_hexdigit()));
         assert!(
             notes.iter().any(|n| n.contains("id") && n.contains("abc")),
@@ -916,9 +923,16 @@ mod tests {
         let mut set = Set::default_set(default_profiles());
         set.id = serde_json::from_str(r#""日本語abc😀""#).unwrap();
         let notes = validate_and_repair(&mut set);
-        assert_eq!(set.id.as_str().len(), 16, "id must be repaired to canonical length");
+        assert_eq!(
+            set.id.as_str().len(),
+            16,
+            "id must be repaired to canonical length"
+        );
         assert!(set.id.as_str().chars().all(|c| c.is_ascii_hexdigit()));
-        assert!(!notes.is_empty(), "expected a repair note about the malformed id");
+        assert!(
+            !notes.is_empty(),
+            "expected a repair note about the malformed id"
+        );
     }
 
     /// H6 regression: loading a set file with a corrupt/foreign id (`"id":"abc"`, fewer

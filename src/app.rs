@@ -8068,7 +8068,7 @@ mod tests {
     fn fav_filter_selection_indexes_filtered_list() {
         use crate::app::Mode;
         use crate::devices::profiles::default_profiles;
-        use crate::pattern::library::{GenreMap, Library, LibRole};
+        use crate::pattern::library::{GenreMap, LibRole, Library};
         use crate::pattern::model::{DrumHit, Pattern, PatternData, Set};
         use crate::pattern::refs::PatternRef;
         use crate::persist;
@@ -8092,10 +8092,7 @@ mod tests {
             cc: Default::default(),
         };
         let mut drums = GenreMap::new();
-        drums.insert(
-            "techno".to_string(),
-            vec![mk("A"), mk("B"), mk("C")],
-        );
+        drums.insert("techno".to_string(), vec![mk("A"), mk("B"), mk("C")]);
         let lib = Library {
             drums,
             bass: GenreMap::new(),
@@ -8125,8 +8122,7 @@ mod tests {
         let visible = app.visible_lib_patterns();
         assert_eq!(visible.len(), 1, "filter should leave only the favorited C");
         assert_eq!(
-            visible[app.lib_pattern].1.name,
-            "C",
+            visible[app.lib_pattern].1.name, "C",
             "renderer highlights the filtered row"
         );
 

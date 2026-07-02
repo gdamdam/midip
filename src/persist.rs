@@ -148,7 +148,10 @@ mod tests {
         // Multibyte chars where a raw byte-index[..8] would land mid-character.
         let multibyte: Id = serde_json::from_str(r#""日本語abc😀""#).unwrap();
         let out = multibyte.short();
-        assert_eq!(out.chars().count(), 8.min(multibyte.as_str().chars().count()));
+        assert_eq!(
+            out.chars().count(),
+            8.min(multibyte.as_str().chars().count())
+        );
 
         // Well-formed 16-hex id: first 8 chars.
         let good = Id::generate(1, 1);
@@ -158,7 +161,10 @@ mod tests {
     #[test]
     fn is_valid_accepts_generated_and_nil_rejects_malformed() {
         assert!(Id::generate(0xDEADBEEF, 1).is_valid());
-        assert!(Id::nil().is_valid(), "nil id is well-formed hex, just unassigned");
+        assert!(
+            Id::nil().is_valid(),
+            "nil id is well-formed hex, just unassigned"
+        );
 
         let too_short: Id = serde_json::from_str(r#""abc""#).unwrap();
         assert!(!too_short.is_valid());
