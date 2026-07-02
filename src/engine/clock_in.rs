@@ -105,6 +105,12 @@ impl ClockInState {
     /// Appends the inter-tick interval to the ring buffer (when a previous tick exists),
     /// increments the internal tick counter, and returns `true` exactly once per 6 ticks
     /// to signal a 16th-note step advance.
+    ///
+    /// H3: the boundary is evaluated on the PRE-increment (0-based) count, so the FIRST
+    /// clock after a `reset` (i.e. the first F8 following a MIDI Start) fires step 0.
+    /// MIDI spec: the downbeat sounds on the first clock after Start, not the 6th —
+    /// gating on the post-increment count made playback permanently one 16th late.
+    /// Cadence stays 6-ticks-per-16th (fires on counts 0, 6, 12, …).
     pub fn on_tick(&mut self, now_micros: u64) -> bool {
         // Record interval since previous tick.
         if let Some(prev) = self.last_tick_micros {
@@ -116,10 +122,12 @@ impl ClockInState {
             }
         }
         self.last_tick_micros = Some(now_micros);
-        self.tick_count += 1;
 
-        // Signal a step advance every TICKS_PER_STEP ticks (1-based: ticks 6, 12, 18, …).
-        self.tick_count.is_multiple_of(TICKS_PER_STEP)
+        // Signal a step advance on counts 0, 6, 12, … (0-based): the first tick after a
+        // reset fires step 0, then every TICKS_PER_STEP thereafter.
+        let step_due = self.tick_count.is_multiple_of(TICKS_PER_STEP);
+        self.tick_count += 1;
+        step_due
     }
 
     /// Moving-average BPM estimate from recent inter-tick intervals.
@@ -268,25 +276,27 @@ mod tests {
                 advances += 1;
             }
         }
-        // 24 ticks → exactly 4 step advances (ticks 6, 12, 18, 24)
+        // 24 ticks → exactly 4 step advances (0-based counts 0, 6, 12, 18)
         assert_eq!(advances, 4, "24 ticks should produce 4 step advances");
     }
 
     #[test]
-    fn on_tick_advance_fires_exactly_on_6th_tick() {
+    fn on_tick_advance_fires_on_first_then_every_6th() {
         let mut st = ClockInState::new();
-        // Ticks 1..5: no advance
-        for i in 0..5u64 {
+        // Tick 1 (first F8 after Start) fires step 0.
+        assert!(st.on_tick(0), "first clock after Start must fire step 0");
+        // Ticks 2..6: no advance
+        for i in 1..6u64 {
             assert!(!st.on_tick(i * 1000), "tick {} should not advance", i + 1);
         }
-        // Tick 6: advance
-        assert!(st.on_tick(5000), "tick 6 must advance");
-        // Ticks 7..11: no advance
-        for i in 6..11u64 {
+        // Tick 7: advance (step 1)
+        assert!(st.on_tick(6000), "tick 7 must advance");
+        // Ticks 8..12: no advance
+        for i in 7..12u64 {
             assert!(!st.on_tick(i * 1000), "tick {} should not advance", i + 1);
         }
-        // Tick 12: advance
-        assert!(st.on_tick(11000), "tick 12 must advance");
+        // Tick 13: advance (step 2)
+        assert!(st.on_tick(12000), "tick 13 must advance");
     }
 
     #[test]
@@ -295,9 +305,30 @@ mod tests {
         let results: Vec<bool> = (0..6).map(|i| st.on_tick(i * 500)).collect();
         assert_eq!(
             results,
-            vec![false, false, false, false, false, true],
-            "exactly the 6th call returns true"
+            vec![true, false, false, false, false, false],
+            "the first call (first clock after Start) returns true"
         );
+    }
+
+    #[test]
+    fn first_tick_after_reset_fires_step_0() {
+        // H3 regression: MIDI Start resets, then the FIRST F8 must fire step 0.
+        // Previously step 0 waited for the 6th clock → playback one 16th late.
+        let mut st = ClockInState::new();
+        // Warm up (simulate a prior run) then reset, as the Start handler does.
+        for i in 0..10u64 {
+            st.on_tick(i * 1000);
+        }
+        st.reset();
+        assert!(
+            st.on_tick(100_000),
+            "first tick after reset (Start) must fire step 0"
+        );
+        // The next 5 ticks are silent; step 1 lands on the 6th tick after Start.
+        for i in 1..6u64 {
+            assert!(!st.on_tick(100_000 + i * 1000));
+        }
+        assert!(st.on_tick(106_000), "step 1 fires 6 ticks after Start");
     }
 
     // --- smoothed_bpm tests ------------------------------------------------

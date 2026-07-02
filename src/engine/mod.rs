@@ -38,6 +38,15 @@ pub enum UiCommand {
         lane: usize,
         pattern: Pattern,
     },
+    /// H1: push per-lane timing overrides (swing / clock division) to the engine.
+    /// `LoadPattern` only carries the pattern, so swing/clock_div edits would otherwise
+    /// never reach the live scheduler until an unrelated reload. Sent by the lane
+    /// swing/clock-div handlers so timing changes take effect immediately.
+    UpdateLaneParams {
+        lane: usize,
+        swing: Option<f32>,
+        clock_div: Option<u8>,
+    },
     /// M3: queue `pattern` on `lane` to launch at the next `quant` boundary (clip-launcher
     /// style) instead of swapping mid-phrase. Used while PLAYING; `LoadPattern` stays for the
     /// immediate (stopped) load + undo resync path.
@@ -318,6 +327,12 @@ fn apply_command(
                 events.push(EngineEvent::Armed);
             } else {
                 // Manual mode: start immediately and confirm.
+                // H4: `play` clears the sounding registry without emitting NoteOffs, so a
+                // restart while notes are still held would hang them on hardware. Flush the
+                // previous run's notes first (same all-notes-off path used by Stop/SetSet).
+                if st.seq.is_playing() {
+                    st.seq.release_all(now, sink);
+                }
                 st.seq.play(now);
                 st.clock.start(now); // begin Clock ticks only — no MIDI Start (would run the device's own sequencer)
                 events.push(EngineEvent::Started { at_step: 0 });
@@ -327,6 +342,14 @@ fn apply_command(
             st.seq.stop(now, sink); // releases sounding notes (all-notes-off)
             st.clock.stop(); // cease Clock ticks; no MIDI Stop sent
             st.armed = false;
+            // H2: publish the stop to Link so peers following our transport stop too
+            // (mirrors the Play path's `if link.enabled()` guard). Reset the local latch
+            // so the remote-follow transition check and the idempotent-join guard
+            // (`if !link.is_playing()`) behave correctly on the next Play.
+            if link.enabled() {
+                link.request_stop(now);
+                st.link_playing = false;
+            }
             events.push(EngineEvent::Stopped);
         }
         UiCommand::SetBpm(bpm) => {
@@ -391,6 +414,20 @@ fn apply_command(
             if let Some(existing) = st.seq.lane(lane) {
                 let mut l = existing.clone();
                 l.pattern = pattern;
+                st.seq.update_lane(lane, l);
+            }
+        }
+        UiCommand::UpdateLaneParams {
+            lane,
+            swing,
+            clock_div,
+        } => {
+            // H1: mirror the lane's swing/clock_div into the engine lane state so the
+            // scheduler (which reads `lanes[i].swing` / `.clock_div`) picks them up now.
+            if let Some(existing) = st.seq.lane(lane) {
+                let mut l = existing.clone();
+                l.swing = swing;
+                l.clock_div = clock_div;
                 st.seq.update_lane(lane, l);
             }
         }
@@ -629,6 +666,12 @@ fn step_engine(
                 // Restart the tick accumulator and play from the top (origin).
                 st.clock_in_state.reset();
                 st.clock_in_song_position = Some(0);
+                // H4: an external Start while already playing must release the sounding
+                // notes before `play` clears the registry — otherwise they hang (play
+                // emits no NoteOffs). Reuse the all-notes-off path used by Stop.
+                if st.seq.is_playing() {
+                    st.seq.release_all(now, sink);
+                }
                 st.seq.play(now);
                 events.push(EngineEvent::Started { at_step: 0 });
             }
@@ -725,6 +768,11 @@ fn step_engine(
     // count-in (request_start runs beats up from negative to 0 at the next bar) and
     // a remote join (start on the next bar after connecting mid-phrase).
     if st.armed && st.link_enabled && bar_index(link.beat_at(now, 4.0), 4.0) > st.armed_at_bar {
+        // H4: if a run was somehow still playing when the armed-start fires, release its
+        // sounding notes before `play` clears the registry (play emits no NoteOffs).
+        if st.seq.is_playing() {
+            st.seq.release_all(now, sink);
+        }
         st.seq.play(now);
         st.armed = false;
         events.push(EngineEvent::Started { at_step: 0 });
@@ -732,7 +780,7 @@ fn step_engine(
 
     if st.link_enabled {
         let beat = link.beat_at(now, 4.0);
-        st.seq.sync_to_beat(beat, bpm);
+        st.seq.sync_to_beat(beat, bpm, now);
     }
 
     // 3. Advance sequencer + clock. While following an external clock, `seq.tick` is
@@ -2555,6 +2603,78 @@ mod tests {
         );
     }
 
+    /// H4: pressing Play (manual mode) while notes still sound must flush NoteOffs before the
+    /// restart clears the sounding registry — otherwise the held notes hang on hardware.
+    #[test]
+    fn manual_play_while_playing_flushes_sounding_notes() {
+        use crate::midi::MidiMessage;
+        let mut set = default_set();
+        put_long_note(&mut set, 0, 0); // sustained note on lane 0 step 0
+        let mut st = EngineState::new(set);
+        let mut link = FakeLink::new(); // Link disabled → manual Play path
+        let mut sink = crate::midi::ports::RecordingSink::new();
+
+        // Bootstrap a genuinely-playing sequencer with a sounding note.
+        st.seq.play(0);
+        st.seq.tick(0, &mut sink);
+        assert!(
+            sink.events
+                .iter()
+                .any(|(_, m)| matches!(m, MidiMessage::NoteOn { .. })),
+            "precondition: a note must be sounding"
+        );
+        sink.events.clear();
+
+        // Restart via Play while the note still sounds: must emit NoteOff(s) (H4).
+        step_at(&mut st, &mut link, &mut sink, 1_000, vec![UiCommand::Play]);
+        assert!(
+            sink.events
+                .iter()
+                .any(|(_, m)| matches!(m, MidiMessage::NoteOff { .. })),
+            "restart while playing must release the previously sounding notes; got {:?}",
+            sink.events
+        );
+    }
+
+    /// H5: joining an already-playing Link session mid-song (session beat B > 0, no local
+    /// request_start) must materialize the current step — pre-fix the re-anchor placed the
+    /// step ~B*4*dur in the future so no note ever sounded.
+    #[test]
+    fn link_mid_session_join_materializes_steps() {
+        use crate::midi::MidiMessage;
+        let mut set = default_set();
+        set.bpm = 120.0;
+        put_long_note(&mut set, 0, 0); // note on step 0 → fires at steps 0, 16, 32, …
+        let mut st = EngineState::new(set);
+        let mut link = FakeLink::new();
+        let mut sink = crate::midi::ports::RecordingSink::new();
+
+        // A session that is ALREADY playing mid-song at beat 6.0 (bar 1, step 24).
+        link.set_enabled(true);
+        link.set_playing(true);
+        link.set_tempo(120.0);
+        link.set_beat(6.0);
+        st.link_enabled = true;
+        // link_playing left false → the running peer reads as stopped→playing and we arm.
+
+        // First iteration: observe the peer playing → arm to join at the next bar.
+        step_at(&mut st, &mut link, &mut sink, 0, vec![]);
+        assert!(st.armed, "joining a running session must arm");
+
+        // Cross into bar 2 (beat 8.0 → step 32). `now` is chosen to match the beat at
+        // 120 BPM (beat 8 = 4 s = 4_000_000 µs) since FakeLink's beat is static.
+        link.set_beat(8.0);
+        step_at(&mut st, &mut link, &mut sink, 4_000_000, vec![]);
+        assert!(st.seq.is_playing(), "armed-start must begin playback");
+        assert!(
+            sink.events
+                .iter()
+                .any(|(_, m)| matches!(m, MidiMessage::NoteOn { .. })),
+            "a mid-session join must materialize the current step (notes must sound); got {:?}",
+            sink.events
+        );
+    }
+
     /// Pressing local Play while the shared session is already playing sends NO redundant start.
     #[test]
     fn link_local_play_while_playing_no_redundant_start() {
@@ -3448,6 +3568,81 @@ mod tests {
         assert!(
             st.route_dirty,
             "SetSet must set route_dirty so the loop re-plans routes"
+        );
+    }
+
+    /// H1: an `UpdateLaneParams` command (the one the lane swing / clock-div handlers
+    /// emit) must mirror swing + clock_div into the engine lane state, so the scheduler
+    /// — which reads `lanes[i].swing` / `.clock_div` — picks up the edit immediately.
+    #[test]
+    fn update_lane_params_reaches_engine_lane_state() {
+        let mut st = EngineState::new(default_set());
+        // Precondition: lane 0 starts with no overrides.
+        assert_eq!(st.seq.lane(0).unwrap().swing, None);
+        assert_eq!(st.seq.lane(0).unwrap().clock_div, None);
+
+        let mut events: Vec<EngineEvent> = Vec::new();
+        apply_command(
+            &mut st,
+            UiCommand::UpdateLaneParams {
+                lane: 0,
+                swing: Some(0.7),
+                clock_div: Some(4),
+            },
+            0,
+            &mut FakeLink::default(),
+            &mut RecordingSink::default(),
+            &mut events,
+        );
+
+        let lane = st.seq.lane(0).unwrap();
+        assert_eq!(lane.swing, Some(0.7), "swing must reach engine lane state");
+        assert_eq!(
+            lane.clock_div,
+            Some(4),
+            "clock_div must reach engine lane state"
+        );
+    }
+
+    /// H2: a local Stop under enabled Link must publish the stop to Link (clearing the
+    /// shared playing flag) AND reset the local `link_playing` latch, so the next Play
+    /// re-issues `request_start` and the remote-follow transition check stays correct.
+    #[test]
+    fn stop_publishes_link_stop_and_clears_latch() {
+        let mut st = EngineState::new(default_set());
+        let mut link = FakeLink::new();
+        link.set_enabled(true);
+        let mut events: Vec<EngineEvent> = Vec::new();
+
+        // Play under Link: arms, requests a start (marks the session playing) and
+        // records our latch.
+        apply_command(
+            &mut st,
+            UiCommand::Play,
+            0,
+            &mut link,
+            &mut RecordingSink::default(),
+            &mut events,
+        );
+        assert!(link.is_playing(), "Play under Link must start the session");
+        assert!(st.link_playing, "Play must set the local link_playing latch");
+
+        // Stop must publish the stop to Link and clear the latch.
+        apply_command(
+            &mut st,
+            UiCommand::Stop,
+            1_000,
+            &mut link,
+            &mut RecordingSink::default(),
+            &mut events,
+        );
+        assert!(
+            !link.is_playing(),
+            "Stop must publish the stop so peers follow"
+        );
+        assert!(
+            !st.link_playing,
+            "Stop must clear the local link_playing latch"
         );
     }
 

@@ -19,6 +19,23 @@ impl Id {
         &self.0
     }
 
+    /// First up to 8 *characters* of the id, for filenames/display.
+    /// Char-boundary-safe: never panics regardless of length or byte content,
+    /// unlike a raw `&id.as_str()[..8]` byte slice.
+    pub fn short(&self) -> String {
+        match self.0.char_indices().nth(8) {
+            Some((idx, _)) => self.0[..idx].to_string(),
+            None => self.0.clone(),
+        }
+    }
+
+    /// True if this id matches the format produced by `generate`/`mint_id`:
+    /// exactly 16 ASCII hex digits. Used to detect corrupt/foreign ids on load
+    /// so they can be regenerated before anything slices them.
+    pub fn is_valid(&self) -> bool {
+        self.0.len() == 16 && self.0.chars().all(|c| c.is_ascii_hexdigit())
+    }
+
     /// Deterministic generator: mix seed + counter via xorshift64 → 16 lowercase hex chars.
     /// Pure and injected: same seed+counter always yields the same Id.
     pub fn generate(seed: u64, counter: u64) -> Id {
@@ -120,6 +137,37 @@ mod tests {
     fn nil_roundtrips_and_is_default() {
         assert!(Id::nil().is_nil());
         assert_eq!(Id::default(), Id::nil());
+    }
+
+    #[test]
+    fn short_is_char_boundary_safe_for_bad_ids() {
+        // Shorter than 8 chars: must return the whole string, not panic.
+        let short: Id = serde_json::from_str(r#""abc""#).unwrap();
+        assert_eq!(short.short(), "abc");
+
+        // Multibyte chars where a raw byte-index[..8] would land mid-character.
+        let multibyte: Id = serde_json::from_str(r#""日本語abc😀""#).unwrap();
+        let out = multibyte.short();
+        assert_eq!(out.chars().count(), 8.min(multibyte.as_str().chars().count()));
+
+        // Well-formed 16-hex id: first 8 chars.
+        let good = Id::generate(1, 1);
+        assert_eq!(good.short(), &good.as_str()[..8]);
+    }
+
+    #[test]
+    fn is_valid_accepts_generated_and_nil_rejects_malformed() {
+        assert!(Id::generate(0xDEADBEEF, 1).is_valid());
+        assert!(Id::nil().is_valid(), "nil id is well-formed hex, just unassigned");
+
+        let too_short: Id = serde_json::from_str(r#""abc""#).unwrap();
+        assert!(!too_short.is_valid());
+
+        let multibyte: Id = serde_json::from_str(r#""日本語abc😀""#).unwrap();
+        assert!(!multibyte.is_valid());
+
+        let non_hex: Id = serde_json::from_str(r#""zzzzzzzzzzzzzzzz""#).unwrap();
+        assert!(!non_hex.is_valid());
     }
 
     #[test]

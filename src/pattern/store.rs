@@ -231,7 +231,7 @@ pub fn save_set(dir: &Path, set: &mut Set) -> anyhow::Result<PathBuf> {
         lane.pattern.ensure_id();
     }
     std::fs::create_dir_all(dir).context("creating set store dir")?;
-    let id_suffix = &set.id.as_str()[..8];
+    let id_suffix = set.id.short();
     let path = dir.join(format!("{}-{}.json", slug(&set.name), id_suffix));
     let dto = SetDto::from(&*set);
     let json = serde_json::to_string_pretty(&dto).context("serializing set")?;
@@ -410,6 +410,15 @@ pub fn validate_and_repair(set: &mut Set) -> Vec<String> {
         notes.push(format!("swing clamped {:.4}→{:.4}", orig_swing, set.swing));
     }
 
+    // A corrupt/foreign set file can carry an id that isn't well-formed (too short,
+    // non-hex, or multibyte). Regenerate it here so downstream code that slices the
+    // id (e.g. the save filename) always sees a valid 16-hex-char id. `is_valid()`
+    // accepts the nil id, so a nil id is left for `ensure_id()` to mint on save.
+    if !set.id.is_valid() {
+        notes.push(format!("set id '{}' malformed, regenerated", set.id.as_str()));
+        set.id = persist::mint_id();
+    }
+
     // ── per-lane ──────────────────────────────────────────────────────────────
     for (lane_idx, lane) in set.lanes.iter_mut().enumerate() {
         let lane_num = lane_idx + 1;
@@ -487,7 +496,7 @@ pub fn validate_and_repair(set: &mut Set) -> Vec<String> {
 pub fn save_user_pattern(dir: &Path, p: &mut Pattern) -> anyhow::Result<PathBuf> {
     p.ensure_id();
     std::fs::create_dir_all(dir).context("creating user-pattern store dir")?;
-    let id_suffix = &p.id.as_str()[..8];
+    let id_suffix = p.id.short();
     let path = dir.join(format!("{}-{}.json", slug(&p.name), id_suffix));
     let json = serde_json::to_string_pretty(p).context("serializing pattern")?;
     persist::write_atomic(&path, json.as_bytes())
@@ -883,6 +892,117 @@ mod tests {
         let notes = validate_and_repair(&mut set);
         assert!(notes.is_empty(), "clean set must return no repair notes");
         assert_eq!(set, original, "clean set must be unchanged");
+    }
+
+    /// H6 regression: a malformed set id (too short for the old `[..8]` byte slice)
+    /// must be repaired to a well-formed 16-hex id by `validate_and_repair`.
+    #[test]
+    fn validate_repairs_malformed_short_set_id() {
+        let mut set = Set::default_set(default_profiles());
+        set.id = serde_json::from_str(r#""abc""#).unwrap();
+        let notes = validate_and_repair(&mut set);
+        assert_eq!(set.id.as_str().len(), 16, "id must be repaired to canonical length");
+        assert!(set.id.as_str().chars().all(|c| c.is_ascii_hexdigit()));
+        assert!(
+            notes.iter().any(|n| n.contains("id") && n.contains("abc")),
+            "expected a repair note about the malformed id; got: {notes:?}"
+        );
+    }
+
+    /// H6 regression: a multibyte set id must also be repaired (not merely tolerated),
+    /// since it can never be a well-formed 16-hex id.
+    #[test]
+    fn validate_repairs_malformed_multibyte_set_id() {
+        let mut set = Set::default_set(default_profiles());
+        set.id = serde_json::from_str(r#""日本語abc😀""#).unwrap();
+        let notes = validate_and_repair(&mut set);
+        assert_eq!(set.id.as_str().len(), 16, "id must be repaired to canonical length");
+        assert!(set.id.as_str().chars().all(|c| c.is_ascii_hexdigit()));
+        assert!(!notes.is_empty(), "expected a repair note about the malformed id");
+    }
+
+    /// H6 regression: loading a set file with a corrupt/foreign id (`"id":"abc"`, fewer
+    /// than 8 bytes) must not panic, must repair the id in-memory, and a subsequent
+    /// `save_set` (which slices the id for the filename) must also not panic.
+    #[test]
+    fn load_and_resave_set_with_short_id_does_not_panic() {
+        let dir = unique_dir("h6-short-id");
+        let profile_id = default_profiles()[0].id;
+        let json = format!(
+            r#"{{
+                "version": {ver},
+                "id": "abc",
+                "name": "corrupt",
+                "bpm": 120.0,
+                "swing": 0.5,
+                "lanes": [{{
+                    "profile_id": "{profile_id}",
+                    "pattern": {{"name": "p", "desc": "", "length": 1, "data": {{"Drums": [[]]}}}},
+                    "mute": false,
+                    "solo": false,
+                    "transpose": 0,
+                    "octave": 0
+                }}]
+            }}"#,
+            ver = CURRENT_SET_VERSION
+        );
+        let path = dir.join("corrupt.json");
+        std::fs::write(&path, &json).unwrap();
+
+        // Load must not panic (old code: `&set.id.as_str()[..8]` would panic at save,
+        // but a naive fix could still panic on load if the id were sliced there too).
+        let mut loaded = load_set(&path).unwrap();
+        assert_eq!(
+            loaded.id.as_str().len(),
+            16,
+            "malformed id must be repaired on load"
+        );
+
+        // Save must not panic (this is where the original bug crashed the app).
+        let saved_path = save_set(&dir, &mut loaded).unwrap();
+        assert!(saved_path.exists());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// H6 regression: same as above but with a multibyte id, which used to be able to
+    /// panic on a UTF-8 char boundary rather than a plain out-of-range index.
+    #[test]
+    fn load_and_resave_set_with_multibyte_id_does_not_panic() {
+        let dir = unique_dir("h6-multibyte-id");
+        let profile_id = default_profiles()[0].id;
+        let json = format!(
+            r#"{{
+                "version": {ver},
+                "id": "日本語abc😀",
+                "name": "corrupt-mb",
+                "bpm": 120.0,
+                "swing": 0.5,
+                "lanes": [{{
+                    "profile_id": "{profile_id}",
+                    "pattern": {{"name": "p", "desc": "", "length": 1, "data": {{"Drums": [[]]}}}},
+                    "mute": false,
+                    "solo": false,
+                    "transpose": 0,
+                    "octave": 0
+                }}]
+            }}"#,
+            ver = CURRENT_SET_VERSION
+        );
+        let path = dir.join("corrupt-mb.json");
+        std::fs::write(&path, &json).unwrap();
+
+        let mut loaded = load_set(&path).unwrap();
+        assert_eq!(
+            loaded.id.as_str().len(),
+            16,
+            "multibyte id must be repaired on load"
+        );
+
+        let saved_path = save_set(&dir, &mut loaded).unwrap();
+        assert!(saved_path.exists());
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// A unique temp subdir per test run, so parallel tests don't collide.

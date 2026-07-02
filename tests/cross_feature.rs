@@ -286,7 +286,7 @@ fn quantized_launch_under_link_driven_beat_fires_at_bar() {
 
     seq.play(0);
     // Sync to beat 1.0 -> step 4 (mid-bar), then queue a NextBar launch.
-    seq.sync_to_beat(1.0, bpm);
+    seq.sync_to_beat(1.0, bpm, 4 * step);
     seq.tick(4 * step, &mut sink);
     let _ = seq.take_launched();
     seq.queue_launch(1, distinct_melodic("queued"), Quant::NextBar);
@@ -295,7 +295,7 @@ fn quantized_launch_under_link_driven_beat_fires_at_bar() {
     // must NOT fire before the bar boundary.
     let mut fired_before = false;
     for s in 5..=15u64 {
-        seq.sync_to_beat(s as f64 / 4.0, bpm);
+        seq.sync_to_beat(s as f64 / 4.0, bpm, s * step);
         seq.tick(s * step, &mut sink);
         if !seq.take_launched().is_empty() {
             fired_before = true;
@@ -307,7 +307,7 @@ fn quantized_launch_under_link_driven_beat_fires_at_bar() {
     );
 
     // Beat 4.0 -> step 16 (bar boundary): launch fires exactly once.
-    seq.sync_to_beat(4.0, bpm);
+    seq.sync_to_beat(4.0, bpm, 16 * step);
     seq.tick(16 * step, &mut sink);
     assert_eq!(
         seq.take_launched(),
@@ -2328,19 +2328,22 @@ fn m10_clock_in_follow_loss_persistence() {
             "expected ClockInStatus{{locked:true}} after 25 ticks"
         );
 
-        // Playhead count: 1 initial emit (step 0 on first playing tick, last_step=None)
-        // + 4 tick-driven advances (24 ticks / 6 ticks-per-step = 4) = 5 total.
-        // If the internal timer were also advancing steps (double-advance), the count
-        // would exceed 5. This confirms the clock-driven path is the sole step source
-        // while ClockIn is active (T4's set_clock_driven guard).
+        // Playhead count: 1 initial emit (playhead shown at step 0 on Start, last_step=None)
+        // + 5 tick-driven advances. H3: `on_tick` fires the step boundary on the PRE-increment
+        // 0-based count, so the FIRST F8 after Start materializes step 0 (MIDI-correct, no
+        // longer one 16th late). Across 25 ticks the boundary hits ticks 1, 7, 13, 19, 25
+        // (counts 0, 6, 12, 18, 24) = 5 advances (steps 0..=4) = 6 Playhead events total.
+        // The clock-driven path remains the SOLE step source while ClockIn is active — the
+        // internal timer never double-advances (T4's set_clock_driven guard); the extra event
+        // vs. the pre-H3 count of 5 is the initial step-0 emit, not a double-advance.
         let step_count = events
             .iter()
             .filter(|e| matches!(e, EngineEvent::Playhead { .. }))
             .count();
         assert_eq!(
-            step_count, 5,
-            "25 ticks at 120 BPM must produce exactly 5 Playhead events \
-             (1 initial + 4 tick-driven, no double-advance); got {step_count}"
+            step_count, 6,
+            "25 ticks at 120 BPM must produce exactly 6 Playhead events \
+             (1 initial + 5 tick-driven, no internal-timer double-advance); got {step_count}"
         );
 
         // Stopped from MIDI Stop.

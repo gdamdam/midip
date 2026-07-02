@@ -19,7 +19,7 @@ impl PatternRef {
     pub fn display_name(&self) -> String {
         match self {
             PatternRef::Vendored { name, .. } => name.clone(),
-            PatternRef::User(id) => id.as_str()[..8.min(id.as_str().len())].to_string(),
+            PatternRef::User(id) => id.short(),
         }
     }
 
@@ -145,6 +145,18 @@ mod tests {
 
         assert_eq!(user_ref, user_back);
         assert_eq!(vendored_ref, vendored_back);
+    }
+
+    /// H6 regression: `display_name` used to slice `id.as_str()[..8]` (guarded only by
+    /// `.min(len())`), which can still panic on a multibyte id landing mid-character.
+    /// It must never panic, for both too-short and multibyte ids.
+    #[test]
+    fn display_name_never_panics_on_malformed_user_id() {
+        let short_id: persist::Id = serde_json::from_str(r#""ab""#).unwrap();
+        assert_eq!(PatternRef::User(short_id).display_name(), "ab");
+
+        let multibyte_id: persist::Id = serde_json::from_str(r#""日本語abc😀""#).unwrap();
+        let _ = PatternRef::User(multibyte_id).display_name(); // must not panic
     }
 
     #[test]

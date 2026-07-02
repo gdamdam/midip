@@ -727,7 +727,7 @@ impl Sequencer {
     /// greedily materialize a catch-up burst of every skipped step (ghost notes).
     /// Re-anchoring makes the next tick materialize ONLY `new_step` at its
     /// correct time, skipping the intervening steps without emitting them.
-    pub fn sync_to_beat(&mut self, beat: f64, bpm: f64) {
+    pub fn sync_to_beat(&mut self, beat: f64, bpm: f64, now_micros: u64) {
         self.set.bpm = bpm;
         let new_step = step_from_beat(beat);
         self.current = new_step;
@@ -735,13 +735,23 @@ impl Sequencer {
         // and never rewind on a backward jump.
         if new_step > self.next_step {
             self.next_step = new_step;
-            // Re-anchor the accumulated clock to (new_step - 1)'s fire time so the
-            // next tick fires only new_step (no back-fill of the skipped steps).
-            // `step_from_beat(beat) >= 1` here since new_step > next_step >= 0, so
-            // `new_step - 1` does not underflow; we still saturate defensively.
+            // Re-anchor the accumulated clock so the next tick fires ONLY `new_step`
+            // (no back-fill of the skipped steps).
+            //
+            // H5: anchor from the current `now` and the beat's fractional step phase
+            // rather than `origin_micros + (new_step-1)*dur`. On a mid-session Link
+            // join `origin_micros == now` (we just called `play`) while the session
+            // beat B > 0, so the origin-based formula placed the anchor ~B*4*dur in
+            // the FUTURE and no step ever materialized. `new_step` begins at
+            // `now - frac*dur`; anchoring the previous step one `dur` earlier makes
+            // `step_due = last_step_at + dur = now - frac*dur <= now`, so `new_step`
+            // fires at its correct phase. When `origin` already equals beat-0 time
+            // (an ordinary forward jump during play) this yields exactly the same
+            // value as before, so that path is unchanged.
             let dur = step_dur_micros(self.set.bpm);
-            let prev_step = new_step.saturating_sub(1) as u64;
-            self.last_step_at = Some(self.origin_micros + prev_step * dur);
+            let frac = (beat * 4.0 - new_step as f64).clamp(0.0, 1.0);
+            let into_step = (frac * dur as f64).round() as u64;
+            self.last_step_at = Some(now_micros.saturating_sub(into_step).saturating_sub(dur));
         }
     }
 
@@ -1854,7 +1864,7 @@ mod sequencer_tests {
     #[test]
     fn sync_to_beat_sets_step_and_bpm() {
         let mut seq = Sequencer::new(set_with(vec![drum_lane_four_on_floor()]));
-        seq.sync_to_beat(2.5, 140.0); // step = floor(2.5*4) = 10
+        seq.sync_to_beat(2.5, 140.0, 0); // step = floor(2.5*4) = 10
         assert_eq!(seq.current_step(), 10);
     }
 
@@ -1911,7 +1921,7 @@ mod sequencer_tests {
                 drum_lane_hit_on_step0(16),
                 drum_lane_hit_on_step0(7),
             ]));
-            s.sync_to_beat(5.0, 120.0); // abs step = step_from_beat(5.0) = 20
+            s.sync_to_beat(5.0, 120.0, 0); // abs step = step_from_beat(5.0) = 20
             s
         };
         assert_eq!(seq.current_step(), 20); // ABSOLUTE step is unwrapped
@@ -2508,7 +2518,7 @@ mod sequencer_tests {
         // Repeatedly call sync_to_beat with the SAME beat, interleaved with tick.
         // Step 0 should appear exactly once.
         for _ in 0..5 {
-            seq.sync_to_beat(0.0, 120.0);
+            seq.sync_to_beat(0.0, 120.0, 0);
             seq.tick(0, &mut sink);
         }
 
@@ -2536,7 +2546,7 @@ mod sequencer_tests {
         // Now advance the beat to step 4 (beat 1.0 → step 4 has a kick in four-on-floor).
         // But since we need to let tick fire it, we provide a time past step 4.
         // Advance next_step_at by ticking normally for a few more steps then sync.
-        seq.sync_to_beat(1.0, 120.0); // step 4
+        seq.sync_to_beat(1.0, 120.0, 4 * dur); // step 4
         seq.tick(4 * dur, &mut sink);
 
         let kick_ons2: Vec<u64> = sink
@@ -2776,12 +2786,12 @@ mod sequencer_tests {
         seq.play(0);
 
         // Link reports beat 0.0 → step 0; tick fires step 0 (note 36).
-        seq.sync_to_beat(0.0, 120.0);
+        seq.sync_to_beat(0.0, 120.0, 0);
         seq.tick(0, &mut sink);
 
         // Link jumps forward to beat 1.0 → step 4 (skipping 1, 2, 3).
         // step 4 wraps to local step 0 in the 4-step pattern → note 36 again.
-        seq.sync_to_beat(1.0, 120.0);
+        seq.sync_to_beat(1.0, 120.0, 4 * dur);
         seq.tick(4 * dur, &mut sink);
 
         let fired_notes: Vec<u8> = sink
@@ -2820,7 +2830,7 @@ mod sequencer_tests {
         // beat for step k is k/4. Drive steps 0..=3 one at a time.
         for step in 0..4u64 {
             let beat = step as f64 / 4.0;
-            seq.sync_to_beat(beat, 120.0);
+            seq.sync_to_beat(beat, 120.0, step * dur);
             seq.tick(step * dur, &mut sink);
         }
 
@@ -3068,14 +3078,14 @@ mod sequencer_tests {
         seq.play(0);
 
         // Advance to step 2 (beat 0.5) and fire it.
-        seq.sync_to_beat(0.5, 120.0); // step 2
+        seq.sync_to_beat(0.5, 120.0, 2 * dur); // step 2
         seq.tick(2 * dur, &mut sink);
         assert_eq!(seq.current_step(), 2);
 
         let before = sink.events.len();
 
         // Backward jump to step 0 (beat 0.0). next_step must NOT rewind.
-        seq.sync_to_beat(0.0, 120.0);
+        seq.sync_to_beat(0.0, 120.0, 2 * dur);
         // current is allowed to reflect the reported beat, but next_step must stay
         // ahead so no step is re-materialized.
         seq.tick(2 * dur, &mut sink);
@@ -3420,14 +3430,14 @@ mod sequencer_tests {
         seq.play(0);
 
         // beat 0.0 → step 0; fire it.
-        seq.sync_to_beat(0.0, 120.0);
+        seq.sync_to_beat(0.0, 120.0, 0);
         seq.tick(0, &mut sink);
 
         // Queue at step 0..boundary.
         seq.queue_launch(0, drum_pattern_step0_note(50), Quant::NextBar);
 
         // Link advances to beat 4.0 → step 16 (the bar boundary). tick materializes it.
-        seq.sync_to_beat(4.0, 120.0); // step_from_beat(4.0) = 16
+        seq.sync_to_beat(4.0, 120.0, 16 * dur); // step_from_beat(4.0) = 16
         seq.tick(16 * dur, &mut sink);
 
         let new_ons = kick_note_on_abs_steps(&sink, 50, dur);

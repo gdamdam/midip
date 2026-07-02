@@ -162,21 +162,9 @@ fn pattern_ref_for_entry(
     genre: &str,
     pat: &crate::pattern::model::Pattern,
 ) -> crate::pattern::refs::PatternRef {
-    use crate::pattern::refs::PatternRef;
-    if genre == "User" {
-        PatternRef::User(pat.id.clone())
-    } else {
-        let role = match app.lib_role {
-            crate::pattern::library::LibRole::Drums => "drums",
-            crate::pattern::library::LibRole::Bass => "bass",
-            crate::pattern::library::LibRole::Synth => "synth",
-        };
-        PatternRef::Vendored {
-            role: role.to_string(),
-            genre: genre.to_string(),
-            name: pat.name.clone(),
-        }
-    }
+    // Delegate to the shared accessor so the star display, the favorites filter,
+    // and selection/actions all resolve refs through one code path.
+    app.pattern_ref_for(genre, pat)
 }
 
 /// Render the library browser into `area`.
@@ -256,31 +244,18 @@ pub fn render_library(f: &mut Frame, area: Rect, app: &App) {
 
     // Column 2: pattern list for the selected genre.
     // When fav_filter is on, only show patterns that are in favorites.
-    let all_patterns: &[crate::pattern::model::Pattern] = genres
-        .get(app.lib_genre)
-        .map(|(_, pats)| pats.as_slice())
-        .unwrap_or(&[]);
     let selected_genre_name: &str = genres
         .get(app.lib_genre)
         .map(|(name, _)| name.as_str())
         .unwrap_or("");
 
-    // Build the filtered view: (original_index, pattern) pairs
-    let visible_patterns: Vec<(usize, &crate::pattern::model::Pattern)> = all_patterns
-        .iter()
-        .enumerate()
-        .filter(|(_, p)| {
-            if app.fav_filter {
-                let r = pattern_ref_for_entry(app, selected_genre_name, p);
-                app.favorites.contains(&r)
-            } else {
-                true
-            }
-        })
-        .collect();
+    // Build the filtered view: (original_index, pattern) pairs.
+    // Use the shared accessor so render and actions index the SAME filtered list.
+    let visible_patterns: Vec<(usize, &crate::pattern::model::Pattern)> =
+        app.visible_lib_patterns();
 
     let pat_total = visible_patterns.len();
-    // lib_pattern indexes into visible_patterns when filter is on, into all_patterns otherwise.
+    // lib_pattern indexes into visible_patterns (the filtered list) everywhere.
     let pat_scroll = app
         .lib_pattern
         .saturating_sub(VISIBLE_HEIGHT / 2)

@@ -1691,12 +1691,12 @@ impl App {
                     Some(v) => format!("Lane swing {:.2}", v),
                     None => "Lane swing: global".to_string(),
                 });
-                cmds.push(self.load_focused());
+                cmds.push(self.update_focused_lane_params());
             }
             Action::ClearLaneSwing => {
                 self.clear_lane_swing();
                 self.set_status("Lane swing: global".to_string());
-                cmds.push(self.load_focused());
+                cmds.push(self.update_focused_lane_params());
             }
             Action::CycleClockDiv => {
                 self.cycle_clock_div();
@@ -1705,7 +1705,7 @@ impl App {
                     Some(d) => format!("Clock div: /{}", d),
                     None => "Clock div: default".to_string(),
                 });
-                cmds.push(self.load_focused());
+                cmds.push(self.update_focused_lane_params());
             }
             Action::Euclid { dp, dr } => {
                 if self.apply_euclid(dp, dr) {
@@ -3782,6 +3782,17 @@ impl App {
         }
     }
 
+    /// H1: push the focused lane's timing overrides (swing / clock division) to the
+    /// engine. Unlike `load_focused`, this carries the fields the scheduler actually
+    /// reads for timing, so swing/clock-div edits take effect immediately.
+    fn update_focused_lane_params(&self) -> UiCommand {
+        UiCommand::UpdateLaneParams {
+            lane: self.focus,
+            swing: self.set.lanes[self.focus].swing,
+            clock_div: self.set.lanes[self.focus].clock_div,
+        }
+    }
+
     fn toggle_step(&mut self) {
         let row = self.cur_row;
         let col = self.cur_col;
@@ -4378,6 +4389,51 @@ impl App {
         }
     }
 
+    /// Build the `PatternRef` for a library entry in the given genre.
+    /// Vendored entries (any genre other than "User") produce `PatternRef::Vendored`;
+    /// entries in the "User" genre produce `PatternRef::User(pattern.id)`.
+    /// Shared by the renderer (star display + filter) and selection/actions so the
+    /// two can never diverge.
+    pub fn pattern_ref_for(&self, genre: &str, pat: &Pattern) -> PatternRef {
+        if genre == "User" {
+            PatternRef::User(pat.id.clone())
+        } else {
+            let role = match self.lib_role {
+                LibRole::Drums => "drums",
+                LibRole::Bass => "bass",
+                LibRole::Synth => "synth",
+            };
+            PatternRef::Vendored {
+                role: role.to_string(),
+                genre: genre.to_string(),
+                name: pat.name.clone(),
+            }
+        }
+    }
+
+    /// The list of patterns currently VISIBLE in the browser for the selected genre,
+    /// as `(original_index, &Pattern)` pairs. When `fav_filter` is on, only patterns
+    /// whose `PatternRef` is in favorites are included. `lib_pattern` indexes into this
+    /// list, so the renderer and all selection/actions share one selection domain.
+    pub fn visible_lib_patterns(&self) -> Vec<(usize, &Pattern)> {
+        let map = self.current_genre_map();
+        let (genre, patterns) = match map.get_index(self.lib_genre) {
+            Some(g) => g,
+            None => return Vec::new(),
+        };
+        patterns
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| {
+                if self.fav_filter {
+                    self.favorites.contains(&self.pattern_ref_for(genre, p))
+                } else {
+                    true
+                }
+            })
+            .collect()
+    }
+
     /// Clamp lib_genre and lib_pattern to valid indices so that toggling the
     /// favorites filter (which may shrink the visible list) never leaves a
     /// selection pointing past the end of the filtered lists.
@@ -4391,11 +4447,10 @@ impl App {
         if self.lib_genre >= genre_count {
             self.lib_genre = genre_count - 1;
         }
-        let pat_count = self
-            .current_genre_map()
-            .get_index(self.lib_genre)
-            .map(|(_, v)| v.len())
-            .unwrap_or(0);
+        // Clamp against the VISIBLE (filtered) list — the same list `lib_pattern`
+        // indexes into everywhere — so toggling the favorites filter can never leave
+        // the selection past the end of what the renderer shows.
+        let pat_count = self.visible_lib_patterns().len();
         if pat_count == 0 {
             self.lib_pattern = 0;
         } else if self.lib_pattern >= pat_count {
@@ -4431,11 +4486,9 @@ impl App {
                     self.lib_pattern = 0;
                 }
                 LibCol::Pattern => {
-                    let pat_count = self
-                        .current_genre_map()
-                        .get_index(self.lib_genre)
-                        .map(|(_, v)| v.len())
-                        .unwrap_or(0);
+                    // Navigate over the VISIBLE (filtered) list so the marker the
+                    // renderer draws matches the entry actions resolve.
+                    let pat_count = self.visible_lib_patterns().len();
                     if pat_count == 0 {
                         return;
                     }
@@ -4447,9 +4500,10 @@ impl App {
     }
 
     fn selected_lib_pattern(&self) -> Option<&Pattern> {
-        let map = self.current_genre_map();
-        map.get_index(self.lib_genre)
-            .and_then(|(_, v)| v.get(self.lib_pattern))
+        // Index the VISIBLE (filtered) list — the same domain the renderer highlights.
+        self.visible_lib_patterns()
+            .get(self.lib_pattern)
+            .map(|(_, p)| *p)
     }
 
     /// Build a `PatternRef` for the currently-selected library entry.
@@ -4458,23 +4512,15 @@ impl App {
     /// Vendored entries (any genre other than "User") produce `PatternRef::Vendored`.
     /// Entries in the "User" genre produce `PatternRef::User(pattern.id)`.
     pub fn selected_pattern_ref(&self) -> Option<PatternRef> {
-        let map = self.current_genre_map();
-        let (genre, patterns) = map.get_index(self.lib_genre)?;
-        let pat = patterns.get(self.lib_pattern)?;
-        if genre == "User" {
-            Some(PatternRef::User(pat.id.clone()))
-        } else {
-            let role = match self.lib_role {
-                LibRole::Drums => "drums",
-                LibRole::Bass => "bass",
-                LibRole::Synth => "synth",
-            };
-            Some(PatternRef::Vendored {
-                role: role.to_string(),
-                genre: genre.clone(),
-                name: pat.name.clone(),
-            })
-        }
+        // Resolve the genre name, then index the VISIBLE (filtered) list so the ref
+        // built here matches the entry the renderer highlights and `f` toggles.
+        let genre = self
+            .current_genre_map()
+            .get_index(self.lib_genre)
+            .map(|(g, _)| g.clone())?;
+        let visible = self.visible_lib_patterns();
+        let (_, pat) = visible.get(self.lib_pattern)?;
+        Some(self.pattern_ref_for(&genre, pat))
     }
 }
 
@@ -8012,6 +8058,95 @@ mod tests {
         assert!(
             !app.fav_filter,
             "after second ToggleFavFilter it must be false"
+        );
+    }
+
+    /// H7 regression: with the favorites filter active and only a LATER item in the
+    /// genre favorited, the visible list is `[C]`. `lib_pattern == 0` must resolve to
+    /// C on every side (render, selection, actions) — not to A (the unfiltered item 0).
+    #[test]
+    fn fav_filter_selection_indexes_filtered_list() {
+        use crate::app::Mode;
+        use crate::devices::profiles::default_profiles;
+        use crate::pattern::library::{GenreMap, Library, LibRole};
+        use crate::pattern::model::{DrumHit, Pattern, PatternData, Set};
+        use crate::pattern::refs::PatternRef;
+        use crate::persist;
+
+        let mk = |name: &str| Pattern {
+            name: name.to_string(),
+            desc: String::new(),
+            length: 16,
+            data: PatternData::Drums(vec![
+                vec![DrumHit {
+                    note: 36,
+                    vel: 100,
+                    prob: 1.0,
+                    ratchet: 1,
+                    micro: 0,
+                    cond: TrigCond::Always,
+                }];
+                16
+            ]),
+            id: persist::Id::nil(),
+            cc: Default::default(),
+        };
+        let mut drums = GenreMap::new();
+        drums.insert(
+            "techno".to_string(),
+            vec![mk("A"), mk("B"), mk("C")],
+        );
+        let lib = Library {
+            drums,
+            bass: GenreMap::new(),
+            synth: GenreMap::new(),
+        };
+
+        let set = Set::default_set(default_profiles());
+        let mut app = App::new(set, lib);
+        app.mode = Mode::Library;
+        app.lib_role = LibRole::Drums;
+        app.lib_genre = 0;
+
+        // Favorite only C (unfiltered index 2).
+        let ref_c = PatternRef::Vendored {
+            role: "drums".to_string(),
+            genre: "techno".to_string(),
+            name: "C".to_string(),
+        };
+        app.favorites.toggle(ref_c.clone());
+
+        // Turn on the favorites filter. Visible list is now just [C]; clamp keeps
+        // lib_pattern in range (was 0, stays 0 — the only visible row).
+        app.apply(Action::ToggleFavFilter);
+        assert!(app.fav_filter);
+
+        // The renderer highlights visible_patterns[lib_pattern]; that must be C.
+        let visible = app.visible_lib_patterns();
+        assert_eq!(visible.len(), 1, "filter should leave only the favorited C");
+        assert_eq!(
+            visible[app.lib_pattern].1.name,
+            "C",
+            "renderer highlights the filtered row"
+        );
+
+        // Selection + actions must resolve to the SAME row (C), not unfiltered A.
+        assert_eq!(
+            app.selected_lib_pattern().map(|p| p.name.as_str()),
+            Some("C"),
+            "selected_lib_pattern must follow the filtered list"
+        );
+        assert_eq!(
+            app.selected_pattern_ref(),
+            Some(ref_c.clone()),
+            "selected_pattern_ref must resolve to the highlighted C"
+        );
+
+        // `f` (ToggleFavorite) must target C — here it removes C from favorites.
+        app.apply(Action::ToggleFavorite);
+        assert!(
+            !app.favorites.contains(&ref_c),
+            "ToggleFavorite must act on the highlighted C, not unfiltered A"
         );
     }
 

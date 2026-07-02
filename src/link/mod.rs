@@ -24,6 +24,12 @@ pub trait LinkClock: Send {
     fn is_playing(&self) -> bool;
     /// Quantized start: align play to the next bar boundary.
     fn request_start(&mut self, micros: u64, quantum: f64);
+    /// Publish a local stop to the shared session (start/stop sync): clears the
+    /// session `isPlaying` flag so peers follow the stop. Also lets a later
+    /// `request_start` re-align to the next bar — without it the local
+    /// playing-latch stays true after the first start and bar-realignment on the
+    /// next Play becomes a one-shot.
+    fn request_stop(&mut self, micros: u64);
 }
 
 /// Map a Link beat to a 16th-note step index: `floor(beat * 4)`.
@@ -121,6 +127,10 @@ impl LinkClock for FakeLink {
         // engine's transition check sees no spurious change after a local start.
         self.playing = true;
     }
+    fn request_stop(&mut self, _micros: u64) {
+        // Mirror the real session: publishing a stop clears the playing flag.
+        self.playing = false;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -166,6 +176,10 @@ impl LinkClock for AbletonLink {
     fn set_enabled(&mut self, on: bool) {
         self.enabled = on;
         self.link.enable(on);
+        // Start/stop sync is OFF by default in Link. Without it the session never
+        // shares `isPlaying` across peers, so `is_playing()` never reflects remote
+        // transport and `request_start`'s `set_is_playing(true, …)` never propagates.
+        self.link.enable_start_stop_sync(on);
     }
 
     fn tempo(&self) -> f64 {
@@ -232,6 +246,15 @@ impl LinkClock for AbletonLink {
         self.session_state.set_is_playing(true, link_now);
         self.session_state
             .request_beat_at_start_playing_time(0.0, quantum);
+        self.link.commit_app_session_state(&self.session_state);
+    }
+
+    /// Publish a local stop: clear the shared session's `isPlaying` flag so peers
+    /// follow the stop. Stamped in Link's own clock domain, matching `request_start`.
+    fn request_stop(&mut self, _micros: u64) {
+        self.link.capture_app_session_state(&mut self.session_state);
+        let link_now = self.link.clock_micros();
+        self.session_state.set_is_playing(false, link_now);
         self.link.commit_app_session_state(&self.session_state);
     }
 }
@@ -317,5 +340,20 @@ mod tests {
             link.is_playing(),
             "request_start must mark the session playing"
         );
+    }
+
+    #[test]
+    fn fake_link_request_stop_clears_playing_and_reenables_realign() {
+        // request_stop must publish a stop (clear playing) so that a later Play
+        // sees the session stopped and re-issues request_start — otherwise
+        // bar-realignment would be a one-shot per process.
+        let mut link = FakeLink::new();
+        link.request_start(1_000, 4.0);
+        assert!(link.is_playing());
+        link.request_stop(2_000);
+        assert!(!link.is_playing(), "request_stop must clear the playing flag");
+        // A subsequent start latches playing again.
+        link.request_start(3_000, 4.0);
+        assert!(link.is_playing());
     }
 }

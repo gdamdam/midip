@@ -7,6 +7,36 @@ feature milestone is a minor bump).
 
 ## [Unreleased]
 
+## [1.3.2] — 2026-07-02 — HIGH-severity bug fixes (timing, Link, persistence, UI)
+
+### Fixed
+- **Lane swing / clock-div edits now reach the engine (H1).** `AdjustLaneSwing`,
+  `ClearLaneSwing` and `CycleClockDiv` sent only `LoadPattern` (which copies the pattern
+  only), so the scheduler kept reading the old `swing`/`clock_div` until an unrelated reload.
+  Added a dedicated `UiCommand::UpdateLaneParams { lane, swing, clock_div }` that the handlers
+  push, so timing changes take effect immediately.
+- **Ableton Link start/stop transport sync actually works with real peers (H2).**
+  `set_enabled` now also calls `enable_start_stop_sync(on)` (it was never enabled, so
+  `isPlaying` was never shared across peers). Local Stop now publishes to Link via a new
+  `request_stop` (`set_is_playing(false, …)`), and the engine resets its `link_playing` latch
+  on Stop so bar-realignment is no longer a one-shot per process.
+- **External-clock Start is no longer one 16th late (H3).** `ClockIn::on_tick` evaluates the
+  step boundary on the pre-increment (0-based) count, so the first F8 after a MIDI Start
+  materializes step 0 (per spec), instead of waiting for the 6th clock.
+- **No more stuck notes when restarting playback (H4).** The three engine paths that call
+  `play()` while already playing (external Start, `UiCommand::Play`, Link armed-start) now
+  release sounding notes first, instead of clearing the registry with no NoteOffs.
+- **Joining a running Link session mid-song now produces notes (H5).** `sync_to_beat` anchors
+  from the current beat's fractional step phase instead of assuming beat 0 ↔ origin, so a
+  mid-session join (session beat > 0) materializes steps at their correct near-now time.
+- **Corrupt/foreign set files no longer crash Save (H6).** `validate_and_repair` now validates
+  and regenerates malformed set ids, and all id truncations use a char-boundary-safe helper —
+  a short (`"abc"`) or multibyte id can no longer panic on load or Save (session data loss).
+- **Library favorites filter no longer desyncs display from actions (H7).** Render and
+  navigation/selection/favorite actions now index the same filtered ("visible") list via a
+  shared accessor, so the highlighted row is the one that loads/favorites and the count
+  indicator matches.
+
 ## [1.3.1] — 2026-07-01 — CI green (test + formatting)
 
 ### Fixed
