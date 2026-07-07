@@ -1701,15 +1701,12 @@ pub fn spawn_engine(set: Set, mut link: Box<dyn LinkClock>) -> EngineHandle {
                     .collect();
                 virtual_idx = virtual_port_index(&new_plan);
 
-                // Always adopt the new channel/clock/lane maps (a route change can move a
-                // channel between existing ports without changing the key SET).
-                channel_to_port = new_plan.channel_to_port;
-                clock_ports = new_plan.clock_ports;
-                lane_to_port = new_plan.lane_to_port;
-
                 if new_keys != port_keys {
-                    // Release every sounding note before the topology shifts (the old
-                    // channel→port map still routes the NoteOffs to the live connections).
+                    // Release every sounding note through the OLD channel→port map and
+                    // the OLD `port_sinks` BEFORE adopting the new maps, so each NoteOff
+                    // reaches the live connection the note is actually sounding on.
+                    // Adopting the new maps first would route these NoteOffs through the
+                    // new channel map into the still-old port list, hanging hardware notes.
                     // Mirror is OFF for cleanup, so `virtual_idx` is unused here — pass None.
                     {
                         let mut fanout = PortFanoutSink {
@@ -1722,7 +1719,16 @@ pub fn spawn_engine(set: Set, mut link: Box<dyn LinkClock>) -> EngineHandle {
                         };
                         st.seq.release_all(now, &mut fanout);
                     }
+                }
 
+                // Adopt the new channel/clock/lane maps AFTER releasing on the old
+                // topology. This runs unconditionally: a route change can also move a
+                // channel between existing ports without changing the key SET.
+                channel_to_port = new_plan.channel_to_port;
+                clock_ports = new_plan.clock_ports;
+                lane_to_port = new_plan.lane_to_port;
+
+                if new_keys != port_keys {
                     // Carry over still-present connections by key; NullSink for new keys.
                     let mut new_sinks: Vec<PortSink> = Vec::with_capacity(new_keys.len());
                     for key in &new_keys {

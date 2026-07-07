@@ -3764,6 +3764,9 @@ impl App {
             self.redo.push(self.set.clone());
             self.set = prev;
             self.clamp_cursor();
+            // The in-memory Set now differs from what was last saved; mark dirty so
+            // autosave, quit confirmation, and recovery don't miss the reverted state.
+            self.dirty = true;
         }
     }
 
@@ -3772,6 +3775,8 @@ impl App {
             self.undo.push(self.set.clone());
             self.set = next;
             self.clamp_cursor();
+            // Reapplying an edit also diverges from disk — keep dirty in sync.
+            self.dirty = true;
         }
     }
 

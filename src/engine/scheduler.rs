@@ -1027,11 +1027,17 @@ impl Sequencer {
 
         // Trig condition gate runs before the probability roll.
         if !crate::pattern::trig::trig_fires(&note.cond, loop_index, self.fill_active, is_first) {
+            // This step is the intended legato target of a prior slid note (slide
+            // lookahead reads the pattern's slide flag, not the runtime trig outcome).
+            // Since the target won't fire, release the held note here or it hangs.
+            self.release_held_slide(lane_idx, swung);
             return;
         }
         // Probability is rolled once per note; a failed roll skips the entire step
-        // (no NoteOn/NoteOff, and the prior active note keeps its scheduled release).
+        // (no NoteOn/NoteOff). A prior note with a scheduled NoteOff keeps its release;
+        // a prior note held open for a slide into this step must be released here.
         if !self.rolls_fire(note.prob) {
+            self.release_held_slide(lane_idx, swung);
             return;
         }
 
@@ -1173,6 +1179,31 @@ impl Sequencer {
                 channel,
                 off_at: Some(off_at),
             });
+        }
+    }
+
+    /// Release a note the previous step left held open for a slide (`off_at == None`)
+    /// when its intended legato target step is skipped at runtime (failed trig
+    /// condition or probability roll). Without this the held note would never receive
+    /// a NoteOff and would hang. A prior note that already has a scheduled NoteOff
+    /// (`off_at == Some`) is left untouched — its release still stands.
+    fn release_held_slide(&mut self, lane_idx: usize, at: u64) {
+        if let Some(prev) = self.active[lane_idx].take() {
+            if prev.off_at.is_none() {
+                Self::enqueue(
+                    &mut self.queue,
+                    ScheduledEvent {
+                        at_micros: at,
+                        lane: lane_idx,
+                        msg: MidiMessage::NoteOff {
+                            channel: prev.channel,
+                            note: prev.note,
+                        },
+                    },
+                );
+            } else {
+                self.active[lane_idx] = Some(prev);
+            }
         }
     }
 
