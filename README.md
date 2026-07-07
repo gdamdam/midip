@@ -5,7 +5,7 @@
 **A terminal MIDI sequencer & live groovebox — built‑in profiles for the Roland AIRA Compact T‑8 & S‑1, plus a device library for any class‑compliant USB‑MIDI gear**
 
 [![License](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.2.1-success.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.3.4-success.svg)](CHANGELOG.md)
 [![Rust](https://img.shields.io/badge/rust-2021%20edition-orange.svg)](https://www.rust-lang.org)
 [![Tests](https://img.shields.io/badge/tests-994%20passing-brightgreen.svg)](CHANGELOG.md)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg)](#build--run)
@@ -619,7 +619,7 @@ hardware and are covered by a separate acceptance checklist not included in this
 
 ## Status
 
-v1.2.1 — stable release. See [`CHANGELOG.md`](CHANGELOG.md) for the full history.
+v1.3.4 — stable release. See [`CHANGELOG.md`](CHANGELOG.md) for the full history.
 
 ## License
 

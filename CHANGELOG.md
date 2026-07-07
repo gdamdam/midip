@@ -7,6 +7,11 @@ feature milestone is a minor bump).
 
 ## [Unreleased]
 
+## [1.3.4] — 2026-07-07 — Docs
+
+### Changed
+- README polish: refreshed the stale version badge and Status line to the current release.
+
 ## [1.3.3] — 2026-07-02 — CI green (formatting)
 
 ### Fixed
