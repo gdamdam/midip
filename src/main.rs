@@ -4,7 +4,7 @@ use std::io::{self, Stdout};
 use std::time::Duration;
 
 use anyhow::Result;
-use crossterm::event::{self, Event};
+use crossterm::event::{self, Event, KeyEventKind};
 use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
@@ -141,10 +141,15 @@ fn run(mut terminal: Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
         // Input: poll with ~16ms timeout for ~60fps responsiveness.
         if event::poll(Duration::from_millis(16))? {
             if let Event::Key(key) = event::read()? {
-                let action = midip::input::key_to_action(key, app.mode.clone(), app.focused_kind());
-                let cmds = app.apply(action);
-                for cmd in cmds {
-                    send_or_toast(&engine.tx, cmd, &mut app);
+                // On Windows, crossterm emits both Press and Release; only act on Press
+                // so each keystroke triggers its action once. (Unix reports only Press.)
+                if key.kind == KeyEventKind::Press {
+                    let action =
+                        midip::input::key_to_action(key, app.mode.clone(), app.focused_kind());
+                    let cmds = app.apply(action);
+                    for cmd in cmds {
+                        send_or_toast(&engine.tx, cmd, &mut app);
+                    }
                 }
             }
         }

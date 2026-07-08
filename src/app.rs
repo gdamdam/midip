@@ -2951,8 +2951,10 @@ impl App {
             Action::HelpScroll(delta) => {
                 if self.mode == Mode::Help {
                     let d = self.help_scroll as i32 + delta;
-                    self.help_scroll = d.max(0) as u16;
-                    // upper bound is clamped at render time
+                    // Saturate to u16 range: End sends a huge positive delta, so a plain
+                    // `as u16` would truncate (wrap) instead of landing at the max. Clamp
+                    // to u16::MAX here; the actual upper bound is applied at render time.
+                    self.help_scroll = d.clamp(0, u16::MAX as i32) as u16;
                 }
             }
             Action::ToggleFavorite => {
@@ -3569,6 +3571,11 @@ impl App {
             EngineEvent::Stopped => {
                 self.armed = false;
                 self.engine_playing = false;
+                // The engine discards pending launches on stop, so clear the UI QUEUED
+                // display too — otherwise lanes would show a queue that will never fire.
+                for q in self.queued.iter_mut() {
+                    *q = None;
+                }
             }
             EngineEvent::Tempo { bpm } => {
                 // Update the displayed BPM (display only — no dirty flag, no undo snapshot;
@@ -4961,6 +4968,37 @@ mod tests {
             "engine_playing must be false after Stopped"
         );
         assert!(!app.armed, "armed must be false after Stopped");
+    }
+
+    /// Stop discards pending launches in the engine, so the UI QUEUED display must
+    /// clear too — otherwise lanes show a queue that will never fire.
+    #[test]
+    fn engine_stopped_event_clears_queued_launches() {
+        let mut app = new_app();
+        app.queued[0] = Some("some-pattern".into());
+        app.on_engine_event(crate::engine::EngineEvent::Stopped);
+        assert!(
+            app.queued.iter().all(|q| q.is_none()),
+            "all queued-launch slots must be cleared after Stopped; got: {:?}",
+            app.queued
+        );
+    }
+
+    /// Help "End" sends a huge positive delta; it must saturate to the top of the
+    /// u16 range rather than truncate (wrap) back to a small offset.
+    #[test]
+    fn help_scroll_end_saturates_instead_of_truncating() {
+        let mut app = new_app();
+        app.mode = Mode::Help;
+        app.help_scroll = 1;
+        app.apply(Action::HelpScroll(i32::MAX / 2));
+        assert_eq!(
+            app.help_scroll,
+            u16::MAX,
+            "End must land at u16::MAX, not wrap around"
+        );
+        app.apply(Action::HelpScroll(i32::MIN / 2));
+        assert_eq!(app.help_scroll, 0, "Home must clamp to 0");
     }
 
     #[test]

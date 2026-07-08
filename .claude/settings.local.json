@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git show-ref *)",
+      "Bash(git symbolic-ref *)"
+    ]
+  }
+}
