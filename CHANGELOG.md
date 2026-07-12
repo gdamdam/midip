@@ -7,6 +7,55 @@ feature milestone is a minor bump).
 
 ## [Unreleased]
 
+## [1.3.7] — 2026-07-13 — Medium/low bug fixes (clock-in, chains, undo, persistence, MIDI wire, UI)
+
+### Fixed
+- **External-clock Stop→Continue no longer poisons the tempo estimate (M3).** Stop now
+  forgets the last-tick timestamp (keeping the tempo history), so the first tick after a
+  Continue can't record the stopped gap as one giant interval — previously BPM read absurdly
+  low for ~2 beats, corrupting gate lengths, outgoing clock, and the loss timeout.
+- **Chain playback started while stopped no longer idles for bars (M4).** `PlayChain`
+  anchored entry 0 at the stale playhead's next bar boundary, but the engine restarts at
+  absolute step 0 on Play — the anchor is now 0 when stopped. Stopping the transport
+  (Space) also stops chain playback, mirroring `StopChain` stopping the transport.
+- **Undo/redo drop stale fill/audition overlays (M6).** A pending temporary fill or audition
+  snapshot taken before an undo referenced the pre-undo pattern; cancelling it later
+  overwrote the undone state with stale data.
+- **Corrupt favorites/crates/prefs files are quarantined, not silently reset (M7).** A parse
+  error now renames the file to `.json.bak` and surfaces a status note instead of loading
+  defaults and letting the next atomic save destroy the user's data. A genuinely missing
+  file still loads a fresh default with no side effects.
+- **Out-of-range CC locks and data bytes can no longer corrupt the MIDI stream (M8).**
+  `validate_and_repair` clamps per-step `CcLock{cc,val}` to 0..=127, and
+  `MidiMessage::to_bytes` masks all data bytes to 7 bits (defense in depth) — a data byte
+  ≥ 0x80 would be parsed as a status byte by the receiving device.
+- **A stray non-object .json in the sets dir no longer panics load (M9).**
+  `migrate_set_value` rejects non-object roots (top-level array/number/string) with an
+  error instead of panicking in the v0 migration's index-assign.
+- **Catalog: duplicate "DJ Sadow" in t8 downtempo (M10).** Two distinct patterns shared the
+  name; the second ("Hip-hop crossover") is renamed "DJ Sadow II" so it is reachable by
+  name refs. Existing favorites/crate refs to the old second entry already resolved to the
+  first (name lookup returns the first match), so their behavior is unchanged.
+- **Crate-entry launch takes over from chain auto-advance (M12).** `launch_ref` now applies
+  the same manual-override deactivation as `LibLoad`/`RecallScene`.
+- **Route editor Shift+C cycles ports backward again (M13).** Crossterm delivers shifted
+  letters as uppercase `Char('C')`, which the key map never matched; the shift+lowercase
+  arm is kept as a fallback for backends that don't uppercase.
+- **Drum editor rows page vertically at small terminal sizes (M15).** The voice rows now
+  window around the cursor (same idiom as the horizontal step paging) with a
+  `voices a-b/n` title indicator, so the cursor can no longer move into and edit an
+  invisible, clipped row.
+- **A panic mid-run restores the terminal and releases MIDI notes (L1).** A panic hook
+  restores the terminal *before* the message prints (it was lost to the alternate screen),
+  and an RAII guard sends the engine `Quit` (its all-notes-off flush) and joins it on every
+  exit path — clean quit, `?` error, or panic unwind — so hardware notes can't hang.
+- **Recovering a set with more lanes than the current one no longer panics (L5).**
+  `RecoveryRecover` resizes the per-lane QUEUED display to the recovered lane count.
+
+### Changed
+- `store::load_prefs` / `load_favorites` / `load_crates` now return `(value, Option<String>)`
+  so the M7 corrupt-file quarantine note can be surfaced in the status bar.
+
 ## [1.3.4] — 2026-07-07 — Docs
 
 ### Changed

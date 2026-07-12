@@ -743,8 +743,8 @@ fn favorites_and_crates_survive_rename_and_roundtrip() {
     store::save_crates(&dir, &crates).unwrap();
 
     // Round-trip both stores from disk.
-    let favs_back = store::load_favorites(&dir);
-    let crates_back = store::load_crates(&dir);
+    let (favs_back, _) = store::load_favorites(&dir);
+    let (crates_back, _) = store::load_crates(&dir);
 
     // Favorites references survive.
     assert!(

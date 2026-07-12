@@ -60,7 +60,33 @@ impl Drop for TermGuard {
     }
 }
 
+/// RAII guard: on scope exit — including a `?` error return or a panic unwind —
+/// tell the engine to Quit (its handler runs `seq.panic`, releasing every sounding
+/// note) and join it so the MIDI flush completes before the process exits.
+struct EngineQuitGuard {
+    tx: crossbeam_channel::Sender<midip::engine::UiCommand>,
+    join: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Drop for EngineQuitGuard {
+    fn drop(&mut self) {
+        let _ = self.tx.send(midip::engine::UiCommand::Quit);
+        if let Some(join) = self.join.take() {
+            let _ = join.join();
+        }
+    }
+}
+
 fn main() -> Result<()> {
+    // L1: a panic mid-run would otherwise print to the alternate screen, which the
+    // TermGuard then wipes — the message is lost and the terminal state confusing.
+    // Restore the terminal FIRST, then let the default hook print to a usable screen.
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = disable_raw_mode();
+        let _ = execute!(io::stdout(), LeaveAlternateScreen);
+        default_hook(info);
+    }));
     enable_raw_mode()?;
     let _guard = TermGuard; // restores even if run() errors / panics-unwinds
     let mut stdout = io::stdout();
@@ -103,11 +129,19 @@ fn run(mut terminal: Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
     let set = Set::default_set(profiles);
     let link = Box::new(AbletonLink::new(set.bpm));
     let engine = spawn_engine(set.clone(), link);
+    // L1: release sounding notes on EVERY exit path — the guard sends Quit (engine
+    // runs its all-notes-off panic flush) and joins, even when run() returns an
+    // error via `?` or unwinds from a panic. The clean-quit path below still sends
+    // its own Quit first; the duplicate is harmless.
+    let _engine_quit = EngineQuitGuard {
+        tx: engine.tx.clone(),
+        join: Some(engine.join),
+    };
 
     let mut app = App::new(set, library);
 
     // Load persisted mirror preference and sync engine if on.
-    let prefs = midip::pattern::store::load_prefs(&midip::config::data_dir());
+    let (prefs, prefs_note) = midip::pattern::store::load_prefs(&midip::config::data_dir());
     app.mirror_on = prefs.mirror_on;
     if prefs.mirror_on {
         send_or_toast(
@@ -118,12 +152,19 @@ fn run(mut terminal: Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
     }
 
     // Load persisted favorites.
-    app.favorites = midip::pattern::store::load_favorites(&midip::config::data_dir());
+    let (favorites, fav_note) = midip::pattern::store::load_favorites(&midip::config::data_dir());
+    app.favorites = favorites;
 
     // Load persisted crates.
-    app.crates = midip::pattern::store::load_crates(&midip::config::data_dir());
+    let (crates, crates_note) = midip::pattern::store::load_crates(&midip::config::data_dir());
+    app.crates = crates;
 
     app.set_status(lib_status);
+    // M7: a corrupt sidecar file was quarantined as .bak instead of being silently
+    // reset — surface that so the performer knows their data survived.
+    for note in [prefs_note, fav_note, crates_note].into_iter().flatten() {
+        app.set_status(note);
+    }
 
     // Crash detection: if a recovery file exists with no clean-shutdown marker,
     // the previous run was killed or crashed — prompt the performer to recover.
@@ -186,8 +227,7 @@ fn run(mut terminal: Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
         }
     }
 
-    // Best-effort join (guard restores the terminal regardless).
-    let _ = engine.join.join();
+    // EngineQuitGuard sends Quit + joins on drop (guard restores the terminal regardless).
     Ok(())
 }
 

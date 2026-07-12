@@ -119,8 +119,11 @@ pub fn key_to_action(key: KeyEvent, mode: Mode, kind: LaneKind) -> Action {
                 KeyCode::Down => Action::RouteNavLane(1),
                 KeyCode::Left => Action::RouteCycleField(-1),
                 KeyCode::Right => Action::RouteCycleField(1),
+                // Cycle port forward; Shift+C cycles backward. M13: crossterm delivers
+                // shifted letters as uppercase `Char('C')`; keep the shift+lowercase arm
+                // for backends that report the modifier without uppercasing.
+                KeyCode::Char('C') => Action::RouteCyclePort(-1),
                 KeyCode::Char('c') => {
-                    // Cycle port forward; Shift+c cycles backward.
                     if shift {
                         Action::RouteCyclePort(-1)
                     } else {
@@ -902,9 +905,17 @@ mod tests {
             key_to_action(k(KeyCode::Char('c')), Mode::RouteEditor, LaneKind::Drums),
             Action::RouteCyclePort(1)
         );
-        let shift_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::SHIFT);
+        // M13: crossterm delivers Shift+C as UPPERCASE Char('C') + SHIFT — test the
+        // real event shape, not a synthetic lowercase-with-shift one.
+        let shift_c = KeyEvent::new(KeyCode::Char('C'), KeyModifiers::SHIFT);
         assert_eq!(
             key_to_action(shift_c, Mode::RouteEditor, LaneKind::Drums),
+            Action::RouteCyclePort(-1)
+        );
+        // Fallback for backends that report SHIFT without uppercasing.
+        let shift_lc = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::SHIFT);
+        assert_eq!(
+            key_to_action(shift_lc, Mode::RouteEditor, LaneKind::Drums),
             Action::RouteCyclePort(-1)
         );
     }

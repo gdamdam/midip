@@ -61,8 +61,26 @@ pub fn render_drum_editor(f: &mut Frame, area: Rect, app: &App) {
     let (start, end) = app.visible_step_range();
     let visible_cols = start..end;
 
+    // M15: vertical voice-row window. At small terminal sizes not every voice row
+    // fits in the pane; page the rows around the cursor (same idiom as the
+    // horizontal step paging) so the cursor can never sit on an invisible row.
+    // Fixed chrome: 2 border rows + EDIT header + step numbers + euclid + detail.
+    const CHROME_ROWS: usize = 6;
+    let max_rows = (area.height as usize).saturating_sub(CHROME_ROWS).max(1);
+    let (row_start, row_end) = if voices.len() <= max_rows {
+        (0, voices.len())
+    } else {
+        let rs = ((app.cur_row / max_rows) * max_rows).min(voices.len().saturating_sub(1));
+        (rs, (rs + max_rows).min(voices.len()))
+    };
+
     let scroll_indicator = if len > 16 {
         format!("  steps {}-{}/{}", start + 1, end, len)
+    } else {
+        String::new()
+    };
+    let row_indicator = if row_end - row_start < voices.len() {
+        format!("  voices {}-{}/{}", row_start + 1, row_end, voices.len())
     } else {
         String::new()
     };
@@ -78,13 +96,14 @@ pub fn render_drum_editor(f: &mut Frame, area: Rect, app: &App) {
         extras
     };
     let title = format!(
-        " EDIT · {} · \"{}\" · {} steps · ch{}{}{} ",
+        " EDIT · {} · \"{}\" · {} steps · ch{}{}{}{} ",
         lane.profile.label,
         pattern.name,
         len,
         lane.profile.channel + 1,
         lane_extras,
         scroll_indicator,
+        row_indicator,
     );
 
     let mut lines: Vec<Line> = Vec::with_capacity(voices.len() + 4);
@@ -119,7 +138,7 @@ pub fn render_drum_editor(f: &mut Frame, area: Rect, app: &App) {
         lines.push(Line::from(spans));
     }
 
-    for (ri, voice) in voices.iter().enumerate() {
+    for (ri, voice) in voices.iter().enumerate().take(row_end).skip(row_start) {
         let focused_row = ri == app.cur_row;
         let marker = if focused_row { "▸" } else { " " };
         let voice_muted = lane.muted_voices.contains(&voice.note);
@@ -497,6 +516,45 @@ mod tests {
             "detail must contain 'Probability'"
         );
         assert!(whole.contains("Ratchet"), "detail must contain 'Ratchet'");
+    }
+
+    /// M15: at the minimum terminal size, the voice rows are windowed around the
+    /// cursor row — the cursor can never sit on a clipped, invisible row.
+    #[test]
+    fn drum_editor_windows_rows_around_cursor_at_min_size() {
+        let set = Set::default_set(default_profiles());
+        let mut app = App::new(set, empty_library());
+        app.focus = 0;
+        let voices = app.focused_lane().profile.drum_voices;
+        let last = voices.len() - 1;
+        let last_label = voices[last].label;
+        app.cur_row = last;
+        assert!(
+            voices.len() > 6,
+            "test premise: more voices than the window"
+        );
+
+        // 12 rows: 6 chrome lines leave a 6-row voice window — smaller than the
+        // voice count, so the window MUST page to keep the cursor row visible.
+        let backend = TestBackend::new(60, 12);
+        let mut term = Terminal::new(backend).unwrap();
+        let area = Rect::new(0, 0, 60, 12);
+        term.draw(|f| render_drum_editor(f, area, &app)).unwrap();
+
+        let buf = term.backend().buffer();
+        let cursor_row = (0..12)
+            .map(|y| row_string(buf, area, y))
+            .find(|r| r.contains('▸'))
+            .expect("cursor row marker must be visible at 60x12");
+        assert!(
+            cursor_row.contains(last_label),
+            "cursor row must show the last voice '{last_label}': {cursor_row:?}"
+        );
+        let whole: String = buf.content().iter().map(|c| c.symbol()).collect();
+        assert!(
+            whole.contains("voices "),
+            "windowed rows must show the voices indicator; got: {whole:?}"
+        );
     }
 
     /// §2.6: a muted voice row shows the 'M' marker in its label column.

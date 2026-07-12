@@ -909,6 +909,10 @@ impl App {
             return vec![];
         };
 
+        // M12: a manual pattern launch takes over from chain auto-advance, same as
+        // LibLoad / RecallScene (transport keeps playing; only auto-advance stops).
+        self.deactivate_chain_on_manual();
+
         let lane = self.target_lane_for(r, &pat).unwrap_or(self.focus);
 
         let name = pat.name.clone();
@@ -1229,6 +1233,12 @@ impl App {
                 cmds.push(if self.playing {
                     UiCommand::Play
                 } else {
+                    // M4: chain anchors are absolute engine steps; the engine restarts
+                    // at step 0 on the next Play, so a surviving chain would idle for
+                    // bars against its stale anchor. Stopping transport stops the chain.
+                    if self.chain_playback.is_some() {
+                        self.stop_chain_playback();
+                    }
                     UiCommand::Stop
                 });
             }
@@ -2107,6 +2117,9 @@ impl App {
                 match crate::pattern::store::load_set(&path) {
                     Ok(recovered) => {
                         self.set = recovered;
+                        // L5: the recovered set may have a different lane count; the
+                        // per-lane QUEUED display must match or self.queued[lane] panics.
+                        self.queued = vec![None; self.set.lanes.len()];
                         self.dirty = true;
                         self.undo.clear();
                         self.redo.clear();
@@ -2504,7 +2517,13 @@ impl App {
                     Some(chain) => {
                         // Anchor entry 0 at the next bar boundary; the scene recall (one
                         // quantized QueueScene at NextBar) lands on that same boundary.
-                        let anchor = Self::next_bar_boundary(self.playhead as u64);
+                        // M4: when stopped the engine restarts at absolute step 0 on Play,
+                        // so anchoring at the stale playhead would idle entry 0 for bars.
+                        let anchor = if self.playing {
+                            Self::next_bar_boundary(self.playhead as u64)
+                        } else {
+                            0
+                        };
                         self.chain_playback = Some(crate::pattern::chain::ChainPlayback {
                             chain_id: chain.id.clone(),
                             entry_idx: 0,
@@ -3771,6 +3790,10 @@ impl App {
             self.redo.push(self.set.clone());
             self.set = prev;
             self.clamp_cursor();
+            // M6: a pending fill/audition snapshot references the pre-undo pattern;
+            // cancelling it later would overwrite the restored state with stale data.
+            self.temp_transform = None;
+            self.audition = None;
             // The in-memory Set now differs from what was last saved; mark dirty so
             // autosave, quit confirmation, and recovery don't miss the reverted state.
             self.dirty = true;
@@ -3782,6 +3805,9 @@ impl App {
             self.undo.push(self.set.clone());
             self.set = next;
             self.clamp_cursor();
+            // M6: drop stale fill/audition snapshots (see undo).
+            self.temp_transform = None;
+            self.audition = None;
             // Reapplying an edit also diverges from disk — keep dirty in sync.
             self.dirty = true;
         }
@@ -4801,6 +4827,38 @@ mod tests {
         }
         app.apply(Action::Redo);
         assert_eq!(app.set, after_edit, "redo should restore the edited set");
+    }
+
+    #[test]
+    fn undo_and_redo_drop_stale_temp_transform_and_audition() {
+        // M6: a pending fill snapshot (temp_transform.original) taken before an undo
+        // references the pre-undo pattern; a later fill-cancel would overwrite the
+        // undone state with it. Undo/redo must drop both overlays.
+        let mut app = new_app();
+        app.apply(Action::FocusLane(0));
+        app.apply(Action::ToggleStep); // mutates -> pushes undo
+        app.temp_transform = Some(TempTransform {
+            lane: 0,
+            original: app.set.lanes[0].pattern.clone(),
+        });
+        app.audition = Some(AuditionPreview {
+            lane: 0,
+            pattern: app.set.lanes[0].pattern.clone(),
+        });
+        app.apply(Action::Undo);
+        assert!(app.temp_transform.is_none(), "undo drops temp_transform");
+        assert!(app.audition.is_none(), "undo drops audition");
+        app.temp_transform = Some(TempTransform {
+            lane: 0,
+            original: app.set.lanes[0].pattern.clone(),
+        });
+        app.audition = Some(AuditionPreview {
+            lane: 0,
+            pattern: app.set.lanes[0].pattern.clone(),
+        });
+        app.apply(Action::Redo);
+        assert!(app.temp_transform.is_none(), "redo drops temp_transform");
+        assert!(app.audition.is_none(), "redo drops audition");
     }
 
     #[test]
@@ -6704,6 +6762,41 @@ mod tests {
             app.set.bpm, 99.0,
             "recovered set bpm must match saved recovery"
         );
+    }
+
+    #[test]
+    fn recovery_recover_resizes_queued_to_recovered_lane_count() {
+        // L5: recovering a set with MORE lanes than the current one must resize the
+        // per-lane QUEUED display, or the next self.queued[lane] access panics.
+        let _guard = RECOVERY_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        use crate::pattern::store;
+        let data_dir = crate::config::data_dir();
+        std::fs::create_dir_all(data_dir.join("recovery")).ok();
+
+        let mut recovery_set = Set::default_set(profiles::default_profiles());
+        let extra = recovery_set.lanes[0].clone();
+        recovery_set.lanes.push(extra);
+        let n_lanes = recovery_set.lanes.len();
+        if store::save_recovery(&data_dir, &recovery_set).is_err() {
+            return;
+        }
+
+        let mut app = new_app();
+        assert!(app.queued.len() < n_lanes, "test premise: lane count grows");
+        app.mode = Mode::RecoveryPrompt;
+        app.apply(Action::RecoveryRecover);
+        store::clear_recovery(&data_dir);
+
+        assert_eq!(
+            app.queued.len(),
+            app.set.lanes.len(),
+            "queued must track the recovered lane count"
+        );
+        // The last lane is now addressable (this indexed before the fix's resize).
+        app.on_engine_event(crate::engine::EngineEvent::Launched {
+            lane: n_lanes - 1,
+            step: 0,
+        });
     }
 
     #[test]
@@ -10981,6 +11074,54 @@ mod tests {
         let pb = app.chain_playback.as_ref().expect("chain_playback armed");
         assert_eq!(pb.entry_idx, 0);
         assert!(pb.active);
+    }
+
+    #[test]
+    fn play_chain_while_stopped_anchors_at_zero() {
+        // M4: the engine restarts at absolute step 0 on Play, so a chain started while
+        // stopped must anchor entry 0 at 0 — not at the stale playhead's next bar.
+        let (mut app, c) = app_with_chain(&[(0, 1, 1), (1, 1, 1)], false);
+        app.playing = false;
+        app.playhead = 37; // stale position from before the stop
+        app.apply(Action::PlayChain(c));
+        let pb = app.chain_playback.as_ref().expect("chain_playback armed");
+        assert_eq!(pb.entry_start_step, 0, "anchor at 0 when starting stopped");
+        assert!(app.playing, "PlayChain starts transport");
+    }
+
+    #[test]
+    fn toggle_play_stop_clears_chain_playback() {
+        // M4: stopping transport invalidates the chain's absolute-step anchor, so the
+        // chain must stop too (mirrors StopChain stopping the transport).
+        let (mut app, c) = app_with_chain(&[(0, 1, 1), (1, 1, 1)], false);
+        app.apply(Action::PlayChain(c));
+        assert!(app.chain_playback.is_some());
+        app.apply(Action::TogglePlay); // stop
+        assert!(!app.playing);
+        assert!(
+            app.chain_playback.is_none(),
+            "stopping transport stops chain playback"
+        );
+    }
+
+    #[test]
+    fn launch_ref_deactivates_chain_auto_advance() {
+        // M12: a manual pattern launch (crate entry / library ref) takes over from
+        // chain auto-advance, exactly like LibLoad and RecallScene.
+        let (mut app, c) = app_with_chain(&[(0, 1, 1), (1, 1, 1)], false);
+        app.apply(Action::PlayChain(c));
+        assert!(app.chain_playback.as_ref().unwrap().active);
+        let r = PatternRef::Vendored {
+            role: "drums".to_string(),
+            genre: "techno".to_string(),
+            name: "lib-drum".to_string(),
+        };
+        let cmds = app.launch_ref(&r);
+        assert!(!cmds.is_empty(), "ref must resolve from the test library");
+        assert!(
+            !app.chain_playback.as_ref().unwrap().active,
+            "manual launch must deactivate chain auto-advance"
+        );
     }
 
     #[test]

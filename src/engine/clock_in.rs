@@ -164,6 +164,15 @@ impl ClockInState {
         self.ring_count = 0;
     }
 
+    /// Forget the last-tick timestamp while keeping the tempo history intact.
+    ///
+    /// Called on external Stop: without this, the first tick after a Continue would
+    /// record the entire stopped gap as one inter-tick interval, poisoning the
+    /// smoothed BPM estimate (and everything derived from it) for ~2 beats.
+    pub fn clear_last_tick(&mut self) {
+        self.last_tick_micros = None;
+    }
+
     /// Total number of ticks received since construction or last reset.
     pub fn tick_count(&self) -> u64 {
         self.tick_count
@@ -469,6 +478,28 @@ mod tests {
         assert!(
             !st.is_lost(2_000_000, 500_000),
             "new tick resets lost state"
+        );
+    }
+
+    // --- clear_last_tick test (M3) -------------------------------------------
+
+    #[test]
+    fn clear_last_tick_keeps_tempo_across_stop_continue_gap() {
+        // M3 regression: Stop → (long silence) → Continue must NOT record the
+        // stopped gap as one inter-tick interval.
+        let mut st = ClockInState::new();
+        feed_ticks(&mut st, RING_CAPACITY + 1, BPM_120_INTERVAL);
+        let before = st.smoothed_bpm().expect("ring full");
+        // External Stop: forget the last-tick timestamp only.
+        st.clear_last_tick();
+        // Continue after a 10-second gap; ticks resume at 120 BPM.
+        let resume = (RING_CAPACITY as u64 + 1) * BPM_120_INTERVAL + 10_000_000;
+        st.on_tick(resume);
+        st.on_tick(resume + BPM_120_INTERVAL);
+        let after = st.smoothed_bpm().expect("ring still full");
+        assert!(
+            (after - before).abs() < 0.5,
+            "tempo estimate must survive Stop/Continue gap: before {before:.2}, after {after:.2}"
         );
     }
 

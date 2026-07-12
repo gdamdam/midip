@@ -1,6 +1,8 @@
 //! MIDI wire-format messages. Channels are 0-indexed internally and masked to the
 //! low nibble (`0..=15`) on encode so an out-of-range channel can never corrupt the
-//! status byte.
+//! status byte. Data bytes (note/velocity/controller/value) are likewise masked to
+//! 7 bits (`0..=127`) — a data byte with the high bit set would be parsed as a new
+//! status byte by the receiver, corrupting the stream (M8 defense in depth).
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MidiMessage {
@@ -29,18 +31,18 @@ impl MidiMessage {
     pub fn to_bytes(&self) -> Vec<u8> {
         match *self {
             MidiMessage::NoteOn { channel, note, vel } => {
-                vec![0x90 | (channel & 0x0F), note, vel]
+                vec![0x90 | (channel & 0x0F), note & 0x7F, vel & 0x7F]
             }
             // NoteOff always sends velocity 0 (release velocity is unused here).
             MidiMessage::NoteOff { channel, note } => {
-                vec![0x80 | (channel & 0x0F), note, 0]
+                vec![0x80 | (channel & 0x0F), note & 0x7F, 0]
             }
             MidiMessage::ControlChange {
                 channel,
                 controller,
                 value,
             } => {
-                vec![0xB0 | (channel & 0x0F), controller, value]
+                vec![0xB0 | (channel & 0x0F), controller & 0x7F, value & 0x7F]
             }
             MidiMessage::Clock => vec![0xF8],
             MidiMessage::Start => vec![0xFA],
@@ -97,6 +99,34 @@ mod tests {
             note: 64,
         };
         assert_eq!(off.to_bytes(), vec![0x8F, 64, 0]);
+    }
+
+    #[test]
+    fn data_bytes_are_masked_to_seven_bits() {
+        // M8: an out-of-range data byte (>= 0x80) would read as a status byte on the
+        // wire — every data byte must be masked to 0..=127.
+        let on = MidiMessage::NoteOn {
+            channel: 0,
+            note: 200,
+            vel: 200,
+        };
+        assert_eq!(on.to_bytes(), vec![0x90, 200 & 0x7F, 200 & 0x7F]);
+        let off = MidiMessage::NoteOff {
+            channel: 0,
+            note: 0xFF,
+        };
+        assert_eq!(off.to_bytes(), vec![0x80, 0x7F, 0]);
+        let cc = MidiMessage::ControlChange {
+            channel: 0,
+            controller: 200,
+            value: 255,
+        };
+        assert_eq!(cc.to_bytes(), vec![0xB0, 200 & 0x7F, 0x7F]);
+        for m in [on, off, cc] {
+            for b in &m.to_bytes()[1..] {
+                assert!(*b <= 0x7F, "data byte {b:#04x} exceeds 7 bits");
+            }
+        }
     }
 
     #[test]

@@ -22,13 +22,37 @@ pub fn prefs_path(dir: &Path) -> PathBuf {
     dir.join("prefs.json")
 }
 
-/// Load prefs from `dir`; on any error (missing file, parse error) return `Prefs::default()`.
-pub fn load_prefs(dir: &Path) -> Prefs {
-    let path = prefs_path(dir);
-    let Ok(json) = std::fs::read_to_string(&path) else {
-        return Prefs::default();
+/// Read + parse a persisted JSON sidecar file (prefs / favorites / crates).
+///
+/// - Missing/unreadable file (fresh install): `T::default()`, no side effects, no note.
+/// - Parse error: the file is user data — quarantine it as `<path>.bak` so the next
+///   atomic save cannot silently destroy it, fall back to `T::default()`, and return
+///   a note for the caller to surface (M7; mirrors `load_set` rejecting bad files
+///   instead of clobbering them).
+fn load_sidecar<T: Default + serde::de::DeserializeOwned>(
+    path: &Path,
+    what: &str,
+) -> (T, Option<String>) {
+    let Ok(json) = std::fs::read_to_string(path) else {
+        return (T::default(), None);
     };
-    serde_json::from_str(&json).unwrap_or_default()
+    match serde_json::from_str(&json) {
+        Ok(v) => (v, None),
+        Err(e) => {
+            let bak = path.with_extension("json.bak");
+            let note = match std::fs::rename(path, &bak) {
+                Ok(()) => format!("{what} unreadable ({e}); kept as {}", bak.display()),
+                Err(re) => format!("{what} unreadable ({e}); backup failed: {re}"),
+            };
+            (T::default(), Some(note))
+        }
+    }
+}
+
+/// Load prefs from `dir`. Missing file → default. A corrupt file is quarantined as
+/// `prefs.json.bak` and reported in the returned note (see `load_sidecar`).
+pub fn load_prefs(dir: &Path) -> (Prefs, Option<String>) {
+    load_sidecar(&prefs_path(dir), "prefs")
 }
 
 /// Atomically write prefs to `dir/prefs.json`.
@@ -198,6 +222,11 @@ fn migrate_v3_to_v4(v: &mut serde_json::Value) {
 /// Run the migration ladder on a `serde_json::Value` before typed parse.
 /// Rejects files saved by a newer midip; upgrades older files in-place.
 pub fn migrate_set_value(v: &mut serde_json::Value) -> anyhow::Result<()> {
+    // M9: a stray non-object .json in the sets dir (top-level array/number/string)
+    // would panic in the v0 migration's `v["version"] = …` index-assign. Reject it.
+    if !v.is_object() {
+        return Err(anyhow!("set file root is not a JSON object"));
+    }
     let version = v["version"].as_u64().unwrap_or(0) as u32;
     if version > CURRENT_SET_VERSION {
         return Err(anyhow!(
@@ -384,6 +413,21 @@ pub fn validate_and_repair_pattern(p: &mut Pattern) -> Vec<String> {
                 notes.push("melodic note fields clamped".to_string());
             }
         }
+    }
+
+    // cc step locks (M8): cc number and value go straight to the wire — clamp to 0..=127.
+    let mut cc_repaired = false;
+    for lock in p.cc.iter_mut().flatten() {
+        let orig_cc = lock.cc;
+        lock.cc = lock.cc.min(127);
+        let orig_val = lock.val;
+        lock.val = lock.val.min(127);
+        if lock.cc != orig_cc || lock.val != orig_val {
+            cc_repaired = true;
+        }
+    }
+    if cc_repaired {
+        notes.push("cc lock fields clamped".to_string());
     }
 
     notes
@@ -660,12 +704,10 @@ pub fn favorites_path(dir: &Path) -> PathBuf {
     dir.join("favorites.json")
 }
 
-pub fn load_favorites(dir: &Path) -> Favorites {
-    let path = favorites_path(dir);
-    let Ok(json) = std::fs::read_to_string(&path) else {
-        return Favorites::default();
-    };
-    serde_json::from_str(&json).unwrap_or_default()
+/// Load favorites from `dir`. Missing file → default. A corrupt file is quarantined
+/// as `favorites.json.bak` and reported in the returned note (see `load_sidecar`).
+pub fn load_favorites(dir: &Path) -> (Favorites, Option<String>) {
+    load_sidecar(&favorites_path(dir), "favorites")
 }
 
 pub fn save_favorites(dir: &Path, favs: &Favorites) -> anyhow::Result<()> {
@@ -789,14 +831,11 @@ pub fn crates_path(dir: &Path) -> PathBuf {
     dir.join("crates.json")
 }
 
-/// Load the crate index from `dir/crates.json`.
-/// Returns `CrateIndex::default()` on any error (missing file, parse error).
-pub fn load_crates(dir: &Path) -> CrateIndex {
-    let path = crates_path(dir);
-    let Ok(json) = std::fs::read_to_string(&path) else {
-        return CrateIndex::default();
-    };
-    serde_json::from_str(&json).unwrap_or_default()
+/// Load the crate index from `dir/crates.json`. Missing file → default. A corrupt
+/// file is quarantined as `crates.json.bak` and reported in the returned note
+/// (see `load_sidecar`).
+pub fn load_crates(dir: &Path) -> (CrateIndex, Option<String>) {
+    load_sidecar(&crates_path(dir), "crates")
 }
 
 /// Atomically write the crate index to `dir/crates.json`, stamping the current version.
@@ -886,6 +925,58 @@ mod tests {
             assert_eq!(hit.ratchet, 8, "ratchet must be clamped to 8");
         }
         assert!(!notes.is_empty());
+    }
+
+    #[test]
+    fn validate_clamps_cc_locks_and_roundtrips_to_valid_wire_bytes() {
+        use crate::pattern::model::CcLock;
+        // M8: cc/val feed ControlChange data bytes directly — out-of-range values
+        // (e.g. a hand-edited file) must be clamped to the 7-bit wire range.
+        let mut set = Set::default_set(default_profiles());
+        if let PatternData::Drums(ref mut v) = set.lanes[0].pattern.data {
+            v[0] = vec![DrumHit {
+                note: 36,
+                vel: 200,
+                prob: 1.0,
+                ratchet: 1,
+                micro: 0,
+                cond: TrigCond::Always,
+            }];
+        }
+        set.lanes[0]
+            .pattern
+            .set_step_cc(0, vec![CcLock { cc: 200, val: 200 }]);
+        let notes = validate_and_repair(&mut set);
+        assert!(
+            notes.iter().any(|n| n.contains("cc lock")),
+            "cc repair must be reported; got {notes:?}"
+        );
+        let lock = &set.lanes[0].pattern.step_cc(0)[0];
+        assert_eq!(lock.cc, 127, "cc number clamped to 127");
+        assert_eq!(lock.val, 127, "cc value clamped to 127");
+        // Round-trip the repaired values onto the wire: all data bytes valid.
+        let msgs = [
+            crate::midi::message::MidiMessage::NoteOn {
+                channel: 0,
+                note: 36,
+                vel: match &set.lanes[0].pattern.data {
+                    PatternData::Drums(v) => v[0][0].vel,
+                    _ => unreachable!(),
+                },
+            },
+            crate::midi::message::MidiMessage::ControlChange {
+                channel: 0,
+                controller: lock.cc,
+                value: lock.val,
+            },
+        ];
+        for m in msgs {
+            let bytes = m.to_bytes();
+            assert!(bytes[0] >= 0x80, "status byte");
+            for b in &bytes[1..] {
+                assert!(*b <= 0x7F, "data byte {b:#04x} must be 7-bit");
+            }
+        }
     }
 
     #[test]
@@ -1082,6 +1173,33 @@ mod tests {
             migrate_set_value(&mut v).is_err(),
             "a future-version file must be rejected"
         );
+    }
+
+    #[test]
+    fn non_object_root_is_rejected_not_panicking() {
+        // M9: a stray non-object .json (top-level array/number/string) previously
+        // panicked in the v0 migration's `v["version"] = …` index-assign.
+        for mut v in [
+            serde_json::json!([1, 2, 3]),
+            serde_json::json!(42),
+            serde_json::json!("hello"),
+        ] {
+            assert!(
+                migrate_set_value(&mut v).is_err(),
+                "non-object root {v} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn load_set_non_object_root_errors_instead_of_panicking() {
+        // M9 end-to-end: a stray `[1,2,3]` file in the sets dir loads as Err, no panic.
+        let dir = unique_dir("non-object-root");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("stray.json");
+        std::fs::write(&path, b"[1,2,3]").unwrap();
+        assert!(load_set(&path).is_err(), "non-object root must be an error");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -1611,8 +1729,9 @@ mod tests {
         let dir = unique_dir("prefs-roundtrip");
         let prefs = Prefs { mirror_on: true };
         save_prefs(&dir, &prefs).unwrap();
-        let loaded = load_prefs(&dir);
+        let (loaded, note) = load_prefs(&dir);
         assert_eq!(loaded, prefs, "mirror_on must survive save/load round-trip");
+        assert!(note.is_none(), "clean round-trip emits no note");
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -1620,12 +1739,39 @@ mod tests {
     fn load_prefs_missing_returns_default() {
         let dir = unique_dir("prefs-missing");
         // Do NOT create prefs.json — load must return default (mirror_on=false).
-        let loaded = load_prefs(&dir);
+        let (loaded, note) = load_prefs(&dir);
         assert_eq!(loaded, Prefs::default());
         assert!(
             !loaded.mirror_on,
             "missing prefs must default to mirror_on=false"
         );
+        assert!(note.is_none(), "missing file is a fresh install, no note");
+    }
+
+    #[test]
+    fn load_prefs_corrupt_is_quarantined_not_destroyed() {
+        // M7: a parse error must NOT silently reset to default and let the next
+        // save clobber the user's file — the corrupt bytes are kept as .bak.
+        let dir = unique_dir("prefs-corrupt");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = prefs_path(&dir);
+        std::fs::write(&path, b"{not json").unwrap();
+        let (loaded, note) = load_prefs(&dir);
+        assert_eq!(
+            loaded,
+            Prefs::default(),
+            "corrupt prefs fall back to default"
+        );
+        assert!(note.is_some(), "corruption is surfaced to the caller");
+        assert!(!path.exists(), "corrupt file moved out of the save path");
+        let bak = path.with_extension("json.bak");
+        assert_eq!(
+            std::fs::read(&bak).unwrap(),
+            b"{not json",
+            "original bytes preserved in {}",
+            bak.display()
+        );
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     // ── Task 4: user-pattern store ───────────────────────────────────────────
@@ -1847,7 +1993,7 @@ mod tests {
         favs.toggle(vendored_ref("drums"));
         favs.toggle(vendored_ref("bass"));
         save_favorites(&dir, &favs).unwrap();
-        let loaded = load_favorites(&dir);
+        let (loaded, _) = load_favorites(&dir);
         assert_eq!(loaded.version, CURRENT_FAVORITES_VERSION);
         assert_eq!(loaded.refs.len(), 2);
         assert!(loaded.contains(&vendored_ref("drums")));
@@ -1882,7 +2028,7 @@ mod tests {
         let id_before = idx.crates[ci].id.clone();
 
         save_crates(&dir, &idx).unwrap();
-        let loaded = load_crates(&dir);
+        let (loaded, _) = load_crates(&dir);
 
         assert_eq!(loaded.version, CURRENT_CRATES_VERSION);
         assert_eq!(loaded.crates.len(), 1);
@@ -2003,9 +2149,31 @@ mod tests {
             .as_nanos();
         let absent = std::env::temp_dir().join(format!("midip-crate-absent-{}", nanos));
         // Directory does not exist — must return empty default
-        let loaded = load_crates(&absent);
+        let (loaded, note) = load_crates(&absent);
         assert_eq!(loaded.version, 0);
         assert!(loaded.crates.is_empty());
+        assert!(note.is_none(), "missing file is a fresh install, no note");
+    }
+
+    #[test]
+    fn load_favorites_corrupt_is_quarantined_not_destroyed() {
+        // M7: same quarantine contract as prefs — user data survives as .bak.
+        let dir = unique_dir("favorites-corrupt");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = favorites_path(&dir);
+        std::fs::write(&path, b"[[[").unwrap();
+        let (loaded, note) = load_favorites(&dir);
+        assert!(
+            loaded.refs.is_empty(),
+            "corrupt favorites fall back to default"
+        );
+        assert!(note.is_some());
+        assert!(!path.exists());
+        assert_eq!(
+            std::fs::read(path.with_extension("json.bak")).unwrap(),
+            b"[[["
+        );
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     // ── M5a Task 2: per-lane scale + root persistence ────────────────────────

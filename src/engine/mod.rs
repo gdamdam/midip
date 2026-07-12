@@ -686,6 +686,10 @@ fn step_engine(
                 }
             }
             ClockInMsg::Stop => {
+                // M3: forget the last-tick timestamp (but keep tempo history) so the
+                // first tick after a Continue doesn't record the stopped gap as one
+                // giant interval, poisoning the smoothed BPM estimate.
+                st.clock_in_state.clear_last_tick();
                 // Release all sounding notes via the existing stop path (M1 note-safety).
                 st.seq.stop(now, sink);
                 events.push(EngineEvent::Stopped);
