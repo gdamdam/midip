@@ -493,7 +493,7 @@ mod tests {
                 key_to_action(k(KeyCode::Char(' ')), mode.clone(), LaneKind::Drums),
                 Action::TogglePlay,
                 "Space should be TogglePlay in {:?}",
-                &mode
+                mode
             );
         }
     }
@@ -513,7 +513,7 @@ mod tests {
                 key_to_action(k(KeyCode::Char('!')), mode.clone(), LaneKind::Drums),
                 Action::Panic,
                 "! should be Panic in {:?}",
-                &mode
+                mode
             );
         }
     }
@@ -971,7 +971,7 @@ mod tests {
                 key_to_action(k(KeyCode::Char(' ')), mode.clone(), LaneKind::Drums),
                 Action::TogglePlay,
                 "Space should be TogglePlay in {:?}",
-                &mode
+                mode
             );
         }
     }
@@ -992,7 +992,7 @@ mod tests {
                 key_to_action(k(KeyCode::Char('!')), mode.clone(), LaneKind::Drums),
                 Action::Panic,
                 "! should be Panic in {:?}",
-                &mode
+                mode
             );
         }
     }
