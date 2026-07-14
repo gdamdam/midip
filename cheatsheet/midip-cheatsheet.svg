@@ -1,0 +1,122 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="841.89pt" height="595.28pt" viewBox="0 0 841.89 595.28">
+<rect x="0" y="0" width="841.89" height="595.28" fill="white"/>
+<text x="28.0" y="46" font-family="Helvetica, Arial, sans-serif" font-size="26" fill="#333333">midip  —  cheat sheet</text>
+<text x="28.0" y="62" font-family="Helvetica, Arial, sans-serif" font-size="9" fill="#777777">Terminal MIDI sequencer &amp; live groovebox  ·  v1.4.1  ·  github.com/gdamdam/midip</text>
+<line x1="28.0" y1="74" x2="813.89" y2="74" stroke="#cccccc" stroke-width="0.8"/>
+<rect x="28.0" y="92" width="252.63" height="13.5" fill="#ececec"/>
+<text x="32.0" y="101.5" font-family="Helvetica, Arial, sans-serif" font-size="8.5" font-weight="bold" fill="#333333">DEVICES  [d] PICKER</text>
+<text x="32.0" y="119.7" font-family="Helvetica, Arial, sans-serif" font-size="7.6" fill="#333333">Drums: T-8 · RD-8 · DrumBrute · Circuit Drum · GM*</text>
+<text x="32.0" y="129.9" font-family="Helvetica, Arial, sans-serif" font-size="7.6" fill="#333333">Synth: S-1 · J-6 · TD-3 · monologue · MicroFreak</text>
+<text x="32.0" y="140.1" font-family="Helvetica, Arial, sans-serif" font-size="7.6" fill="#333333">       minilogue xd · Digitakt · Circuit Synth</text>
+<text x="32.0" y="150.29999999999998" font-family="Helvetica, Arial, sans-serif" font-size="7.6" fill="#333333">[d] assign per lane (kind-filtered) + re-route</text>
+<text x="32.0" y="160.49999999999997" font-family="Helvetica, Arial, sans-serif" font-size="7.6" fill="#333333">* generic fallback · add your own via devices.json</text>
+<rect x="28.0" y="178.19999999999996" width="252.63" height="13.5" fill="#ececec"/>
+<text x="32.0" y="187.69999999999996" font-family="Helvetica, Arial, sans-serif" font-size="8.5" font-weight="bold" fill="#333333">TRANSPORT</text>
+<text x="32.0" y="205.89999999999995" font-family="Helvetica, Arial, sans-serif" font-size="7.6" fill="#333333">[space] play / stop</text>
+<text x="32.0" y="216.09999999999994" font-family="Helvetica, Arial, sans-serif" font-size="7.6" fill="#333333">[esc] panic / all-notes-off   [!] full panic</text>
+<text x="32.0" y="226.29999999999993" font-family="Helvetica, Arial, sans-serif" font-size="7.6" fill="#333333">[t] type BPM  [T] tap tempo  [k] Link</text>
+<text x="32.0" y="236.49999999999991" font-family="Helvetica, Arial, sans-serif" font-size="7.6" fill="#333333">[; / '] BPM −/+   [&lt; / &gt;] swing</text>
+<text x="32.0" y="246.6999999999999" font-family="Helvetica, Arial, sans-serif" font-size="7.6" fill="#333333">[{ / }] pattern len   [L] double length</text>
+<rect x="28.0" y="264.3999999999999" width="252.63" height="13.5" fill="#ececec"/>
+<text x="32.0" y="273.8999999999999" font-family="Helvetica, Arial, sans-serif" font-size="8.5" font-weight="bold" fill="#333333">EDIT</text>
+<text x="32.0" y="292.0999999999999" font-family="Helvetica, Arial, sans-serif" font-size="7.6" fill="#333333">[tab / shift+tab] next / prev lane</text>
+<text x="32.0" y="302.2999999999999" font-family="Helvetica, Arial, sans-serif" font-size="7.6" fill="#333333">[enter] toggle step / place note   [del] clear</text>
+<text x="32.0" y="312.4999999999999" font-family="Helvetica, Arial, sans-serif" font-size="7.6" fill="#333333">[0-9] velocity bucket   [+ / −] fine vel</text>
+<text x="32.0" y="322.6999999999999" font-family="Helvetica, Arial, sans-serif" font-size="7.6" fill="#333333">[p / P] probability   [y / Y] ratchet</text>
+<text x="32.0" y="332.89999999999986" font-family="Helvetica, Arial, sans-serif" font-size="7.6" fill="#333333">[x c v] cut / copy / paste   [r / R] rotate</text>
+<rect x="28.0" y="350.59999999999985" width="252.63" height="13.5" fill="#ececec"/>
+<text x="32.0" y="360.09999999999985" font-family="Helvetica, Arial, sans-serif" font-size="8.5" font-weight="bold" fill="#333333">MOUSE  (EDIT)</text>
+<text x="32.0" y="378.29999999999984" font-family="Helvetica, Arial, sans-serif" font-size="7.6" fill="#333333">[click] toggle step · move cursor</text>
+<text x="32.0" y="388.49999999999983" font-family="Helvetica, Arial, sans-serif" font-size="7.6" fill="#333333">[drag] paint hits across cells (drums)</text>
+<text x="32.0" y="398.6999999999998" font-family="Helvetica, Arial, sans-serif" font-size="7.6" fill="#333333">[scroll] velocity of step under pointer</text>
+<text x="32.0" y="408.8999999999998" font-family="Helvetica, Arial, sans-serif" font-size="7.6" fill="#333333">MIDIP_MOUSE=0 disable (keep text selection)</text>
+<rect x="28.0" y="426.5999999999998" width="252.63" height="13.5" fill="#ececec"/>
+<text x="32.0" y="436.0999999999998" font-family="Helvetica, Arial, sans-serif" font-size="8.5" font-weight="bold" fill="#333333">DRUMS</text>
+<text x="32.0" y="454.2999999999998" font-family="Helvetica, Arial, sans-serif" font-size="7.6" fill="#333333">[← →] step   [↑ ↓] voice row</text>
+<text x="32.0" y="464.4999999999998" font-family="Helvetica, Arial, sans-serif" font-size="7.6" fill="#333333">[e / E] euclid pulses   [[ / ]] rotation</text>
+<text x="32.0" y="474.69999999999976" font-family="Helvetica, Arial, sans-serif" font-size="7.6" fill="#333333">[`] toggle voice mute on cursor row</text>
+<rect x="28.0" y="492.39999999999975" width="252.63" height="13.5" fill="#ececec"/>
+<text x="32.0" y="501.89999999999975" font-family="Helvetica, Arial, sans-serif" font-size="8.5" font-weight="bold" fill="#333333">MELODIC</text>
+<text x="32.0" y="520.0999999999998" font-family="Helvetica, Arial, sans-serif" font-size="7.6" fill="#333333">[← →] step   [↑ ↓] pitch</text>
+<text x="32.0" y="530.2999999999998" font-family="Helvetica, Arial, sans-serif" font-size="7.6" fill="#333333">[g] slide   [, / .] note len   [[ / ]] octave</text>
+<rect x="28.0" y="547.9999999999999" width="252.63" height="13.5" fill="#ececec"/>
+<text x="32.0" y="557.4999999999999" font-family="Helvetica, Arial, sans-serif" font-size="8.5" font-weight="bold" fill="#333333">CHORDS  (POLY LANES)</text>
+<text x="32.0" y="575.6999999999999" font-family="Helvetica, Arial, sans-serif" font-size="7.6" fill="#333333">[j] build scale-aware triad   [J] remove note</text>
+<text x="32.0" y="585.9" font-family="Helvetica, Arial, sans-serif" font-size="7.6" fill="#333333">note-input STACKS keys into a chord</text>
+<rect x="28.0" y="603.6" width="252.63" height="13.5" fill="#ececec"/>
+<text x="32.0" y="613.1" font-family="Helvetica, Arial, sans-serif" font-size="8.5" font-weight="bold" fill="#333333">SCALES  (MELODIC)</text>
+<text x="32.0" y="631.3000000000001" font-family="Helvetica, Arial, sans-serif" font-size="7.6" fill="#333333">[n / N] cycle scale   [h / H] root −/+</text>
+<text x="32.0" y="641.5000000000001" font-family="Helvetica, Arial, sans-serif" font-size="7.6" fill="#333333">[X] conform to scale   [I] note-input</text>
+<rect x="294.63" y="92" width="252.63" height="13.5" fill="#ececec"/>
+<text x="298.63" y="101.5" font-family="Helvetica, Arial, sans-serif" font-size="8.5" font-weight="bold" fill="#333333">NOTE INPUT  [I]</text>
+<text x="298.63" y="119.7" font-family="Helvetica, Arial, sans-serif" font-size="7.6" fill="#333333">[a s d f g h j k] white   [w e t y u] black</text>
+<text x="298.63" y="129.9" font-family="Helvetica, Arial, sans-serif" font-size="7.6" fill="#333333">[z / x] octave   [Bksp] clear   [Esc] exit</text>
+<rect x="294.63" y="147.6" width="252.63" height="13.5" fill="#ececec"/>
+<text x="298.63" y="157.1" font-family="Helvetica, Arial, sans-serif" font-size="8.5" font-weight="bold" fill="#333333">PER-STEP</text>
+<text x="298.63" y="175.29999999999998" font-family="Helvetica, Arial, sans-serif" font-size="7.6" fill="#333333">[\ / |] micro timing −/+</text>
+<text x="298.63" y="185.49999999999997" font-family="Helvetica, Arial, sans-serif" font-size="7.6" fill="#333333">[z] cycle trig cond (1:2 / 1:3 / Fill / …)</text>
+<text x="298.63" y="195.69999999999996" font-family="Helvetica, Arial, sans-serif" font-size="7.6" fill="#333333">[@ / #] add / remove CC   [$ / ^] CC val +/−</text>
+<rect x="294.63" y="213.39999999999995" width="252.63" height="13.5" fill="#ececec"/>
+<text x="298.63" y="222.89999999999995" font-family="Helvetica, Arial, sans-serif" font-size="8.5" font-weight="bold" fill="#333333">PER-LANE</text>
+<text x="298.63" y="241.09999999999994" font-family="Helvetica, Arial, sans-serif" font-size="7.6" fill="#333333">[a / _] lane swing override −/+</text>
+<text x="298.63" y="251.29999999999993" font-family="Helvetica, Arial, sans-serif" font-size="7.6" fill="#333333">[Q] cycle clock divisor (/1 /2 /3 /4)</text>
+<rect x="294.63" y="268.99999999999994" width="252.63" height="13.5" fill="#ececec"/>
+<text x="298.63" y="278.49999999999994" font-family="Helvetica, Arial, sans-serif" font-size="8.5" font-weight="bold" fill="#333333">GLOBAL</text>
+<text x="298.63" y="296.69999999999993" font-family="Helvetica, Arial, sans-serif" font-size="7.6" fill="#333333">[ctrl+z] / [u] undo   [ctrl+y / ctrl+r] redo</text>
+<text x="298.63" y="306.8999999999999" font-family="Helvetica, Arial, sans-serif" font-size="7.6" fill="#333333">[m] mute  [S] solo  [M] mirror output</text>
+<text x="298.63" y="317.0999999999999" font-family="Helvetica, Arial, sans-serif" font-size="7.6" fill="#333333">[l] library  [o] open set  [s] save</text>
+<text x="298.63" y="327.2999999999999" font-family="Helvetica, Arial, sans-serif" font-size="7.6" fill="#333333">[?] help  [q] quit (twice while playing)</text>
+<rect x="294.63" y="344.9999999999999" width="252.63" height="13.5" fill="#ececec"/>
+<text x="298.63" y="354.4999999999999" font-family="Helvetica, Arial, sans-serif" font-size="8.5" font-weight="bold" fill="#333333">ROUTING / PERFORMANCE</text>
+<text x="298.63" y="372.6999999999999" font-family="Helvetica, Arial, sans-serif" font-size="7.6" fill="#333333">[w] route editor   [d] device picker</text>
+<text x="298.63" y="382.89999999999986" font-family="Helvetica, Arial, sans-serif" font-size="7.6" fill="#333333">[W] clock-in source selector</text>
+<text x="298.63" y="393.09999999999985" font-family="Helvetica, Arial, sans-serif" font-size="7.6" fill="#333333">[b] launch quant   [C] cancel queued launch</text>
+<text x="298.63" y="403.29999999999984" font-family="Helvetica, Arial, sans-serif" font-size="7.6" fill="#333333">[i] restart lane phase   [f]/[F] fill / commit</text>
+<rect x="294.63" y="420.99999999999983" width="252.63" height="13.5" fill="#ececec"/>
+<text x="298.63" y="430.49999999999983" font-family="Helvetica, Arial, sans-serif" font-size="8.5" font-weight="bold" fill="#333333">ROUTE EDITOR  [w]</text>
+<text x="298.63" y="448.6999999999998" font-family="Helvetica, Arial, sans-serif" font-size="7.6" fill="#333333">[↑ ↓] lane   [← →] field</text>
+<text x="298.63" y="458.8999999999998" font-family="Helvetica, Arial, sans-serif" font-size="7.6" fill="#333333">[c / C] cycle port   [[ / ]] channel (1-16)</text>
+<text x="298.63" y="469.0999999999998" font-family="Helvetica, Arial, sans-serif" font-size="7.6" fill="#333333">[z] toggle MIDI clock out   [esc] close</text>
+<rect x="294.63" y="486.7999999999998" width="252.63" height="13.5" fill="#ececec"/>
+<text x="298.63" y="496.2999999999998" font-family="Helvetica, Arial, sans-serif" font-size="8.5" font-weight="bold" fill="#333333">LIBRARY  [l]</text>
+<text x="298.63" y="514.4999999999998" font-family="Helvetica, Arial, sans-serif" font-size="7.6" fill="#333333">[enter] load (queues if playing)</text>
+<text x="298.63" y="524.6999999999998" font-family="Helvetica, Arial, sans-serif" font-size="7.6" fill="#333333">[a] audition   [esc / l] close</text>
+<rect x="294.63" y="542.3999999999999" width="252.63" height="13.5" fill="#ececec"/>
+<text x="298.63" y="551.8999999999999" font-family="Helvetica, Arial, sans-serif" font-size="8.5" font-weight="bold" fill="#333333">SET MANAGER  [o]</text>
+<text x="298.63" y="570.0999999999999" font-family="Helvetica, Arial, sans-serif" font-size="7.6" fill="#333333">[enter] load   [r] rename   [a / S] save-as</text>
+<text x="298.63" y="580.3" font-family="Helvetica, Arial, sans-serif" font-size="7.6" fill="#333333">[D] duplicate  [d] delete   [n] new set</text>
+<rect x="561.26" y="92" width="252.63" height="13.5" fill="#ececec"/>
+<text x="565.26" y="101.5" font-family="Helvetica, Arial, sans-serif" font-size="8.5" font-weight="bold" fill="#333333">PATTERN  (EDIT)</text>
+<text x="565.26" y="119.7" font-family="Helvetica, Arial, sans-serif" font-size="7.6" fill="#333333">[A] save lane as user pattern   [Z] clear lane</text>
+<rect x="561.26" y="137.4" width="252.63" height="13.5" fill="#ececec"/>
+<text x="565.26" y="146.9" font-family="Helvetica, Arial, sans-serif" font-size="8.5" font-weight="bold" fill="#333333">OVERVIEW / DISPLAY</text>
+<text x="565.26" y="165.1" font-family="Helvetica, Arial, sans-serif" font-size="7.6" fill="#333333">grid marker: ² ³ ratchet · ° chance</text>
+<text x="565.26" y="175.29999999999998" font-family="Helvetica, Arial, sans-serif" font-size="7.6" fill="#333333">             ? trig-cond · ≈ microtiming</text>
+<text x="565.26" y="185.49999999999997" font-family="Helvetica, Arial, sans-serif" font-size="7.6" fill="#333333">'acc' row: per-step accent (loudest voice)</text>
+<text x="565.26" y="195.69999999999996" font-family="Helvetica, Arial, sans-serif" font-size="7.6" fill="#333333">LANES meter: 8-bin density sparkline</text>
+<text x="565.26" y="205.89999999999995" font-family="Helvetica, Arial, sans-serif" font-size="7.6" fill="#333333">MIDIP_ASCII=1 ASCII-only glyphs</text>
+<rect x="561.26" y="223.59999999999994" width="252.63" height="13.5" fill="#ececec"/>
+<text x="565.26" y="233.09999999999994" font-family="Helvetica, Arial, sans-serif" font-size="8.5" font-weight="bold" fill="#333333">CRATE / LIVE  [V]</text>
+<text x="565.26" y="251.29999999999993" font-family="Helvetica, Arial, sans-serif" font-size="7.6" fill="#333333">[↑ ↓] entry   [← →] crate   [enter] launch</text>
+<text x="565.26" y="261.49999999999994" font-family="Helvetica, Arial, sans-serif" font-size="7.6" fill="#333333">[a] audition   [z] validate   [V / esc] close</text>
+<rect x="561.26" y="279.19999999999993" width="252.63" height="13.5" fill="#ececec"/>
+<text x="565.26" y="288.69999999999993" font-family="Helvetica, Arial, sans-serif" font-size="8.5" font-weight="bold" fill="#333333">SCENES  [G]</text>
+<text x="565.26" y="306.8999999999999" font-family="Helvetica, Arial, sans-serif" font-size="7.6" fill="#333333">[↑ ↓] select   [enter] recall   [c] capture</text>
+<text x="565.26" y="317.0999999999999" font-family="Helvetica, Arial, sans-serif" font-size="7.6" fill="#333333">[r] rename  [d] dup  [x] del  [G/esc] close</text>
+<rect x="561.26" y="334.7999999999999" width="252.63" height="13.5" fill="#ececec"/>
+<text x="565.26" y="344.2999999999999" font-family="Helvetica, Arial, sans-serif" font-size="8.5" font-weight="bold" fill="#333333">CHAINS  [K]</text>
+<text x="565.26" y="362.4999999999999" font-family="Helvetica, Arial, sans-serif" font-size="7.6" fill="#333333">[enter] play   [C] stop   [j] live jump</text>
+<text x="565.26" y="372.6999999999999" font-family="Helvetica, Arial, sans-serif" font-size="7.6" fill="#333333">[c] create   [a] add scene   [X] remove entry</text>
+<text x="565.26" y="382.89999999999986" font-family="Helvetica, Arial, sans-serif" font-size="7.6" fill="#333333">[[ / ]] bars   [{ / }] repeats   [K/esc] close</text>
+<rect x="561.26" y="400.59999999999985" width="252.63" height="13.5" fill="#ececec"/>
+<text x="565.26" y="410.09999999999985" font-family="Helvetica, Arial, sans-serif" font-size="8.5" font-weight="bold" fill="#333333">GENERATIVE  [D]</text>
+<text x="565.26" y="428.29999999999984" font-family="Helvetica, Arial, sans-serif" font-size="7.6" fill="#333333">[tab] vary   [shift+tab] generate</text>
+<text x="565.26" y="438.49999999999983" font-family="Helvetica, Arial, sans-serif" font-size="7.6" fill="#333333">[d / D] density  [r / R] range  [m / M] mutate</text>
+<text x="565.26" y="448.6999999999998" font-family="Helvetica, Arial, sans-serif" font-size="7.6" fill="#333333">[z] reroll seed   [enter] commit   [esc] cancel</text>
+<rect x="561.26" y="466.3999999999998" width="252.63" height="13.5" fill="#ececec"/>
+<text x="565.26" y="475.8999999999998" font-family="Helvetica, Arial, sans-serif" font-size="8.5" font-weight="bold" fill="#333333">FAVORITES  (LIBRARY)</text>
+<text x="565.26" y="494.0999999999998" font-family="Helvetica, Arial, sans-serif" font-size="7.6" fill="#333333">[f] toggle favorite   [F] favorites-only filter</text>
+<rect x="561.26" y="511.7999999999998" width="252.63" height="13.5" fill="#ececec"/>
+<text x="565.26" y="521.2999999999997" font-family="Helvetica, Arial, sans-serif" font-size="8.5" font-weight="bold" fill="#333333">CLOCK-IN  [W]</text>
+<text x="565.26" y="539.4999999999998" font-family="Helvetica, Arial, sans-serif" font-size="7.6" fill="#333333">[↑ ↓] input port   [enter] confirm   [esc] cancel</text>
+</svg>
