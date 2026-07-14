@@ -7,6 +7,12 @@ feature milestone is a minor bump).
 
 ## [Unreleased]
 
+## [1.4.1] — 2026-07-14 — CI: rustfmt
+
+### Fixed
+- **`cargo fmt --check` clean.** Reformatted the new editor render code (multi-line
+  `Span::styled` / `assert!` calls) to satisfy the CI format gate. No behavior change.
+
 ## [1.4.0] — 2026-07-14 — Richer TUI: mouse, in-grid attributes, accent row, density meter
 
 ### Added

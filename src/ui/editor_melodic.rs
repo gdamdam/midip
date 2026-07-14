@@ -849,7 +849,10 @@ mod tests {
             .expect("hit-map must contain step 6");
         let cx = (cell.x0 + cell.x1) / 2;
         app.mouse_press(cx, cell.y0, false);
-        assert_eq!(app.cur_col, 6, "click must move the cursor to the clicked step");
+        assert_eq!(
+            app.cur_col, 6,
+            "click must move the cursor to the clicked step"
+        );
     }
 
     // ── M5a Task 3: scale name, root, and degree display ─────────────────────

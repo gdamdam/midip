@@ -205,7 +205,10 @@ pub fn render_drum_editor(f: &mut Frame, area: Rect, app: &App) {
                 ' '
             };
             if sep != ' ' {
-                spans.push(Span::styled(sep.to_string(), Style::default().fg(EMBER.dim)));
+                spans.push(Span::styled(
+                    sep.to_string(),
+                    Style::default().fg(EMBER.dim),
+                ));
             } else {
                 spans.push(Span::raw(" "));
             }
@@ -667,7 +670,10 @@ mod tests {
             "expected accent histogram row label 'acc', got: {whole:?}"
         );
         // A full-velocity hit produces the top bar glyph somewhere in the pane.
-        assert!(whole.contains('█'), "expected an accent bar glyph, got: {whole:?}");
+        assert!(
+            whole.contains('█'),
+            "expected an accent bar glyph, got: {whole:?}"
+        );
     }
 
     /// Feature #2: a step with a non-default attribute (here ratchet x2) shows its
@@ -760,7 +766,10 @@ mod tests {
             present(&app, note, 5),
             "left-click must place a hit at the clicked cell"
         );
-        assert!(!cmds.is_empty(), "toggling must emit an engine reload command");
+        assert!(
+            !cmds.is_empty(),
+            "toggling must emit an engine reload command"
+        );
         assert_eq!(app.cur_col, 5, "click moves the cursor to the clicked step");
 
         // A fresh click on the same cell toggles it back off.
