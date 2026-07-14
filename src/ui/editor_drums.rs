@@ -7,10 +7,12 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 
-use crate::app::App;
+use crate::app::{App, HitCell};
 use crate::devices::profiles::drum_label;
-use crate::pattern::model::PatternData;
-use crate::ui::theme::{cursor_style, lane_color, playhead_style, vel_color, vel_glyph};
+use crate::pattern::model::{PatternData, TrigCond};
+use crate::ui::theme::{
+    cursor_style, lane_color, playhead_style, step_attr_marker, vel_bar, vel_color, vel_glyph,
+};
 
 /// Velocity of a hit on `note` at `step`, or 0 if none.
 fn hit_vel(steps: &[Vec<crate::pattern::model::DrumHit>], step: usize, note: u8) -> u8 {
@@ -57,6 +59,16 @@ pub fn render_drum_editor(f: &mut Frame, area: Rect, app: &App) {
         PatternData::Melodic(_) => &[],
     };
 
+    // Feature #1: rebuild the mouse hit-map for this frame. Geometry below MUST match
+    // the span widths emitted while drawing, so clicks land on the cell they point at.
+    // Content starts at area.x+1 / area.y+1 (inside the border). Each voice-row label
+    // prefix is 11 cells wide; voice rows begin at content line index 2 (after the EDIT
+    // header + step-number row). Each step cell is 2 cells (glyph + marker), plus a
+    // "│ " bar separator after every 4th step.
+    let mut hits = app.hits.borrow_mut();
+    hits.clear();
+    let grid_x0 = area.x + 1 + 11;
+
     // Use app.visible_step_range() for the paged window.
     let (start, end) = app.visible_step_range();
     let visible_cols = start..end;
@@ -64,8 +76,8 @@ pub fn render_drum_editor(f: &mut Frame, area: Rect, app: &App) {
     // M15: vertical voice-row window. At small terminal sizes not every voice row
     // fits in the pane; page the rows around the cursor (same idiom as the
     // horizontal step paging) so the cursor can never sit on an invisible row.
-    // Fixed chrome: 2 border rows + EDIT header + step numbers + euclid + detail.
-    const CHROME_ROWS: usize = 6;
+    // Fixed chrome: 2 border rows + EDIT header + step numbers + accent + euclid + detail.
+    const CHROME_ROWS: usize = 7;
     let max_rows = (area.height as usize).saturating_sub(CHROME_ROWS).max(1);
     let (row_start, row_end) = if voices.len() <= max_rows {
         (0, voices.len())
@@ -156,6 +168,9 @@ pub fn render_drum_editor(f: &mut Frame, area: Rect, app: &App) {
             label_style,
         )];
 
+        // Absolute y of this voice row (content line index 2 + its offset in the window).
+        let y = area.y + 1 + 2 + (ri - row_start) as u16;
+        let mut x = grid_x0;
         for col in visible_cols.clone() {
             let vel = hit_vel(steps, col, voice.note);
             let glyph = vel_glyph(vel).to_string();
@@ -175,6 +190,62 @@ pub fn render_drum_editor(f: &mut Frame, area: Rect, app: &App) {
                 Style::default()
             };
             spans.push(Span::styled(glyph, style));
+
+            // Feature #2: the cell's trailing separator carries the step's most salient
+            // generative attribute (ratchet / probability / cond / microtiming), so it's
+            // visible at rest instead of only in the cursor detail line. Plain hits and
+            // empty cells keep a blank separator, so default patterns look unchanged.
+            let sep = if vel > 0 {
+                hit_at(steps, col, voice.note)
+                    .map(|h| {
+                        step_attr_marker(h.prob, h.ratchet, h.micro, h.cond == TrigCond::Always)
+                    })
+                    .unwrap_or(' ')
+            } else {
+                ' '
+            };
+            if sep != ' ' {
+                spans.push(Span::styled(sep.to_string(), Style::default().fg(EMBER.dim)));
+            } else {
+                spans.push(Span::raw(" "));
+            }
+
+            // Feature #1: record the clickable region (glyph + separator = 2 cells).
+            hits.push(HitCell {
+                x0: x,
+                x1: x + 1,
+                y0: y,
+                y1: y,
+                row: ri,
+                col,
+                is_drums: true,
+            });
+            x += 2;
+            if col % 4 == 3 {
+                spans.push(Span::raw("│ "));
+                x += 2;
+            }
+        }
+        lines.push(Line::from(spans));
+    }
+
+    // Feature #3: accent histogram — per visible step, the loudest hit across all voices
+    // as an 8-level bar, so the groove's dynamic shape reads at a glance. Empty steps
+    // stay blank (no phantom baseline bar). Prefix width matches the voice-row grid so
+    // the bars align under the step columns.
+    {
+        let mut spans: Vec<Span> = vec![Span::raw(format!("{:<9}│ ", "acc"))];
+        for col in visible_cols.clone() {
+            let acc = steps
+                .get(col)
+                .map(|s| s.iter().map(|h| h.vel).max().unwrap_or(0))
+                .unwrap_or(0);
+            let glyph = if acc == 0 {
+                ' '.to_string()
+            } else {
+                vel_bar(acc).to_string()
+            };
+            spans.push(Span::styled(glyph, Style::default().fg(vel_color(acc))));
             spans.push(Span::raw(" "));
             if col % 4 == 3 {
                 spans.push(Span::raw("│ "));
@@ -555,6 +626,147 @@ mod tests {
             whole.contains("voices "),
             "windowed rows must show the voices indicator; got: {whole:?}"
         );
+    }
+
+    /// Feature #3: the accent histogram row is drawn beneath the grid.
+    #[test]
+    fn drum_editor_shows_accent_histogram_row() {
+        let mut set = Set::default_set(default_profiles());
+        let mut steps: Vec<Vec<DrumHit>> = vec![Vec::new(); 16];
+        steps[0] = vec![DrumHit {
+            note: 36,
+            vel: 127,
+            prob: 1.0,
+            ratchet: 1,
+            micro: 0,
+            cond: TrigCond::Always,
+        }];
+        set.lanes[0].pattern = Pattern {
+            name: "acc".to_string(),
+            desc: String::new(),
+            length: 16,
+            data: PatternData::Drums(steps),
+            id: crate::persist::Id::nil(),
+            cc: Default::default(),
+        };
+        let mut app = App::new(set, empty_library());
+        app.focus = 0;
+        let backend = TestBackend::new(92, 18);
+        let mut term = Terminal::new(backend).unwrap();
+        let area = Rect::new(0, 0, 92, 18);
+        term.draw(|f| render_drum_editor(f, area, &app)).unwrap();
+        let whole: String = term
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(
+            whole.contains("acc"),
+            "expected accent histogram row label 'acc', got: {whole:?}"
+        );
+        // A full-velocity hit produces the top bar glyph somewhere in the pane.
+        assert!(whole.contains('█'), "expected an accent bar glyph, got: {whole:?}");
+    }
+
+    /// Feature #2: a step with a non-default attribute (here ratchet x2) shows its
+    /// marker in the grid at rest, not only in the cursor detail line.
+    #[test]
+    fn drum_editor_shows_ratchet_marker_in_grid() {
+        let mut set = Set::default_set(default_profiles());
+        let mut steps: Vec<Vec<DrumHit>> = vec![Vec::new(); 16];
+        steps[0] = vec![DrumHit {
+            note: 36,
+            vel: 100,
+            prob: 1.0,
+            ratchet: 2,
+            micro: 0,
+            cond: TrigCond::Always,
+        }];
+        set.lanes[0].pattern = Pattern {
+            name: "rat".to_string(),
+            desc: String::new(),
+            length: 16,
+            data: PatternData::Drums(steps),
+            id: crate::persist::Id::nil(),
+            cc: Default::default(),
+        };
+        let mut app = App::new(set, empty_library());
+        app.focus = 0;
+        // Move the cursor off step 0 so the marker isn't obscured by the cursor cell.
+        app.cur_col = 8;
+        let backend = TestBackend::new(92, 18);
+        let mut term = Terminal::new(backend).unwrap();
+        let area = Rect::new(0, 0, 92, 18);
+        term.draw(|f| render_drum_editor(f, area, &app)).unwrap();
+        let whole: String = term
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(
+            whole.contains('²'),
+            "expected ratchet-x2 marker ² in the grid, got: {whole:?}"
+        );
+    }
+
+    /// Feature #1: a left-click on a drum cell toggles that step, exactly as the
+    /// keyboard would. Uses the render-time hit-map, so it exercises the real geometry.
+    #[test]
+    fn mouse_click_toggles_drum_step_via_hitmap() {
+        fn present(app: &App, note: u8, col: usize) -> bool {
+            match &app.set.lanes[0].pattern.data {
+                PatternData::Drums(steps) => steps
+                    .get(col)
+                    .map(|s| s.iter().any(|h| h.note == note))
+                    .unwrap_or(false),
+                _ => false,
+            }
+        }
+        let mut set = Set::default_set(default_profiles());
+        set.lanes[0].pattern = Pattern {
+            name: "click".to_string(),
+            desc: String::new(),
+            length: 16,
+            data: PatternData::Drums(vec![Vec::new(); 16]),
+            id: crate::persist::Id::nil(),
+            cc: Default::default(),
+        };
+        let mut app = App::new(set, empty_library());
+        app.focus = 0;
+
+        let area = Rect::new(0, 0, 92, 18);
+        let backend = TestBackend::new(92, 18);
+        let mut term = Terminal::new(backend).unwrap();
+        term.draw(|f| render_drum_editor(f, area, &app)).unwrap();
+
+        // Find the recorded cell for voice row 0, step 5.
+        let cell = app
+            .hits
+            .borrow()
+            .iter()
+            .find(|c| c.is_drums && c.row == 0 && c.col == 5)
+            .copied()
+            .expect("hit-map must contain voice 0 / step 5");
+        let note = crate::devices::profiles::DRUM_VOICES[0].note;
+        let cx = (cell.x0 + cell.x1) / 2;
+
+        assert!(!present(&app, note, 5), "step starts empty");
+        let cmds = app.mouse_press(cx, cell.y0, false);
+        assert!(
+            present(&app, note, 5),
+            "left-click must place a hit at the clicked cell"
+        );
+        assert!(!cmds.is_empty(), "toggling must emit an engine reload command");
+        assert_eq!(app.cur_col, 5, "click moves the cursor to the clicked step");
+
+        // A fresh click on the same cell toggles it back off.
+        app.mouse_release();
+        app.mouse_press(cx, cell.y0, false);
+        assert!(!present(&app, note, 5), "second click removes the hit");
     }
 
     /// §2.6: a muted voice row shows the 'M' marker in its label column.

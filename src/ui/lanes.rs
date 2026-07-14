@@ -10,7 +10,7 @@ use crate::app::App;
 #[cfg(test)]
 use crate::pattern::model::TrigCond;
 use crate::pattern::model::{Lane, PatternData};
-use crate::ui::theme::{lane_color, playhead_style, EMBER};
+use crate::ui::theme::{lane_color, playhead_style, vel_bar, EMBER};
 
 /// Compact label derived from profile id: "T-8 DRUM" -> "DRUM", "T-8 BASS" -> "BASS",
 /// "S-1 SYNTH" -> "SYNTH". Falls back to the raw label for unknown profiles.
@@ -50,6 +50,47 @@ fn activity_strip(lane: &Lane) -> String {
         }
     }
     s
+}
+
+/// Compact per-lane density sparkline (a mixer "meter"): the pattern is split into 8
+/// bins and each bin's bar height reflects the fraction of its steps that carry content.
+/// This answers "how busy is this lane?" at a glance across the WHOLE pattern — including
+/// the steps the 16-cell activity strip only point-samples on long (32/64-step) patterns.
+/// An empty bin renders blank so a sparse lane reads as mostly-empty, not a flat floor.
+fn density_sparkline(lane: &Lane) -> String {
+    const BINS: usize = 8;
+    let len = lane.pattern.length.max(1);
+    let filled_at = |i: usize| -> bool {
+        match &lane.pattern.data {
+            PatternData::Drums(s) => s.get(i).map(|st| !st.is_empty()).unwrap_or(false),
+            PatternData::Melodic(s) => s.get(i).map(|st| !st.is_empty()).unwrap_or(false),
+        }
+    };
+    let mut out = String::with_capacity(BINS);
+    for b in 0..BINS {
+        let start = b * len / BINS;
+        // Guarantee each bin spans at least one step even when len < BINS.
+        let end = ((b + 1) * len / BINS).max(start + 1).min(len);
+        let (mut filled, mut total) = (0usize, 0usize);
+        for i in start..end {
+            total += 1;
+            if filled_at(i) {
+                filled += 1;
+            }
+        }
+        let frac = if total == 0 {
+            0.0
+        } else {
+            filled as f32 / total as f32
+        };
+        if frac <= 0.0 {
+            out.push(' ');
+        } else {
+            // Map density 0..1 onto the 8-level bar ramp via a nominal velocity.
+            out.push(vel_bar((frac * 127.0).round() as u8));
+        }
+    }
+    out
 }
 
 fn lane_line(idx: usize, app: &App) -> Line<'static> {
@@ -129,6 +170,17 @@ fn lane_line(idx: usize, app: &App) -> Line<'static> {
         spans.push(Span::styled(ch.to_string(), cell_style));
     }
     spans.push(Span::styled("]".to_string(), base_style));
+
+    // Density sparkline (mixer meter): overall busyness across the whole pattern, drawn
+    // dim so it reads as secondary to the presence strip. Skipped entirely for an empty
+    // lane (all-blank sparkline) so it never adds visual noise.
+    let spark = density_sparkline(lane);
+    if !spark.trim().is_empty() {
+        let spark_style = Style::default()
+            .fg(lane_color(lane.profile.id))
+            .add_modifier(Modifier::DIM);
+        spans.push(Span::styled(format!("  {spark}"), spark_style));
+    }
 
     // QUEUED marker: shown after the activity strip when a launch is pending.
     // EMBER.warn (amber) is the right role: pending/attention, not yet committed.
@@ -459,6 +511,81 @@ mod tests {
         assert!(
             drum_row.contains('●'),
             "overview strip must show ● for 32-step hit: {drum_row:?}"
+        );
+    }
+
+    // --- density sparkline (mixer meter) ---------------------------------
+
+    #[test]
+    fn density_sparkline_is_eight_cells_and_reflects_fill() {
+        use crate::pattern::model::{DrumHit, PatternData};
+        let mut app = make_app();
+        // 16-step pattern, hits on every step of the first half, none in the second.
+        if let PatternData::Drums(ref mut steps) = app.set.lanes[0].pattern.data {
+            *steps = vec![Vec::new(); 16];
+            for s in steps.iter_mut().take(8) {
+                *s = vec![DrumHit {
+                    note: 36,
+                    vel: 100,
+                    prob: 1.0,
+                    ratchet: 1,
+                    micro: 0,
+                    cond: TrigCond::Always,
+                }];
+            }
+        }
+        app.set.lanes[0].pattern.length = 16;
+
+        let spark = density_sparkline(&app.set.lanes[0]);
+        assert_eq!(spark.chars().count(), 8, "sparkline is always 8 cells");
+        let cells: Vec<char> = spark.chars().collect();
+        // Bins 0..=3 cover the fully-filled first half -> a bar glyph, never blank.
+        for (b, &c) in cells.iter().enumerate().take(4) {
+            assert_ne!(c, ' ', "dense bin {b} must render a bar, got {spark:?}");
+        }
+        // Bins 4..=7 cover the empty second half -> blank.
+        for (b, &c) in cells.iter().enumerate().skip(4) {
+            assert_eq!(c, ' ', "empty bin {b} must be blank, got {spark:?}");
+        }
+    }
+
+    #[test]
+    fn density_sparkline_all_blank_for_empty_lane() {
+        let app = make_app();
+        // A default lane with no hits produces an all-blank sparkline (skipped in render).
+        let spark = density_sparkline(&app.set.lanes[0]);
+        assert!(
+            spark.trim().is_empty(),
+            "empty lane sparkline must be all blank, got {spark:?}"
+        );
+    }
+
+    #[test]
+    fn lanes_render_shows_density_meter_for_busy_lane() {
+        use crate::pattern::model::{DrumHit, PatternData};
+        let mut app = make_app();
+        if let PatternData::Drums(ref mut steps) = app.set.lanes[0].pattern.data {
+            *steps = vec![Vec::new(); 16];
+            for s in steps.iter_mut() {
+                *s = vec![DrumHit {
+                    note: 36,
+                    vel: 127,
+                    prob: 1.0,
+                    ratchet: 1,
+                    micro: 0,
+                    cond: TrigCond::Always,
+                }];
+            }
+        }
+        app.set.lanes[0].pattern.length = 16;
+        let (term, area) = render(&app, 100, 5);
+        let buf = term.backend().buffer();
+        let rows = all_rows(buf, area);
+        let drum_row = rows.iter().find(|r| r.contains("DRUM")).expect("DRUM row");
+        // A fully-dense lane meters at the top bar glyph.
+        assert!(
+            drum_row.contains('█'),
+            "busy lane must show a full density meter bar: {drum_row:?}"
         );
     }
 

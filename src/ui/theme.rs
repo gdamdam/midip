@@ -165,6 +165,53 @@ pub fn playhead_style() -> Style {
     Style::default().bg(EMBER.playhead)
 }
 
+/// Pure inner: the most salient per-step generative attribute as a single 1-cell
+/// marker, or `' '` when the step is "plain". Priority (a step can carry several):
+/// ratchet subdivision > probability < 100% > non-default trig condition > microtiming.
+/// A plain step (ratchet 1, prob 1.0, default cond, micro 0) returns a space so
+/// default patterns render byte-for-byte as before.
+pub fn step_attr_marker_inner(
+    prob: f32,
+    ratchet: u8,
+    micro: i16,
+    cond_default: bool,
+    ascii: bool,
+) -> char {
+    if ratchet >= 2 {
+        if ascii {
+            // Ratchets above 9 are not reachable in practice; clamp to one digit.
+            return std::char::from_digit((ratchet as u32).min(9), 10).unwrap_or('#');
+        }
+        return match ratchet {
+            2 => '²',
+            3 => '³',
+            4 => '⁴',
+            5 => '⁵',
+            6 => '⁶',
+            7 => '⁷',
+            8 => '⁸',
+            9 => '⁹',
+            _ => '⁺', // "more"
+        };
+    }
+    if prob < 0.999 {
+        // A step that may or may not fire — "chance".
+        return if ascii { '%' } else { '°' };
+    }
+    if !cond_default {
+        return '?';
+    }
+    if micro != 0 {
+        return if ascii { '~' } else { '≈' };
+    }
+    ' '
+}
+
+/// Per-step attribute marker (see `step_attr_marker_inner`), honoring `MIDIP_ASCII`.
+pub fn step_attr_marker(prob: f32, ratchet: u8, micro: i16, cond_default: bool) -> char {
+    step_attr_marker_inner(prob, ratchet, micro, cond_default, config::ascii_mode())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -269,6 +316,36 @@ mod tests {
     fn cursor_and_playhead_styles_are_non_default() {
         assert_ne!(cursor_style(), Style::default());
         assert_ne!(playhead_style(), Style::default());
+    }
+
+    #[test]
+    fn step_attr_marker_plain_step_is_blank() {
+        // Default step: no ratchet, full probability, default cond, no micro -> space,
+        // so existing patterns render unchanged.
+        assert_eq!(step_attr_marker_inner(1.0, 1, 0, true, false), ' ');
+        assert_eq!(step_attr_marker_inner(1.0, 1, 0, true, true), ' ');
+    }
+
+    #[test]
+    fn step_attr_marker_ratchet_takes_priority() {
+        // Ratchet outranks probability when both are set.
+        assert_eq!(step_attr_marker_inner(0.5, 3, 0, true, false), '³');
+        // ASCII path yields a plain digit.
+        assert_eq!(step_attr_marker_inner(0.5, 3, 0, true, true), '3');
+        // Ratchets beyond the table degrade to the "more" glyph, never panic.
+        assert_eq!(step_attr_marker_inner(1.0, 12, 0, true, false), '⁺');
+    }
+
+    #[test]
+    fn step_attr_marker_probability_condition_micro_order() {
+        // Probability < 100% (no ratchet).
+        assert_eq!(step_attr_marker_inner(0.5, 1, 0, true, false), '°');
+        assert_eq!(step_attr_marker_inner(0.5, 1, 0, true, true), '%');
+        // Non-default trig condition.
+        assert_eq!(step_attr_marker_inner(1.0, 1, 0, false, false), '?');
+        // Microtiming only.
+        assert_eq!(step_attr_marker_inner(1.0, 1, 12, true, false), '≈');
+        assert_eq!(step_attr_marker_inner(1.0, 1, 12, true, true), '~');
     }
 
     #[test]

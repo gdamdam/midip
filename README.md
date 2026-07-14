@@ -5,9 +5,9 @@
 **A terminal MIDI sequencer & live groovebox — built‑in profiles for the Roland AIRA Compact T‑8 & S‑1, plus a device library for any class‑compliant USB‑MIDI gear**
 
 [![License](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.3.4-success.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.4.0-success.svg)](CHANGELOG.md)
 [![Rust](https://img.shields.io/badge/rust-2021%20edition-orange.svg)](https://www.rust-lang.org)
-[![Tests](https://img.shields.io/badge/tests-994%20passing-brightgreen.svg)](CHANGELOG.md)
+[![Tests](https://img.shields.io/badge/tests-1010%20passing-brightgreen.svg)](CHANGELOG.md)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg)](#build--run)
 [![Built with ratatui](https://img.shields.io/badge/TUI-ratatui-blueviolet.svg)](https://ratatui.rs)
 
@@ -146,7 +146,7 @@ Other commands:
 
 ```sh
 cargo build --release        # just build the binary (target/release/midip)
-cargo test                   # run the test suite (994 tests, no hardware needed)
+cargo test                   # run the test suite (1010 tests, no hardware needed)
 ```
 
 > Run it in a real terminal (not piped) — it takes over the screen while running and restores
@@ -614,7 +614,7 @@ cargo test
 The engine writes through a `MidiSink` trait, so playback, scheduling, slides, probability,
 ratcheting, polymeter, quantized launch, favorites, crates, scale-aware editing, and the
 reducer are all tested with a recording sink — **no hardware needed**. UI views are checked
-with ratatui's `TestBackend`. 994 tests, 0 failures. (Live MIDI and Ableton Link require
+with ratatui's `TestBackend`. 1010 tests, 0 failures. (Live MIDI and Ableton Link require
 hardware and are covered by a separate acceptance checklist not included in this repo.)
 
 ## Status

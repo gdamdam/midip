@@ -551,6 +551,22 @@ fn cond_cycle_next(cond: &crate::pattern::model::TrigCond) -> crate::pattern::mo
     }
 }
 
+/// One clickable region of the editor grid, in absolute terminal coordinates.
+/// Rebuilt every render by the editor draw code and consumed by mouse input, so
+/// hit-testing is exact-by-construction (no separate layout math to drift from).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HitCell {
+    pub x0: u16,
+    pub x1: u16,
+    pub y0: u16,
+    pub y1: u16,
+    /// Drum voice row index (into the focused lane's voices); 0 for melodic lanes.
+    pub row: usize,
+    /// Absolute step column.
+    pub col: usize,
+    pub is_drums: bool,
+}
+
 pub struct App {
     pub set: Set,
     pub focus: usize,
@@ -701,6 +717,17 @@ pub struct App {
     pub clock_in_ports: Vec<String>,
     /// Currently highlighted index in selector: 0 = "(none/manual)", 1..N = port.
     pub clock_in_sel: usize,
+
+    // --- mouse input ---
+    /// Screen-space map of the editor grid, rebuilt every render, consumed by mouse
+    /// input. `RefCell` because rendering takes `&App` but must record geometry.
+    pub hits: std::cell::RefCell<Vec<HitCell>>,
+    /// During a left-drag paint stroke (drums): the on/off state being painted, so a
+    /// drag continues the first cell's toggle instead of flip-flopping under the pointer.
+    pub mouse_paint: Option<bool>,
+    /// Last (row, col) touched in the current drag stroke — avoids re-toggling a cell
+    /// the pointer merely lingers on.
+    pub mouse_last: Option<(usize, usize)>,
 }
 
 /// Default melodic velocity multiplier when placing a note (1.0 -> MIDI 100).
@@ -783,6 +810,9 @@ impl App {
             clock_in_tempo: 0.0,
             clock_in_ports: Vec::new(),
             clock_in_sel: 0,
+            hits: std::cell::RefCell::new(Vec::new()),
+            mouse_paint: None,
+            mouse_last: None,
         }
     }
 
@@ -3679,6 +3709,109 @@ impl App {
         let len = self.set.lanes[self.focus].pattern.length;
         let end = (start + VISIBLE_STEPS).min(len);
         (start, end)
+    }
+
+    // --- mouse input ---------------------------------------------------------
+    // The editor records a `HitCell` per clickable grid cell each render; these
+    // methods translate a terminal (x, y) into cursor moves / step edits against
+    // that map. Kept on `App` (not main.rs) so the behavior is unit-testable.
+
+    /// The topmost `HitCell` under the terminal coordinate `(x, y)`, if any.
+    /// Searched last-pushed-first so overlapping cells resolve to the most recent.
+    pub fn hit_test(&self, x: u16, y: u16) -> Option<HitCell> {
+        self.hits
+            .borrow()
+            .iter()
+            .rev()
+            .find(|c| x >= c.x0 && x <= c.x1 && y >= c.y0 && y <= c.y1)
+            .copied()
+    }
+
+    /// Whether the focused drum lane has a hit on voice `row` at step `col`.
+    /// Uses the same `DRUM_VOICES` note mapping as `toggle_step`, so mouse edits and
+    /// keyboard edits agree on which voice a row is.
+    fn drum_hit_present(&self, row: usize, col: usize) -> bool {
+        if row >= profiles::DRUM_VOICES.len() {
+            return false;
+        }
+        let note = profiles::DRUM_VOICES[row].note;
+        match &self.set.lanes[self.focus].pattern.data {
+            PatternData::Drums(steps) => steps
+                .get(col)
+                .map(|s| s.iter().any(|h| h.note == note))
+                .unwrap_or(false),
+            PatternData::Melodic(_) => false,
+        }
+    }
+
+    /// Left-button press (or drag, when `dragging` is true) at terminal `(x, y)`.
+    /// Drums: the initial press snapshots once and toggles the cell, recording the
+    /// resulting on/off state; a drag paints that same state across cells (classic
+    /// TR-style click-drag). Melodic: a click moves the cursor to the step (pitch
+    /// stays keyboard-driven, since a click can't disambiguate which pitch to place).
+    /// Returns engine commands (pattern reloads) to forward. Only acts in Edit mode.
+    pub fn mouse_press(&mut self, x: u16, y: u16, dragging: bool) -> Vec<UiCommand> {
+        let mut cmds = Vec::new();
+        if self.mode != Mode::Edit {
+            return cmds;
+        }
+        let Some(cell) = self.hit_test(x, y) else {
+            return cmds;
+        };
+        if !cell.is_drums {
+            // Melodic: only a fresh click repositions the cursor; ignore drag.
+            if !dragging {
+                self.cur_col = cell.col;
+                self.update_step_scroll();
+            }
+            return cmds;
+        }
+        if !dragging {
+            self.cur_row = cell.row;
+            self.cur_col = cell.col;
+            self.update_step_scroll();
+            self.snapshot();
+            self.toggle_step();
+            self.mouse_paint = Some(self.drum_hit_present(cell.row, cell.col));
+            self.mouse_last = Some((cell.row, cell.col));
+            cmds.push(self.load_focused());
+        } else if self.mouse_last != Some((cell.row, cell.col)) {
+            if let Some(want) = self.mouse_paint {
+                self.cur_row = cell.row;
+                self.cur_col = cell.col;
+                self.update_step_scroll();
+                if self.drum_hit_present(cell.row, cell.col) != want {
+                    self.toggle_step();
+                    cmds.push(self.load_focused());
+                }
+                self.mouse_last = Some((cell.row, cell.col));
+            }
+        }
+        cmds
+    }
+
+    /// Left-button release: end the current paint stroke.
+    pub fn mouse_release(&mut self) {
+        self.mouse_paint = None;
+        self.mouse_last = None;
+    }
+
+    /// Scroll wheel at `(x, y)`: nudge the velocity of the step under the pointer.
+    /// `dir` is +1 (up / louder) or −1 (down / softer). Only acts in Edit mode.
+    pub fn mouse_scroll(&mut self, x: u16, y: u16, dir: i8) -> Vec<UiCommand> {
+        if self.mode != Mode::Edit {
+            return Vec::new();
+        }
+        let Some(cell) = self.hit_test(x, y) else {
+            return Vec::new();
+        };
+        self.cur_row = cell.row;
+        self.cur_col = cell.col;
+        self.update_step_scroll();
+        self.snapshot();
+        // A single detent moves velocity a musical step (~4% of range).
+        self.adjust_vel(dir.saturating_mul(5));
+        vec![self.load_focused()]
     }
 
     /// Short label for the current mode / lane-kind combination, used by the status bar.

@@ -51,6 +51,7 @@ fn left_column_lines() -> Vec<Line<'static>> {
         row("[e / E]  euclid pulses +/−"),
         row("[[ / ]]  euclid rotation"),
         row("[`]  toggle voice mute on cursor row"),
+        row("'acc' row: per-step accent (loudest voice)"),
         blank(),
         // ── Melodic ───────────────────────────────────────────────────
         header("Melodic"),
@@ -87,6 +88,7 @@ fn left_column_lines() -> Vec<Line<'static>> {
         row("[z]  cycle trig condition (Always / 1:2 / 1:3 / Fill / …)"),
         row("[@]  add CC lock   [#]  remove CC lock"),
         row("[$]  CC val +   [^]  CC val −"),
+        row("grid marker: ²³ ratchet · ° chance · ? cond · ≈ micro"),
         blank(),
         // ── Per-lane ──────────────────────────────────────────────────
         header("Per-lane"),
@@ -105,6 +107,13 @@ fn right_column_lines() -> Vec<Line<'static>> {
         row("[m]  mute   [S]  solo   [M]  mirror output"),
         row("[l]  library   [o]  open set   [s]  save"),
         row("[?]  help   [q]  quit (twice while playing)"),
+        blank(),
+        // ── Mouse  (Edit mode) ────────────────────────────────────────
+        header("Mouse  (Edit mode)"),
+        row("click a step cell  toggle hit / move cursor"),
+        row("click-drag  paint hits across cells (drums)"),
+        row("scroll wheel  nudge velocity of the step below"),
+        row("MIDIP_MOUSE=0  disable (restores text selection)"),
         blank(),
         // ── Routing / Performance ─────────────────────────────────────
         header("Routing / Performance"),

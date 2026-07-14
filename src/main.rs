@@ -4,7 +4,9 @@ use std::io::{self, Stdout};
 use std::time::Duration;
 
 use anyhow::Result;
-use crossterm::event::{self, Event, KeyEventKind};
+use crossterm::event::{
+    self, DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind, MouseButton, MouseEventKind,
+};
 use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
@@ -55,6 +57,8 @@ struct TermGuard;
 
 impl Drop for TermGuard {
     fn drop(&mut self) {
+        // DisableMouseCapture is harmless if capture was never enabled.
+        let _ = execute!(io::stdout(), DisableMouseCapture);
         let _ = disable_raw_mode();
         let _ = execute!(io::stdout(), LeaveAlternateScreen);
     }
@@ -83,6 +87,7 @@ fn main() -> Result<()> {
     // Restore the terminal FIRST, then let the default hook print to a usable screen.
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
+        let _ = execute!(io::stdout(), DisableMouseCapture);
         let _ = disable_raw_mode();
         let _ = execute!(io::stdout(), LeaveAlternateScreen);
         default_hook(info);
@@ -91,6 +96,11 @@ fn main() -> Result<()> {
     let _guard = TermGuard; // restores even if run() errors / panics-unwinds
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
+    // Mouse capture (click-to-toggle steps, drag-paint, scroll-to-nudge velocity) is on
+    // by default; MIDIP_MOUSE=0 disables it so the terminal's native text selection works.
+    if midip::config::mouse_enabled() {
+        execute!(stdout, EnableMouseCapture)?;
+    }
     let backend = CrosstermBackend::new(stdout);
     let terminal = Terminal::new(backend)?;
     run(terminal)
@@ -181,10 +191,10 @@ fn run(mut terminal: Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
 
         // Input: poll with ~16ms timeout for ~60fps responsiveness.
         if event::poll(Duration::from_millis(16))? {
-            if let Event::Key(key) = event::read()? {
+            match event::read()? {
                 // On Windows, crossterm emits both Press and Release; only act on Press
                 // so each keystroke triggers its action once. (Unix reports only Press.)
-                if key.kind == KeyEventKind::Press {
+                Event::Key(key) if key.kind == KeyEventKind::Press => {
                     let action =
                         midip::input::key_to_action(key, app.mode.clone(), app.focused_kind());
                     let cmds = app.apply(action);
@@ -192,6 +202,28 @@ fn run(mut terminal: Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
                         send_or_toast(&engine.tx, cmd, &mut app);
                     }
                 }
+                Event::Mouse(m) => {
+                    // Mouse edits use the hit-map recorded during the previous render.
+                    let cmds = match m.kind {
+                        MouseEventKind::Down(MouseButton::Left) => {
+                            app.mouse_press(m.column, m.row, false)
+                        }
+                        MouseEventKind::Drag(MouseButton::Left) => {
+                            app.mouse_press(m.column, m.row, true)
+                        }
+                        MouseEventKind::Up(MouseButton::Left) => {
+                            app.mouse_release();
+                            Vec::new()
+                        }
+                        MouseEventKind::ScrollUp => app.mouse_scroll(m.column, m.row, 1),
+                        MouseEventKind::ScrollDown => app.mouse_scroll(m.column, m.row, -1),
+                        _ => Vec::new(),
+                    };
+                    for cmd in cmds {
+                        send_or_toast(&engine.tx, cmd, &mut app);
+                    }
+                }
+                _ => {}
             }
         }
 

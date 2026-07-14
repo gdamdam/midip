@@ -7,6 +7,25 @@ feature milestone is a minor bump).
 
 ## [Unreleased]
 
+## [1.4.0] — 2026-07-14 — Richer TUI: mouse, in-grid attributes, accent row, density meter
+
+### Added
+- **Mouse support in the step editor (opt-out).** Left-click a step to toggle it and move
+  the cursor; click-drag paints hits across the drum grid; the scroll wheel nudges the
+  velocity of the step under the pointer. Melodic clicks move the cursor (pitch stays
+  keyboard-driven). Capture is on by default; `MIDIP_MOUSE=0` disables it to restore the
+  terminal's native text selection. Hit-testing is exact-by-construction — the editor
+  records each cell's screen rect as it draws, so clicks land on the pointed-at cell.
+- **Per-step generative attributes visible at rest.** A step's most salient attribute now
+  shows as a compact marker in the grid without selecting it: `²³…` ratchet, `°` probability
+  under 100%, `?` non-default trig condition, `≈` microtiming (ASCII: `2 % ? ~`). Plain
+  steps render unchanged.
+- **Drum accent histogram row.** An `acc` row beneath the drum grid draws the loudest hit
+  per step as an 8-level bar, so the groove's dynamic shape reads at a glance.
+- **Per-lane density meter in the overview.** Each lane in the LANES pane gains a compact
+  8-bin sparkline of pattern density — a mixer-style "how busy is this lane" meter that
+  captures content the 16-cell activity strip only point-samples on long patterns.
+
 ## [1.3.7] — 2026-07-13 — Medium/low bug fixes (clock-in, chains, undo, persistence, MIDI wire, UI)
 
 ### Fixed

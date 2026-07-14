@@ -7,13 +7,15 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 
-use crate::app::App;
+use crate::app::{App, HitCell};
 use crate::devices::profiles::{melodic_velocity, resolve_melodic_pitch};
 use crate::music::scale::{degree_label, note_name as scale_note_name};
 #[cfg(test)]
 use crate::pattern::model::TrigCond;
 use crate::pattern::model::{MelodicStep, PatternData};
-use crate::ui::theme::{cursor_style, lane_color, note_name, playhead_style, vel_bar, vel_color};
+use crate::ui::theme::{
+    cursor_style, lane_color, note_name, playhead_style, step_attr_marker, vel_bar, vel_color,
+};
 
 /// Render a small chord-size badge (number of stacked notes) as a single superscript
 /// glyph. Falls back to a plain digit-ish marker for sizes beyond the table (chords
@@ -60,6 +62,16 @@ pub fn render_melodic_editor(f: &mut Frame, area: Rect, app: &App) {
     // Use app.visible_step_range() for the paged window.
     let (start, end) = app.visible_step_range();
     let visible_cols = start..end;
+
+    // Feature #1: rebuild the mouse hit-map. The note/len/vel rows are content line
+    // indices 2..=4 (after the EDIT header + step-number row); each column is a uniform
+    // 4-cell field after the 5-cell row label, with no bar separators. A click anywhere
+    // in a column selects that step (pitch stays keyboard-driven).
+    let mut hits = app.hits.borrow_mut();
+    hits.clear();
+    let cell_x0 = area.x + 1 + 5;
+    let cell_y0 = area.y + 1 + 2;
+    let cell_y1 = area.y + 1 + 4;
 
     let scroll_indicator = if len > 16 {
         format!("  steps {}-{}/{}", start + 1, end, len)
@@ -118,6 +130,18 @@ pub fn render_melodic_editor(f: &mut Frame, area: Rect, app: &App) {
     let mut prev_was_note = false;
 
     for col in visible_cols {
+        // Feature #1: clickable region for this step (spans the note/len/vel rows).
+        let hx = cell_x0 + ((col - start) as u16) * 4;
+        hits.push(HitCell {
+            x0: hx,
+            x1: hx + 3,
+            y0: cell_y0,
+            y1: cell_y1,
+            row: 0,
+            col,
+            is_drums: false,
+        });
+
         let is_cursor = col == app.cur_col;
         let is_playhead = app.playing && col == local_playhead;
 
@@ -184,10 +208,20 @@ pub fn render_melodic_editor(f: &mut Frame, area: Rect, app: &App) {
                 };
                 len_spans.push(Span::raw(note_head));
 
+                // Feature #2/#3: the velocity lane is the melodic accent graph. Its
+                // trailing marker surfaces the step's most salient generative attribute
+                // (ratchet / probability / cond / microtiming) at rest. A plain note
+                // renders `{bar}   ` exactly as before (marker is a blank).
                 let mv = melodic_velocity(note.vel);
-                let bar = vel_bar(mv).to_string();
+                let bar = vel_bar(mv);
+                let mark = step_attr_marker(
+                    note.prob,
+                    note.ratchet,
+                    note.micro,
+                    note.cond == crate::pattern::model::TrigCond::Always,
+                );
                 vel_spans.push(Span::styled(
-                    format!("{bar:<4}"),
+                    format!("{bar}{mark}  "),
                     Style::default().fg(vel_color(mv)),
                 ));
                 prev_was_note = true;
@@ -782,6 +816,40 @@ mod tests {
             "detail must contain 'Probability'"
         );
         assert!(whole.contains("Ratchet"), "detail must contain 'Ratchet'");
+    }
+
+    /// Feature #1: a click in a melodic step column moves the cursor to that step
+    /// (pitch stays keyboard-driven). Exercises the real render-time hit-map geometry.
+    #[test]
+    fn mouse_click_moves_melodic_cursor_via_hitmap() {
+        let mut set = Set::default_set(default_profiles());
+        set.lanes[1].pattern = Pattern {
+            name: "mcur".to_string(),
+            desc: String::new(),
+            length: 16,
+            data: PatternData::Melodic(vec![MelodicStep::default(); 16]),
+            id: crate::persist::Id::nil(),
+            cc: Default::default(),
+        };
+        let mut app = App::new(set, empty_library());
+        app.focus = 1;
+        app.cur_col = 0;
+
+        let backend = TestBackend::new(120, 10);
+        let mut term = Terminal::new(backend).unwrap();
+        term.draw(|f| render_melodic_editor(f, f.area(), &app))
+            .unwrap();
+
+        let cell = app
+            .hits
+            .borrow()
+            .iter()
+            .find(|c| !c.is_drums && c.col == 6)
+            .copied()
+            .expect("hit-map must contain step 6");
+        let cx = (cell.x0 + cell.x1) / 2;
+        app.mouse_press(cx, cell.y0, false);
+        assert_eq!(app.cur_col, 6, "click must move the cursor to the clicked step");
     }
 
     // ── M5a Task 3: scale name, root, and degree display ─────────────────────

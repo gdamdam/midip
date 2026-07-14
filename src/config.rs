@@ -22,6 +22,22 @@ pub fn ascii_mode() -> bool {
     ascii_from_env(std::env::var("MIDIP_ASCII").ok())
 }
 
+/// Pure helper: mouse capture is ON by default and only OFF for an explicit falsy
+/// opt-out ("0"/"false"/"no"). Capturing the mouse steals the terminal's native
+/// text selection, so this switch lets a performer turn it off to copy from the screen.
+pub fn mouse_from_env(val: Option<String>) -> bool {
+    !matches!(
+        val.as_deref(),
+        Some("0") | Some("false") | Some("False") | Some("FALSE") | Some("no")
+    )
+}
+
+/// Returns true unless `MIDIP_MOUSE` is set to a falsy value ("0"/"false"/"no").
+/// Use `mouse_from_env` in unit tests to stay race-free.
+pub fn mouse_enabled() -> bool {
+    mouse_from_env(std::env::var("MIDIP_MOUSE").ok())
+}
+
 /// Resolve the directory containing the running executable.
 /// Returns `None` if `current_exe()` fails or the path has no parent.
 fn exe_dir() -> Option<PathBuf> {
@@ -184,6 +200,18 @@ mod tests {
         assert!(!ascii_from_env(Some("false".into())));
         assert!(!ascii_from_env(Some("yes".into())));
         assert!(!ascii_from_env(Some("".into())));
+    }
+
+    #[test]
+    fn mouse_from_env_defaults_on_and_opts_out_for_falsy() {
+        // Default (unset) and any non-falsy value keep the mouse ON.
+        assert!(mouse_from_env(None));
+        assert!(mouse_from_env(Some("1".into())));
+        assert!(mouse_from_env(Some("anything".into())));
+        // Explicit opt-out restores native text selection.
+        assert!(!mouse_from_env(Some("0".into())));
+        assert!(!mouse_from_env(Some("false".into())));
+        assert!(!mouse_from_env(Some("no".into())));
     }
 
     /// Without env overrides the returned paths must end with the expected
