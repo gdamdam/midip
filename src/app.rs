@@ -1727,6 +1727,15 @@ impl App {
                 } else {
                     "Link off"
                 });
+                // Persist the SETUP choice so the next launch honors it
+                // (auto-join defaults on; an explicit off here opts out).
+                let _ = crate::pattern::store::save_prefs(
+                    &crate::config::data_dir(),
+                    &crate::pattern::store::Prefs {
+                        mirror_on: self.mirror_on,
+                        link_on: self.link_enabled,
+                    },
+                );
                 cmds.push(UiCommand::ToggleLink(self.link_enabled));
             }
             Action::OpenTempo => {
@@ -2787,6 +2796,7 @@ impl App {
                     &crate::config::data_dir(),
                     &crate::pattern::store::Prefs {
                         mirror_on: self.mirror_on,
+                        link_on: self.link_enabled,
                     },
                 );
                 cmds.push(crate::engine::UiCommand::SetMirror(self.mirror_on));

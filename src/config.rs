@@ -38,6 +38,22 @@ pub fn mouse_enabled() -> bool {
     mouse_from_env(std::env::var("MIDIP_MOUSE").ok())
 }
 
+/// Pure helper: Link auto-join is ON by default and only OFF for an explicit falsy
+/// opt-out ("0"/"false"/"no"), mirroring `mouse_from_env`. The opt-out restores the
+/// pre-auto-join manual behavior (Link off until toggled in SETUP).
+pub fn link_from_env(val: Option<String>) -> bool {
+    !matches!(
+        val.as_deref(),
+        Some("0") | Some("false") | Some("False") | Some("FALSE") | Some("no")
+    )
+}
+
+/// Returns true unless `MIDIP_LINK` is set to a falsy value ("0"/"false"/"no").
+/// Use `link_from_env` in unit tests to stay race-free.
+pub fn link_autojoin_enabled() -> bool {
+    link_from_env(std::env::var("MIDIP_LINK").ok())
+}
+
 /// Resolve the directory containing the running executable.
 /// Returns `None` if `current_exe()` fails or the path has no parent.
 fn exe_dir() -> Option<PathBuf> {
@@ -200,6 +216,20 @@ mod tests {
         assert!(!ascii_from_env(Some("false".into())));
         assert!(!ascii_from_env(Some("yes".into())));
         assert!(!ascii_from_env(Some("".into())));
+    }
+
+    #[test]
+    fn link_from_env_defaults_on_and_opts_out_for_falsy() {
+        // Default (unset) and any non-falsy value auto-join Link at startup.
+        assert!(link_from_env(None));
+        assert!(link_from_env(Some("1".into())));
+        assert!(link_from_env(Some("anything".into())));
+        // Explicit opt-out restores the old manual (off-by-default) behavior.
+        assert!(!link_from_env(Some("0".into())));
+        assert!(!link_from_env(Some("false".into())));
+        assert!(!link_from_env(Some("False".into())));
+        assert!(!link_from_env(Some("FALSE".into())));
+        assert!(!link_from_env(Some("no".into())));
     }
 
     #[test]
