@@ -92,10 +92,16 @@ pub fn key_to_action(
                 KeyCode::Char('n') | KeyCode::Esc => Action::ConfirmNo,
                 _ => Action::None,
             },
+            Overlay::Onboarding => match key.code {
+                KeyCode::Enter | KeyCode::Right => Action::OnboardingNext,
+                KeyCode::Esc => Action::OnboardingDismiss,
+                _ => Action::None,
+            },
             Overlay::Help => match key.code {
                 // Esc dismisses the overlay uniformly; '?'/'q' toggle it closed.
                 KeyCode::Esc => Action::CloseOverlay,
                 KeyCode::Char('?') | KeyCode::Char('q') => Action::Help,
+                KeyCode::Tab => Action::ToggleHelpDetail,
                 KeyCode::Up => Action::HelpScroll(-1),
                 KeyCode::Down => Action::HelpScroll(1),
                 KeyCode::PageUp => Action::HelpScroll(-10),
@@ -508,6 +514,7 @@ mod tests {
             Mode::NoteInput => (Workspace::Perform, Some(Overlay::NoteInput)),
             Mode::Generative => (Workspace::Perform, Some(Overlay::Generative)),
             Mode::CrateView => (Workspace::Perform, Some(Overlay::CrateView)),
+            Mode::Onboarding => (Workspace::Perform, Some(Overlay::Onboarding)),
         };
         key_to_action(key, ws, ov, kind)
     }
@@ -2557,5 +2564,53 @@ mod tests {
                 "'Q' in Edit must be CycleClockDiv"
             );
         }
+    }
+
+    // ── Task 9 (Phase 2): onboarding overlay + help detail toggle ────────────
+
+    #[test]
+    fn onboarding_overlay_keys() {
+        let ov = Some(Overlay::Onboarding);
+        for code in [KeyCode::Enter, KeyCode::Right] {
+            assert_eq!(
+                key_to_action(k(code), Workspace::Perform, ov.clone(), LaneKind::Drums),
+                Action::OnboardingNext,
+                "Enter/Right must advance the walkthrough"
+            );
+        }
+        assert_eq!(
+            key_to_action(
+                k(KeyCode::Esc),
+                Workspace::Perform,
+                ov.clone(),
+                LaneKind::Drums
+            ),
+            Action::OnboardingDismiss,
+            "Esc must dismiss the walkthrough"
+        );
+        assert_eq!(
+            key_to_action(
+                k(KeyCode::Char('x')),
+                Workspace::Perform,
+                ov,
+                LaneKind::Drums
+            ),
+            Action::None,
+            "unbound keys must be inert during the walkthrough"
+        );
+    }
+
+    #[test]
+    fn help_tab_toggles_detail() {
+        assert_eq!(
+            key_to_action(
+                k(KeyCode::Tab),
+                Workspace::Perform,
+                Some(Overlay::Help),
+                LaneKind::Drums
+            ),
+            Action::ToggleHelpDetail,
+            "Tab in Help must toggle basic/full detail"
+        );
     }
 }

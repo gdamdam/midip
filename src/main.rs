@@ -187,6 +187,14 @@ fn run(mut terminal: Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
     // the absence of the marker will be detected on next launch.
     midip::pattern::store::clear_clean_marker(&dir);
 
+    // First-run walkthrough: an absent marker means onboarding never ran.
+    // Pure existence check — it can never fail or block startup. The recovery
+    // prompt (above) takes priority; in that case the tour simply re-shows on
+    // the next launch, since the marker is only written when it is dismissed.
+    if app.overlay.is_none() && midip::pattern::store::is_first_run(&dir) {
+        app.open_overlay(midip::app::Overlay::Onboarding);
+    }
+
     loop {
         terminal.draw(|f| midip::ui::render(f, &app))?;
 

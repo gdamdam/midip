@@ -650,6 +650,31 @@ pub fn clean_marker_exists(dir: &Path) -> bool {
     clean_marker_path(dir).exists()
 }
 
+/// Path of the first-run marker file under `dir`. Presence means onboarding
+/// was completed (or dismissed) at least once; absence means first run.
+pub fn first_run_marker_path(dir: &Path) -> PathBuf {
+    dir.join("onboarded")
+}
+
+/// Returns true when the first-run marker is absent — i.e. the onboarding
+/// walkthrough has never been completed or dismissed. Pure existence check:
+/// never errors, never creates anything, never blocks startup.
+pub fn is_first_run(dir: &Path) -> bool {
+    !first_run_marker_path(dir).exists()
+}
+
+/// Write the first-run marker atomically. Mirrors `mark_clean_shutdown`.
+/// Called when the onboarding walkthrough is dismissed or completed.
+pub fn mark_onboarded(dir: &Path) -> anyhow::Result<()> {
+    let path = first_run_marker_path(dir);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).context("creating data dir for first-run marker")?;
+    }
+    persist::write_atomic(&path, b"1")
+        .with_context(|| format!("writing first-run marker {}", path.display()))?;
+    Ok(())
+}
+
 /// Returns true when an unclean shutdown is detected: a recovery file exists
 /// but no clean-shutdown marker was written (i.e. the previous run crashed or was killed).
 pub fn unclean_shutdown_detected(dir: &Path) -> bool {
@@ -1720,6 +1745,33 @@ mod tests {
             "marker must be gone after clear_clean_marker"
         );
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // ── Task 9 (Phase 2): first-run marker ───────────────────────────────────
+
+    #[test]
+    fn first_run_marker_flips_after_onboarding() {
+        let dir = unique_dir("t9-first-run");
+        assert!(is_first_run(&dir), "absent marker must read as first run");
+        mark_onboarded(&dir).unwrap();
+        assert!(
+            !is_first_run(&dir),
+            "first run must be over once the marker is written"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn is_first_run_true_for_missing_dir() {
+        // A data dir that does not exist at all is still a first run — the
+        // check must not error or create anything.
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let absent = std::env::temp_dir().join(format!("midip-t9-absent-{}", nanos));
+        assert!(is_first_run(&absent));
+        assert!(!absent.exists(), "is_first_run must not create the dir");
     }
 
     // ── Mirror prefs (M2.5-T2) ───────────────────────────────────────────────
