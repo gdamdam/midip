@@ -181,6 +181,7 @@ fn run(mut terminal: Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
     let dir = midip::config::data_dir();
     if midip::pattern::store::unclean_shutdown_detected(&dir) {
         app.mode = midip::app::Mode::RecoveryPrompt;
+        app.open_overlay(midip::app::Overlay::Recovery);
     }
     // Always remove the clean marker at startup so that if THIS run crashes,
     // the absence of the marker will be detected on next launch.

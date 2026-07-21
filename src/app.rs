@@ -97,6 +97,21 @@ pub enum Mode {
     DevicePicker,
 }
 
+/// Transient layer that floats over the active [`Workspace`] — dialogs and
+/// prompts, as opposed to the persistent base view. Introduced alongside
+/// [`Workspace`] so overlay lifetime is tracked independently of workspace
+/// switching; `Mode` remains authoritative for rendering/input until Task 4
+/// completes the reroute, so `App.overlay` is currently shadow state kept in
+/// sync via a light bridge in [`App::apply`].
+#[derive(Clone, Debug, PartialEq)]
+pub enum Overlay {
+    Help,
+    TempoEntry,
+    NameEntry(NamePurpose),
+    Confirm(ConfirmAction),
+    Recovery,
+}
+
 /// Top-level TUI workspace. Five sibling workspaces the user switches between;
 /// added ahead of the workspace-driven navigation (currently purely additive).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -204,6 +219,8 @@ pub enum Action {
     Redo,
     /// Switch the active top-level workspace (Ctrl+1..5). Pure UI state; no engine command.
     SwitchWorkspace(Workspace),
+    /// Dismiss the active transient overlay. Pure UI state; no engine command.
+    CloseOverlay,
     ToggleMute,
     ToggleSolo,
     SetBpm(f64),
@@ -617,6 +634,10 @@ pub struct App {
     pub mode: Mode,
     /// Active top-level workspace (Perform/Pattern/Library/Song/Setup).
     pub workspace: Workspace,
+    /// Transient overlay floating over the active workspace, or `None`. Shadow
+    /// state during migration: kept in sync with `mode` via a bridge in
+    /// `apply`; `Mode` stays authoritative for rendering/input until Task 4.
+    pub overlay: Option<Overlay>,
     pub cur_row: usize,
     pub cur_col: usize,
     /// First visible step column — always `(cur_col / VISIBLE_STEPS) * VISIBLE_STEPS` (page-snapped).
@@ -793,6 +814,7 @@ impl App {
             focus: 0,
             mode: Mode::Edit,
             workspace: Workspace::Perform,
+            overlay: None,
             cur_row: 0,
             cur_col: 0,
             step_scroll: 0,
@@ -876,6 +898,16 @@ impl App {
     pub fn set_workspace(&mut self, ws: Workspace) {
         self.workspace = ws;
         self.set_status(ws.label());
+    }
+
+    /// Raise a transient overlay over the active workspace.
+    pub fn open_overlay(&mut self, overlay: Overlay) {
+        self.overlay = Some(overlay);
+    }
+
+    /// Dismiss the current overlay (if any) without touching the workspace.
+    pub fn close_overlay(&mut self) {
+        self.overlay = None;
     }
 
     /// Decrement the status TTL by one frame; clear `status` when it reaches 0.
@@ -1516,6 +1548,9 @@ impl App {
             Action::SwitchWorkspace(ws) => {
                 self.set_workspace(ws);
             }
+            Action::CloseOverlay => {
+                self.close_overlay();
+            }
             Action::ToggleMute => {
                 self.snapshot();
                 let lane = &mut self.set.lanes[self.focus];
@@ -1633,6 +1668,7 @@ impl App {
             }
             Action::OpenTempo => {
                 self.mode = Mode::TempoEntry;
+                self.open_overlay(Overlay::TempoEntry);
                 self.tempo_input.clear();
             }
             Action::TempoDigit(c) => {
@@ -1645,6 +1681,7 @@ impl App {
             }
             Action::TempoCommit => {
                 self.mode = Mode::Edit;
+                self.close_overlay();
                 if let Ok(bpm) = self.tempo_input.parse::<f64>() {
                     let bpm = bpm.clamp(20.0, 300.0);
                     // Only snapshot when the value actually changes (avoids a no-op undo entry).
@@ -1659,6 +1696,7 @@ impl App {
             }
             Action::TempoCancel => {
                 self.mode = Mode::Edit;
+                self.close_overlay();
                 self.tempo_input.clear();
             }
             Action::AdjustBpm(d) => {
@@ -1993,9 +2031,11 @@ impl App {
             Action::Help => {
                 if self.mode == Mode::Help {
                     self.mode = Mode::Edit;
+                    self.close_overlay();
                 } else {
                     self.help_scroll = 0;
                     self.mode = Mode::Help;
+                    self.open_overlay(Overlay::Help);
                 }
             }
             Action::OpenRouteEditor => {
@@ -2218,6 +2258,7 @@ impl App {
                         self.clock_in_tempo = 0.0;
                         self.clamp_cursor();
                         self.mode = Mode::Edit;
+                        self.close_overlay();
                         self.set_status("Recovered unsaved work");
                         crate::pattern::store::clear_recovery(&dir);
                         // SetSet FIRST (rebuilds the sequencer), THEN SetClockInPort so the
@@ -2228,12 +2269,14 @@ impl App {
                     Err(e) => {
                         self.set_status(format!("Recovery failed: {e}"));
                         self.mode = Mode::Edit;
+                        self.close_overlay();
                     }
                 }
             }
             Action::RecoveryDiscard => {
                 crate::pattern::store::clear_recovery(&crate::config::data_dir());
                 self.mode = Mode::Edit;
+                self.close_overlay();
                 self.set_status("Discarded recovered work");
             }
             Action::RecoveryOpenSaved => {
@@ -2242,6 +2285,7 @@ impl App {
                         .unwrap_or_default();
                 self.set_sel = 0;
                 self.mode = Mode::SetBrowser;
+                self.close_overlay();
             }
             Action::ToggleLaunchQuant => {
                 self.launch_quant = match self.launch_quant {
@@ -2866,6 +2910,7 @@ impl App {
             // ── Name-entry dialog ─────────────────────────────────────────────
             Action::OpenNameEntry(purpose) => {
                 self.name_input.clear();
+                self.open_overlay(Overlay::NameEntry(purpose.clone()));
                 self.mode = Mode::NameEntry(purpose);
             }
             Action::NameChar(c) => {
@@ -2884,6 +2929,7 @@ impl App {
                 };
                 let name = self.name_input.trim().to_string();
                 self.mode = Mode::Edit;
+                self.close_overlay();
                 self.name_input.clear();
                 if !name.is_empty() {
                     let sub = match purpose {
@@ -2905,6 +2951,7 @@ impl App {
                     }
                 };
                 self.name_input.clear();
+                self.close_overlay();
                 self.mode = match purpose {
                     NamePurpose::RenameScene => Mode::Scenes,
                     NamePurpose::RenameChain => Mode::Chains,
@@ -2913,6 +2960,7 @@ impl App {
             }
             // ── Confirm dialog ────────────────────────────────────────────────
             Action::OpenConfirm(action) => {
+                self.open_overlay(Overlay::Confirm(action.clone()));
                 self.mode = Mode::Confirm(action);
             }
             Action::ConfirmYes => {
@@ -2921,6 +2969,7 @@ impl App {
                     _ => return cmds,
                 };
                 self.mode = Mode::Edit;
+                self.close_overlay();
                 let sub = match action {
                     ConfirmAction::NewSet => Action::NewSet,
                     ConfirmAction::DeleteSet(path) => Action::DeleteSet(path),
@@ -2940,6 +2989,7 @@ impl App {
                         return cmds;
                     }
                 };
+                self.close_overlay();
                 self.mode = match action {
                     ConfirmAction::DeleteScene(_) => Mode::Scenes,
                     ConfirmAction::DeleteChain(_) => Mode::Chains,
@@ -12225,5 +12275,18 @@ mod workspace_tests {
     fn new_app_defaults_to_perform() {
         let app = crate::test_support::app_for_tests();
         assert_eq!(app.workspace, Workspace::Perform);
+    }
+    #[test]
+    fn esc_closes_overlay_before_leaving_workspace() {
+        let mut app = crate::test_support::app_for_tests();
+        app.set_workspace(Workspace::Library);
+        app.open_overlay(Overlay::Help);
+        app.apply(Action::CloseOverlay);
+        assert!(app.overlay.is_none());
+        assert_eq!(
+            app.workspace,
+            Workspace::Library,
+            "closing overlay must not change workspace"
+        );
     }
 }
