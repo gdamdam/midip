@@ -98,6 +98,9 @@ pub enum Mode {
     /// Command palette: global fuzzy finder over the command registry.
     /// Opened via `:` (bare workspace) or Ctrl+P (anywhere).
     CommandPalette,
+    /// First-run onboarding walkthrough (Phase-2 Task 9). Shadow of
+    /// `Overlay::Onboarding`, kept only until the `Mode` bridge is removed.
+    Onboarding,
 }
 
 /// Transient layer that floats over the active [`Workspace`] — dialogs and
@@ -129,6 +132,9 @@ pub enum Overlay {
     CrateView,
     /// Command palette: global fuzzy finder over `commands::registry()`.
     CommandPalette,
+    /// First-run onboarding walkthrough: a stepped tour of the workspaces,
+    /// command palette and help (Phase-2 Task 9).
+    Onboarding,
 }
 
 /// Top-level TUI workspace. Five sibling workspaces the user switches between;
@@ -193,6 +199,7 @@ fn derive_mode(workspace: Workspace, overlay: &Option<Overlay>) -> Mode {
         Some(Overlay::Generative) => Mode::Generative,
         Some(Overlay::CrateView) => Mode::CrateView,
         Some(Overlay::CommandPalette) => Mode::CommandPalette,
+        Some(Overlay::Onboarding) => Mode::Onboarding,
         None => match workspace {
             Workspace::Perform | Workspace::Pattern => Mode::Edit,
             Workspace::Library => Mode::Library,
@@ -620,6 +627,16 @@ pub enum Action {
     PaletteRun,
     /// Dismiss the palette without running anything.
     PaletteCancel,
+    // ── Phase-2 Task 9: onboarding walkthrough + two-tier help ──────────────
+    /// Advance the onboarding walkthrough one step; on the last step this
+    /// marks onboarding done and dismisses the overlay.
+    OnboardingNext,
+    /// Dismiss the onboarding walkthrough early. Marks onboarding done so the
+    /// tour never auto-shows again.
+    OnboardingDismiss,
+    /// Toggle the help overlay between the basic essentials view and the full
+    /// keybinding reference.
+    ToggleHelpDetail,
     None,
 }
 
@@ -633,6 +650,10 @@ pub enum GenField {
 
 /// Number of steps visible in the editor at once. Steps beyond this are reached via scrolling.
 pub const VISIBLE_STEPS: usize = 16;
+
+/// Number of pages in the first-run onboarding walkthrough:
+/// 5 workspaces + command palette + help.
+pub const ONBOARDING_STEPS: usize = 7;
 
 /// How many main-loop frames a status toast persists before auto-clearing.
 ///
@@ -804,6 +825,13 @@ pub struct App {
     pub user_patterns: Vec<crate::pattern::model::Pattern>,
     pub help_scroll: u16,
 
+    // --- Phase-2 Task 9: onboarding + two-tier help ---
+    /// Current page of the first-run walkthrough (0-based; < ONBOARDING_STEPS).
+    pub onboarding_step: usize,
+    /// When true (default) the help overlay shows the ~10 essential keys;
+    /// false shows the full reference. Toggled via `Action::ToggleHelpDetail`.
+    pub help_basic: bool,
+
     // --- M4a Task 3: favorites ---
     /// Persisted set of favorited pattern refs, loaded at startup.
     pub favorites: Favorites,
@@ -947,6 +975,8 @@ impl App {
             current_set_path: None,
             user_patterns: Vec::new(),
             help_scroll: 0,
+            onboarding_step: 0,
+            help_basic: true,
             favorites: Favorites::default(),
             fav_filter: false,
             crates: CrateIndex::default(),
@@ -3203,6 +3233,27 @@ impl App {
                     Err(e) => self.set_status(format!("Load failed: {}", e)),
                 }
             }
+            Action::OnboardingNext => {
+                if self.onboarding_step + 1 >= ONBOARDING_STEPS {
+                    // Tour finished. Marker write is best-effort: a failed write
+                    // must never wedge the UI (the tour just re-shows next run).
+                    let _ = crate::pattern::store::mark_onboarded(&crate::config::data_dir());
+                    self.close_overlay();
+                } else {
+                    self.onboarding_step += 1;
+                }
+            }
+            Action::OnboardingDismiss => {
+                // Dismissing counts as onboarded — never nag again. Best-effort.
+                let _ = crate::pattern::store::mark_onboarded(&crate::config::data_dir());
+                self.close_overlay();
+            }
+            Action::ToggleHelpDetail => {
+                self.help_basic = !self.help_basic;
+                // The two views have different heights; a stale offset could
+                // leave the shorter view scrolled past its end.
+                self.help_scroll = 0;
+            }
             Action::HelpScroll(delta) => {
                 if self.overlay == Some(Overlay::Help) {
                     let d = self.help_scroll as i32 + delta;
@@ -4194,6 +4245,7 @@ impl App {
             Mode::DevicePicker => "DEVICE",
             Mode::ClockInSelector => "CLK-IN",
             Mode::CommandPalette => "PALETTE",
+            Mode::Onboarding => "WELCOME",
         }
     }
 
@@ -12720,7 +12772,7 @@ mod workspace_tests {
         );
     }
 
-    // ── Phase-2 Task 7: command palette state + re-dispatch ─────────────────
+    // Phase-2 Task 7: command palette state + re-dispatch
 
     #[test]
     fn open_palette_raises_overlay_and_resets_state() {
@@ -12789,6 +12841,60 @@ mod workspace_tests {
             app.apply(Action::PaletteChar(c));
         }
         app.apply(Action::PaletteMove(1));
-        assert_eq!(app.palette_sel, 0, "single hit → selection clamps to 0");
+        assert_eq!(app.palette_sel, 0, "single hit -> selection clamps to 0");
+    }
+
+    // Task 9 (Phase 2): onboarding walkthrough + two-tier help
+
+    #[test]
+    fn onboarding_next_advances_then_completes() {
+        let mut app = crate::test_support::app_for_tests();
+        app.open_overlay(Overlay::Onboarding);
+        assert_eq!(app.onboarding_step, 0);
+        // Advance through every step but the last: overlay stays up.
+        for expected in 1..ONBOARDING_STEPS {
+            app.apply(Action::OnboardingNext);
+            assert_eq!(
+                app.overlay,
+                Some(Overlay::Onboarding),
+                "overlay must stay up mid-tour (step {expected})"
+            );
+            assert_eq!(app.onboarding_step, expected);
+        }
+        // Next on the last step completes and dismisses.
+        app.apply(Action::OnboardingNext);
+        assert!(app.overlay.is_none(), "tour end must dismiss the overlay");
+    }
+
+    #[test]
+    fn onboarding_dismiss_closes_overlay() {
+        let mut app = crate::test_support::app_for_tests();
+        app.open_overlay(Overlay::Onboarding);
+        app.apply(Action::OnboardingDismiss);
+        assert!(app.overlay.is_none(), "Esc must dismiss the walkthrough");
+        assert_eq!(
+            app.workspace,
+            Workspace::Perform,
+            "dismissing onboarding must not change workspace"
+        );
+    }
+
+    #[test]
+    fn toggle_help_detail_flips_basic_flag() {
+        let mut app = crate::test_support::app_for_tests();
+        assert!(app.help_basic, "help must default to the basic view");
+        app.help_scroll = 7;
+        app.apply(Action::ToggleHelpDetail);
+        assert!(!app.help_basic);
+        assert_eq!(app.help_scroll, 0, "toggling views must reset scroll");
+        app.apply(Action::ToggleHelpDetail);
+        assert!(app.help_basic);
+    }
+
+    #[test]
+    fn onboarding_context_label() {
+        let mut app = crate::test_support::app_for_tests();
+        app.open_overlay(Overlay::Onboarding);
+        assert_eq!(app.context_label(), "WELCOME");
     }
 }

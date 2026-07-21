@@ -10,6 +10,7 @@ pub mod help;
 pub mod lanes;
 pub mod library;
 pub mod mgmt;
+pub mod onboarding;
 pub mod recovery;
 pub mod route_editor;
 pub mod scene_view;
@@ -38,7 +39,8 @@ use crate::pattern::model::LaneKind;
 fn footer_hint(app: &App) -> String {
     if let Some(overlay) = &app.overlay {
         return match overlay {
-            Overlay::Help => "[?/esc]close".to_string(),
+            Overlay::Help => "[tab]detail [?/esc]close".to_string(),
+            Overlay::Onboarding => "[enter/→]next [esc]skip".to_string(),
             Overlay::TempoEntry => "[0-9]type BPM [enter]set [esc]cancel".to_string(),
             Overlay::NameEntry(_) => {
                 "[a-z 0-9 - #]type name [enter]confirm [esc]cancel".to_string()
@@ -247,7 +249,10 @@ pub fn render(f: &mut Frame, app: &App) {
     // Overlays float centered on top of the active workspace base.
     if let Some(overlay) = &app.overlay {
         match overlay {
-            Overlay::Help => help::render_help(f, centered(area, 60, 70), app.help_scroll),
+            Overlay::Help => {
+                help::render_help(f, centered(area, 60, 70), app.help_scroll, app.help_basic)
+            }
+            Overlay::Onboarding => onboarding::render_onboarding(f, centered(area, 60, 50), app),
             // Tempo entry is shown inline in the transport bar; no centered panel.
             Overlay::TempoEntry => {}
             Overlay::NameEntry(_) => mgmt::render_name_entry(f, centered(area, 50, 30), app),

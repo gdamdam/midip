@@ -205,15 +205,40 @@ fn right_column_lines() -> Vec<Line<'static>> {
     ]
 }
 
+/// The ~10 essential keys shown by the basic (default) help view. Everything
+/// else lives in the full reference behind the [tab] toggle.
+fn basic_lines() -> Vec<Line<'static>> {
+    vec![
+        header("Essentials"),
+        row("[ctrl+1..5]    switch workspace"),
+        row("               1 Perform  2 Pattern  3 Library  4 Song  5 Setup"),
+        row("[:] / [ctrl+p] command palette"),
+        row("[space]        play / stop"),
+        row("[enter]        toggle step / place note"),
+        row("[tab]          next lane"),
+        row("[s]            save set"),
+        row("[ctrl+z]       undo"),
+        row("[?]            help"),
+        row("[q q]          quit"),
+    ]
+}
+
 /// Render the help overlay into `area` (caller clears/positions it).
 ///
 /// `scroll` is the current scroll offset in lines; this function clamps it
 /// to a valid range internally and renders the appropriate slice.
-pub fn render_help(f: &mut Frame, area: Rect, scroll: u16) {
+/// `basic` selects the essentials view (default); the full two-column
+/// reference is shown when it is false ([tab] toggles).
+pub fn render_help(f: &mut Frame, area: Rect, scroll: u16, basic: bool) {
     f.render_widget(Clear, area);
 
+    let title = if basic {
+        " HELP — ESSENTIALS "
+    } else {
+        " CONTROLS "
+    };
     let block = Block::default().borders(Borders::ALL).title(Span::styled(
-        " CONTROLS ",
+        title,
         Style::default().add_modifier(Modifier::BOLD),
     ));
 
@@ -240,6 +265,22 @@ pub fn render_help(f: &mut Frame, area: Rect, scroll: u16) {
 
     let content_area = split[0];
     let hint_area = split[1];
+
+    if basic {
+        let lines = basic_lines();
+        let total = lines.len() as u16;
+        let max_scroll = total.saturating_sub(content_area.height);
+        let effective_scroll = scroll.min(max_scroll);
+        f.render_widget(
+            Paragraph::new(lines).scroll((effective_scroll, 0)),
+            content_area,
+        );
+        f.render_widget(
+            Paragraph::new("tab full reference · ? close").style(Style::default().fg(EMBER.dim)),
+            hint_area,
+        );
+        return;
+    }
 
     // Two equal columns for content.
     let cols = Layout::default()
@@ -279,9 +320,9 @@ pub fn render_help(f: &mut Frame, area: Rect, scroll: u16) {
         (false, false) => "    ",
     };
     let hint = if max_scroll > 0 {
-        format!("{indicators}↑↓ PgUp/PgDn scroll · ? close")
+        format!("{indicators}↑↓ PgUp/PgDn scroll · tab basics · ? close")
     } else {
-        "? close".to_string()
+        "tab basics · ? close".to_string()
     };
     f.render_widget(
         Paragraph::new(hint).style(Style::default().fg(EMBER.dim)),
@@ -295,16 +336,54 @@ mod tests {
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
 
-    fn render_help_to_string(w: u16, h: u16, scroll: u16) -> String {
+    fn render_help_view(w: u16, h: u16, scroll: u16, basic: bool) -> String {
         let backend = TestBackend::new(w, h);
         let mut term = Terminal::new(backend).unwrap();
-        term.draw(|f| render_help(f, f.area(), scroll)).unwrap();
+        term.draw(|f| render_help(f, f.area(), scroll, basic))
+            .unwrap();
         term.backend()
             .buffer()
             .content()
             .iter()
             .map(|c| c.symbol())
             .collect()
+    }
+
+    /// Full-reference view (pre-Task-9 behavior): all existing assertions run
+    /// against it unchanged.
+    fn render_help_to_string(w: u16, h: u16, scroll: u16) -> String {
+        render_help_view(w, h, scroll, false)
+    }
+
+    // ── Task 9 (Phase 2): two-tier help ──────────────────────────────────────
+
+    #[test]
+    fn basic_view_shows_essentials_and_hides_deep_reference() {
+        let basic = render_help_view(80, 30, 0, true);
+        for needle in ["ctrl+1", "play", "save", "quit", "help", "palette"] {
+            assert!(
+                basic.contains(needle),
+                "basic view must mention {needle:?}, got: {basic:?}"
+            );
+        }
+        assert!(
+            !basic.contains("euclid"),
+            "basic view must not include the deep reference, got: {basic:?}"
+        );
+        assert!(
+            basic.contains("tab"),
+            "basic view must advertise the full-reference toggle, got: {basic:?}"
+        );
+    }
+
+    #[test]
+    fn full_view_still_has_deep_reference() {
+        let full = render_help_view(110, 75, 0, false);
+        assert!(full.contains("euclid"));
+        assert!(
+            full.contains("tab"),
+            "full view must advertise the basics toggle, got: {full:?}"
+        );
     }
 
     #[test]
