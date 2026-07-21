@@ -97,6 +97,48 @@ pub enum Mode {
     DevicePicker,
 }
 
+/// Top-level TUI workspace. Five sibling workspaces the user switches between;
+/// added ahead of the workspace-driven navigation (currently purely additive).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Workspace {
+    Perform,
+    Pattern,
+    Library,
+    Song,
+    Setup,
+}
+impl Workspace {
+    pub fn index(self) -> usize {
+        match self {
+            Self::Perform => 0,
+            Self::Pattern => 1,
+            Self::Library => 2,
+            Self::Song => 3,
+            Self::Setup => 4,
+        }
+    }
+    pub fn from_index(i: u8) -> Option<Self> {
+        [
+            Self::Perform,
+            Self::Pattern,
+            Self::Library,
+            Self::Song,
+            Self::Setup,
+        ]
+        .get(i as usize)
+        .copied()
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Perform => "PERFORM",
+            Self::Pattern => "PATTERN",
+            Self::Library => "LIBRARY",
+            Self::Song => "SONG",
+            Self::Setup => "SETUP",
+        }
+    }
+}
+
 /// Which field is focused in the route editor (cycles Left/Right).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum RouteField {
@@ -571,6 +613,8 @@ pub struct App {
     pub set: Set,
     pub focus: usize,
     pub mode: Mode,
+    /// Active top-level workspace (Perform/Pattern/Library/Song/Setup).
+    pub workspace: Workspace,
     pub cur_row: usize,
     pub cur_col: usize,
     /// First visible step column — always `(cur_col / VISIBLE_STEPS) * VISIBLE_STEPS` (page-snapped).
@@ -746,6 +790,7 @@ impl App {
             set,
             focus: 0,
             mode: Mode::Edit,
+            workspace: Workspace::Perform,
             cur_row: 0,
             cur_col: 0,
             step_scroll: 0,
@@ -823,6 +868,12 @@ impl App {
     pub fn set_status(&mut self, s: impl Into<String>) {
         self.status = s.into();
         self.status_ttl = STATUS_TTL_FRAMES;
+    }
+
+    /// Switch the active workspace and surface a toast naming it.
+    pub fn set_workspace(&mut self, ws: Workspace) {
+        self.workspace = ws;
+        self.set_status(ws.label());
     }
 
     /// Decrement the status TTL by one frame; clear `status` when it reaches 0.
@@ -12142,5 +12193,32 @@ mod tests {
                 .any(|c| matches!(c, UiCommand::SetClockInPort(None))),
             "expected SetClockInPort(None) command; got {cmds:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod workspace_tests {
+    use super::*;
+    #[test]
+    fn workspace_index_roundtrips() {
+        for (i, ws) in [
+            Workspace::Perform,
+            Workspace::Pattern,
+            Workspace::Library,
+            Workspace::Song,
+            Workspace::Setup,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            assert_eq!(ws.index(), i);
+            assert_eq!(Workspace::from_index(i as u8), Some(ws));
+        }
+        assert_eq!(Workspace::from_index(5), None);
+    }
+    #[test]
+    fn new_app_defaults_to_perform() {
+        let app = crate::test_support::app_for_tests();
+        assert_eq!(app.workspace, Workspace::Perform);
     }
 }
