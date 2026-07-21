@@ -1,5 +1,6 @@
 pub mod chain_view;
 pub mod clock_in_selector;
+pub mod command_palette;
 pub mod crate_view;
 pub mod device_picker;
 pub mod editor_drums;
@@ -59,6 +60,9 @@ fn footer_hint(app: &App) -> String {
             }
             Overlay::CrateView => {
                 "[↑↓]entry [←→]crate [enter]launch [a]audition [f]fav [V/esc]close".to_string()
+            }
+            Overlay::CommandPalette => {
+                "[type]filter [↑↓]select [enter]run [esc]cancel".to_string()
             }
         };
     }
@@ -256,6 +260,9 @@ pub fn render(f: &mut Frame, app: &App) {
                 generative_view::render_generative_panel(f, centered(area, 70, 70), app)
             }
             Overlay::CrateView => crate_view::render_crate_view(f, centered(area, 70, 70), app),
+            Overlay::CommandPalette => {
+                command_palette::render_command_palette(f, centered(area, 60, 70), app)
+            }
         }
     }
 }

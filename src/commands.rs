@@ -43,7 +43,7 @@ pub struct Command {
 
 /// The command registry, in a stable declaration order (used as display
 /// order for the palette). See the module doc for scope.
-static REGISTRY: [Command; 34] = [
+static REGISTRY: [Command; 35] = [
     // ── Truly global (checked before any workspace/overlay branch, or bound
     // ── in more than one workspace) ──────────────────────────────────────
     Command {
@@ -107,6 +107,14 @@ static REGISTRY: [Command; 34] = [
         action: Action::Help,
         workspace: None,
         accel: "?",
+    },
+    // Ctrl+P works from anywhere (':' additionally opens it from any bare
+    // workspace). Listed so the palette itself is discoverable in the hints.
+    Command {
+        name: "Open command palette",
+        action: Action::OpenPalette,
+        workspace: None,
+        accel: "Ctrl+P",
     },
     // ── Perform/Pattern (Edit keymap) ────────────────────────────────────
     Command {

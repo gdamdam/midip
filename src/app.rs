@@ -95,6 +95,9 @@ pub enum Mode {
     /// device catalog filtered to the focused lane's kind. Selecting a device
     /// swaps the lane's profile and re-routes it to that device.
     DevicePicker,
+    /// Command palette: global fuzzy finder over the command registry.
+    /// Opened via `:` (bare workspace) or Ctrl+P (anywhere).
+    CommandPalette,
 }
 
 /// Transient layer that floats over the active [`Workspace`] — dialogs and
@@ -124,6 +127,8 @@ pub enum Overlay {
     Generative,
     /// Live crate browser (was `Mode::CrateView`), scoped to the Perform workspace.
     CrateView,
+    /// Command palette: global fuzzy finder over `commands::registry()`.
+    CommandPalette,
 }
 
 /// Top-level TUI workspace. Five sibling workspaces the user switches between;
@@ -187,6 +192,7 @@ fn derive_mode(workspace: Workspace, overlay: &Option<Overlay>) -> Mode {
         Some(Overlay::NoteInput) => Mode::NoteInput,
         Some(Overlay::Generative) => Mode::Generative,
         Some(Overlay::CrateView) => Mode::CrateView,
+        Some(Overlay::CommandPalette) => Mode::CommandPalette,
         None => match workspace {
             Workspace::Perform | Workspace::Pattern => Mode::Edit,
             Workspace::Library => Mode::Library,
@@ -599,6 +605,21 @@ pub enum Action {
     ClockInNavPort(i32),
     /// Confirm the highlighted port (or "(none)") in the clock-in selector.
     ClockInConfirm,
+    // ── Phase-2 Task 7: command palette ──────────────────────────────────────
+    /// Open the command palette overlay (`:` from a bare workspace, Ctrl+P anywhere).
+    /// Resets the query and selection so every open starts fresh.
+    OpenPalette,
+    /// Append a character to the palette query; resets selection to the top hit.
+    PaletteChar(char),
+    /// Delete the last character of the palette query; resets selection.
+    PaletteBackspace,
+    /// Move the palette selection by ±1 within the filtered results (clamped).
+    PaletteMove(i32),
+    /// Run the selected command: close the palette, then re-dispatch its
+    /// `Action` through `apply` — a palette run IS the bound keypress.
+    PaletteRun,
+    /// Dismiss the palette without running anything.
+    PaletteCancel,
     None,
 }
 
@@ -827,6 +848,12 @@ pub struct App {
     /// Currently highlighted index in selector: 0 = "(none/manual)", 1..N = port.
     pub clock_in_sel: usize,
 
+    // --- Phase-2 Task 7: command palette state ---
+    /// Current fuzzy-filter query while `Overlay::CommandPalette` is raised.
+    pub palette_query: String,
+    /// Selected row index into the FILTERED result list (not the registry).
+    pub palette_sel: usize,
+
     // --- mouse input ---
     /// Screen-space map of the editor grid, rebuilt every render, consumed by mouse
     /// input. `RefCell` because rendering takes `&App` but must record geometry.
@@ -921,6 +948,8 @@ impl App {
             clock_in_tempo: 0.0,
             clock_in_ports: Vec::new(),
             clock_in_sel: 0,
+            palette_query: String::new(),
+            palette_sel: 0,
             hits: std::cell::RefCell::new(Vec::new()),
             mouse_paint: None,
             mouse_last: None,
@@ -3705,6 +3734,47 @@ impl App {
                 }
                 self.close_overlay();
             }
+            Action::OpenPalette => {
+                self.palette_query.clear();
+                self.palette_sel = 0;
+                self.open_overlay(Overlay::CommandPalette);
+            }
+            Action::PaletteChar(c) => {
+                self.palette_query.push(c);
+                // The result list changed shape — snap back to the top hit.
+                self.palette_sel = 0;
+            }
+            Action::PaletteBackspace => {
+                self.palette_query.pop();
+                self.palette_sel = 0;
+            }
+            Action::PaletteMove(d) => {
+                let n = crate::ui::command_palette::fuzzy_filter(
+                    crate::commands::registry(),
+                    &self.palette_query,
+                )
+                .len();
+                if n > 0 {
+                    self.palette_sel =
+                        (self.palette_sel.min(n - 1) as i32 + d).clamp(0, n as i32 - 1) as usize;
+                }
+            }
+            Action::PaletteRun => {
+                let selected = crate::ui::command_palette::fuzzy_filter(
+                    crate::commands::registry(),
+                    &self.palette_query,
+                )
+                .get(self.palette_sel)
+                .map(|c| c.action.clone());
+                self.close_overlay();
+                match selected {
+                    // Re-dispatch through `apply` so running a command from the
+                    // palette does EXACTLY what its accelerator key does.
+                    Some(action) => return self.apply(action),
+                    None => self.set_status("No matching command"),
+                }
+            }
+            Action::PaletteCancel => self.close_overlay(),
             Action::None => {}
         }
         cmds
@@ -3994,6 +4064,7 @@ impl App {
             Mode::Generative => "GENERATIVE",
             Mode::DevicePicker => "DEVICE",
             Mode::ClockInSelector => "CLK-IN",
+            Mode::CommandPalette => "PALETTE",
         }
     }
 
@@ -12348,5 +12419,73 @@ mod workspace_tests {
             Workspace::Library,
             "closing overlay must not change workspace"
         );
+    }
+
+    // ── Phase-2 Task 7: command palette state + re-dispatch ─────────────────
+
+    #[test]
+    fn open_palette_raises_overlay_and_resets_state() {
+        let mut app = crate::test_support::app_for_tests();
+        app.palette_query = "stale".to_string();
+        app.palette_sel = 3;
+        app.apply(Action::OpenPalette);
+        assert_eq!(app.overlay, Some(Overlay::CommandPalette));
+        assert_eq!(app.mode, Mode::CommandPalette);
+        assert!(app.palette_query.is_empty());
+        assert_eq!(app.palette_sel, 0);
+    }
+
+    #[test]
+    fn palette_chars_and_backspace_edit_query() {
+        let mut app = crate::test_support::app_for_tests();
+        app.apply(Action::OpenPalette);
+        for c in "lib".chars() {
+            app.apply(Action::PaletteChar(c));
+        }
+        assert_eq!(app.palette_query, "lib");
+        app.apply(Action::PaletteBackspace);
+        assert_eq!(app.palette_query, "li");
+    }
+
+    #[test]
+    fn palette_run_redispatches_selected_action_through_apply() {
+        let mut app = crate::test_support::app_for_tests();
+        app.apply(Action::OpenPalette);
+        // "open lib" prefix-matches exactly one registry command: "Open library".
+        for c in "open lib".chars() {
+            app.apply(Action::PaletteChar(c));
+        }
+        app.apply(Action::PaletteRun);
+        assert!(app.overlay.is_none(), "palette must close on run");
+        assert_eq!(
+            app.workspace,
+            Workspace::Library,
+            "running 'Open library' must do exactly what the 'l' key does"
+        );
+    }
+
+    #[test]
+    fn palette_cancel_closes_without_side_effects() {
+        let mut app = crate::test_support::app_for_tests();
+        app.apply(Action::OpenPalette);
+        app.apply(Action::PaletteCancel);
+        assert!(app.overlay.is_none());
+        assert_eq!(app.workspace, Workspace::Perform);
+    }
+
+    #[test]
+    fn palette_move_clamps_to_filtered_results() {
+        let mut app = crate::test_support::app_for_tests();
+        app.apply(Action::OpenPalette);
+        app.apply(Action::PaletteMove(-1));
+        assert_eq!(app.palette_sel, 0, "must clamp at the top");
+        app.apply(Action::PaletteMove(1));
+        assert_eq!(app.palette_sel, 1);
+        // Narrowing the query resets the selection into the filtered range.
+        for c in "open lib".chars() {
+            app.apply(Action::PaletteChar(c));
+        }
+        app.apply(Action::PaletteMove(1));
+        assert_eq!(app.palette_sel, 0, "single hit → selection clamps to 0");
     }
 }
