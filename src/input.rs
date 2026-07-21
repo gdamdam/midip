@@ -31,6 +31,9 @@ pub fn key_to_action(
             }
             KeyCode::Char('y') => return Action::Redo,
             KeyCode::Char('r') => return Action::Redo,
+            // Ctrl+P opens the command palette from ANYWHERE — including over
+            // a raised overlay ( ':' below is the bare-workspace-only trigger).
+            KeyCode::Char('p') => return Action::OpenPalette,
             _ => {}
         }
         if let KeyCode::Char(c @ '1'..='5') = key.code {
@@ -44,6 +47,16 @@ pub fn key_to_action(
     // In NameEntry, space is a name character — override the global TogglePlay for it.
     if matches!(overlay, Some(Overlay::NameEntry(_))) && key.code == KeyCode::Char(' ') {
         return Action::NameChar(' ');
+    }
+    // Likewise in the command palette: space and '!' are query text (command
+    // names contain spaces, e.g. "Open library"; '!' is a printable the user
+    // may type) — override the global TogglePlay/Panic for them. These are the
+    // only two bare printable-char globals checked before the overlay branch
+    // (the ctrl block above is modifier-gated), so no other key leaks.
+    if matches!(overlay, Some(Overlay::CommandPalette)) {
+        if let KeyCode::Char(c @ (' ' | '!')) = key.code {
+            return Action::PaletteChar(c);
+        }
     }
 
     // Global play/panic — checked before per-mode branches so they fire in ALL modes.
@@ -222,7 +235,26 @@ pub fn key_to_action(
                 KeyCode::Enter => Action::DevicePickerConfirm,
                 _ => Action::None,
             },
+            Overlay::CommandPalette => match key.code {
+                KeyCode::Esc => Action::PaletteCancel,
+                KeyCode::Enter => Action::PaletteRun,
+                KeyCode::Up => Action::PaletteMove(-1),
+                KeyCode::Down => Action::PaletteMove(1),
+                KeyCode::Backspace => Action::PaletteBackspace,
+                // Any printable character extends the query (space and '!'
+                // are routed here by the pre-global override above).
+                KeyCode::Char(c) => Action::PaletteChar(c),
+                _ => Action::None,
+            },
         };
+    }
+
+    // ':' opens the command palette from any bare workspace. This point is
+    // reached only when `overlay.is_none()` (the overlay branch above returns
+    // for every raised overlay), so text-entry contexts (NameEntry, TempoEntry,
+    // the palette itself) can never lose ':' to this trigger.
+    if key.code == KeyCode::Char(':') {
+        return Action::OpenPalette;
     }
 
     // No overlay → standardized Esc-home grammar first. In any bare workspace that
@@ -508,6 +540,7 @@ mod tests {
             Mode::NoteInput => (Workspace::Perform, Some(Overlay::NoteInput)),
             Mode::Generative => (Workspace::Perform, Some(Overlay::Generative)),
             Mode::CrateView => (Workspace::Perform, Some(Overlay::CrateView)),
+            Mode::CommandPalette => (Workspace::Perform, Some(Overlay::CommandPalette)),
         };
         key_to_action(key, ws, ov, kind)
     }
@@ -2557,5 +2590,111 @@ mod tests {
                 "'Q' in Edit must be CycleClockDiv"
             );
         }
+    }
+
+    // ── Phase-2 Task 7: command palette triggers + overlay keymap ────────────
+
+    #[test]
+    fn colon_and_ctrl_p_open_palette() {
+        assert_eq!(
+            key_to_action(
+                k(KeyCode::Char(':')),
+                Workspace::Perform,
+                None,
+                LaneKind::Drums
+            ),
+            Action::OpenPalette
+        );
+        assert_eq!(
+            key_to_action(
+                ck(KeyCode::Char('p')),
+                Workspace::Perform,
+                None,
+                LaneKind::Drums
+            ),
+            Action::OpenPalette
+        );
+    }
+
+    #[test]
+    fn colon_opens_palette_from_every_bare_workspace() {
+        for ws in [
+            Workspace::Perform,
+            Workspace::Pattern,
+            Workspace::Library,
+            Workspace::Song,
+            Workspace::Setup,
+        ] {
+            assert_eq!(
+                key_to_action(k(KeyCode::Char(':')), ws, None, LaneKind::Drums),
+                Action::OpenPalette,
+                "':' must open the palette from bare {ws:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn colon_does_not_hijack_overlay_keymaps() {
+        // Overlays fully own the keymap while raised — ':' must NOT open the
+        // palette from a text-entry context (or any other overlay).
+        assert_eq!(
+            key_to_action(
+                k(KeyCode::Char(':')),
+                Workspace::Perform,
+                Some(Overlay::NameEntry(crate::app::NamePurpose::SaveSetAs)),
+                LaneKind::Drums
+            ),
+            Action::None
+        );
+        assert_eq!(
+            key_to_action(
+                k(KeyCode::Char(':')),
+                Workspace::Perform,
+                Some(Overlay::TempoEntry),
+                LaneKind::Drums
+            ),
+            Action::None
+        );
+    }
+
+    #[test]
+    fn ctrl_p_opens_palette_even_over_an_overlay() {
+        assert_eq!(
+            key_to_action(
+                ck(KeyCode::Char('p')),
+                Workspace::Perform,
+                Some(Overlay::Help),
+                LaneKind::Drums
+            ),
+            Action::OpenPalette
+        );
+    }
+
+    #[test]
+    fn palette_overlay_keymap() {
+        let kta_p = |key| {
+            key_to_action(
+                key,
+                Workspace::Perform,
+                Some(Overlay::CommandPalette),
+                LaneKind::Drums,
+            )
+        };
+        assert_eq!(kta_p(k(KeyCode::Esc)), Action::PaletteCancel);
+        assert_eq!(kta_p(k(KeyCode::Enter)), Action::PaletteRun);
+        assert_eq!(kta_p(k(KeyCode::Up)), Action::PaletteMove(-1));
+        assert_eq!(kta_p(k(KeyCode::Down)), Action::PaletteMove(1));
+        assert_eq!(kta_p(k(KeyCode::Backspace)), Action::PaletteBackspace);
+        assert_eq!(kta_p(k(KeyCode::Char('l'))), Action::PaletteChar('l'));
+        assert_eq!(
+            kta_p(k(KeyCode::Char(' '))),
+            Action::PaletteChar(' '),
+            "space must type into the palette query, not TogglePlay"
+        );
+        assert_eq!(
+            kta_p(k(KeyCode::Char('!'))),
+            Action::PaletteChar('!'),
+            "'!' must type into the palette query, not fire the global Panic"
+        );
     }
 }
