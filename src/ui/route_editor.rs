@@ -18,10 +18,16 @@ const MISSING: &str = "○";
 pub fn render_route_editor(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(Clear, area);
 
-    let block = Block::default().borders(Borders::ALL).title(Span::styled(
-        " ROUTE EDITOR ",
-        Style::default().add_modifier(Modifier::BOLD),
-    ));
+    // Opaque theme bg: `Clear` above resets the rect to the terminal default, so
+    // repaint the theme background here (the panel now fills the Setup body base,
+    // not a small centered float over an already-painted backdrop).
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .style(Style::default().bg(EMBER.bg))
+        .title(Span::styled(
+            " ROUTE EDITOR ",
+            Style::default().add_modifier(Modifier::BOLD),
+        ));
     let inner = block.inner(area);
     f.render_widget(block, area);
 

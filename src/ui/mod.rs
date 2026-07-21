@@ -156,6 +156,17 @@ const MIN_HEIGHT: u16 = 16;
 pub fn render(f: &mut Frame, app: &App) {
     let area = f.area();
 
+    // Full-frame background paint FIRST: fill every cell with the theme bg so
+    // ratatui emits a known value for the whole frame each render. Without this,
+    // cells no widget writes keep `Color::Reset` and match ratatui's own prior
+    // buffer, so ratatui never emits them and the real terminal's scrollback
+    // shows through (we never call `terminal.clear()`). This is the floor; panes
+    // and overlays paint on top.
+    f.render_widget(
+        ratatui::widgets::Block::default().style(Style::default().bg(EMBER.bg)),
+        area,
+    );
+
     // Rebuild the mouse hit-map from scratch each frame: every interactive
     // widget below appends its regions in render order, so `hit_test`'s
     // last-pushed-first search resolves overlaps by z-order. Clearing here
@@ -219,63 +230,132 @@ pub fn render(f: &mut Frame, app: &App) {
             }
             footer(f, chunks[2]);
         }
-        Workspace::Library | Workspace::Song | Workspace::Setup => {
+        // Library/Song/Setup each render their OWN view as the full body
+        // (transport on top + the workspace view filling the rest + footer).
+        // Previously these drew the combined transport+lanes+editor base and
+        // then floated a small centered panel on top with no Clear, so the drum
+        // editor showed through behind the panel. Now the base IS the view.
+        Workspace::Library => {
             let chunks = Layout::vertical([
                 Constraint::Length(3), // transport
-                Constraint::Length(5), // lanes
-                Constraint::Min(3),    // editor
+                Constraint::Min(3),    // library browser
                 Constraint::Length(1), // footer
             ])
             .split(area);
             transport::render_transport(f, chunks[0], app);
-            lanes::render_lanes(f, chunks[1], app);
-            match app.focused_kind() {
-                LaneKind::Drums => editor_drums::render_drum_editor(f, chunks[2], app),
-                LaneKind::Melodic => editor_melodic::render_melodic_editor(f, chunks[2], app),
-            }
-            footer(f, chunks[3]);
+            library::render_library(f, chunks[1], app);
+            footer(f, chunks[2]);
+        }
+        Workspace::Song => {
+            let chunks = Layout::vertical([
+                Constraint::Length(3), // transport
+                Constraint::Min(3),    // scene manager
+                Constraint::Length(1), // footer
+            ])
+            .split(area);
+            transport::render_transport(f, chunks[0], app);
+            scene_view::render_scene_view(f, chunks[1], app);
+            footer(f, chunks[2]);
+        }
+        Workspace::Setup => {
+            let chunks = Layout::vertical([
+                Constraint::Length(3), // transport
+                Constraint::Min(3),    // route editor
+                Constraint::Length(1), // footer
+            ])
+            .split(area);
+            transport::render_transport(f, chunks[0], app);
+            route_editor::render_route_editor(f, chunks[1], app);
+            footer(f, chunks[2]);
         }
     }
 
-    // Workspace centered panels: Library/Song/Setup float their view over the combined
-    // base rendered above. Perform/Pattern draw no centered panel.
-    match app.workspace {
-        Workspace::Library => library::render_library(f, centered(area, 90, 70), app),
-        Workspace::Song => scene_view::render_scene_view(f, centered(area, 70, 70), app),
-        Workspace::Setup => route_editor::render_route_editor(f, centered(area, 80, 70), app),
-        Workspace::Perform | Workspace::Pattern => {}
-    }
-
-    // Overlays float centered on top of the active workspace base.
+    // Overlays float centered on top of the active workspace base. Each first
+    // paints an opaque theme backdrop over its rect (Clear + bg block) so the
+    // workspace base never bleeds through the panel's internal gaps.
     if let Some(overlay) = &app.overlay {
         match overlay {
             Overlay::Help => {
-                help::render_help(f, centered(area, 60, 70), app.help_scroll, app.help_basic)
+                let r = centered(area, 60, 70);
+                clear_overlay_bg(f, r);
+                help::render_help(f, r, app.help_scroll, app.help_basic)
             }
-            Overlay::Onboarding => onboarding::render_onboarding(f, centered(area, 60, 50), app),
+            Overlay::Onboarding => {
+                let r = centered(area, 60, 50);
+                clear_overlay_bg(f, r);
+                onboarding::render_onboarding(f, r, app)
+            }
             // Tempo entry is shown inline in the transport bar; no centered panel.
             Overlay::TempoEntry => {}
-            Overlay::NameEntry(_) => mgmt::render_name_entry(f, centered(area, 50, 30), app),
-            Overlay::Confirm(_) => mgmt::render_confirm(f, centered(area, 50, 25), app),
-            Overlay::Recovery => recovery::render_recovery_prompt(f, centered(area, 70, 60)),
-            Overlay::SetBrowser => library::render_set_browser(f, centered(area, 60, 70), app),
-            Overlay::Chains => chain_view::render_chain_view(f, centered(area, 70, 80), app),
+            Overlay::NameEntry(_) => {
+                let r = centered(area, 50, 30);
+                clear_overlay_bg(f, r);
+                mgmt::render_name_entry(f, r, app)
+            }
+            Overlay::Confirm(_) => {
+                let r = centered(area, 50, 25);
+                clear_overlay_bg(f, r);
+                mgmt::render_confirm(f, r, app)
+            }
+            Overlay::Recovery => {
+                let r = centered(area, 70, 60);
+                clear_overlay_bg(f, r);
+                recovery::render_recovery_prompt(f, r)
+            }
+            Overlay::SetBrowser => {
+                let r = centered(area, 60, 70);
+                clear_overlay_bg(f, r);
+                library::render_set_browser(f, r, app)
+            }
+            Overlay::Chains => {
+                let r = centered(area, 70, 80);
+                clear_overlay_bg(f, r);
+                chain_view::render_chain_view(f, r, app)
+            }
             Overlay::ClockInSelector => {
-                clock_in_selector::render_clock_in_selector(f, centered(area, 60, 60), app)
+                let r = centered(area, 60, 60);
+                clear_overlay_bg(f, r);
+                clock_in_selector::render_clock_in_selector(f, r, app)
             }
             Overlay::DevicePicker => {
-                device_picker::render_device_picker(f, centered(area, 70, 70), app)
+                let r = centered(area, 70, 70);
+                clear_overlay_bg(f, r);
+                device_picker::render_device_picker(f, r, app)
             }
-            Overlay::NoteInput => mgmt::render_note_input(f, centered(area, 60, 20), app),
+            Overlay::NoteInput => {
+                let r = centered(area, 60, 20);
+                clear_overlay_bg(f, r);
+                mgmt::render_note_input(f, r, app)
+            }
             Overlay::Generative => {
-                generative_view::render_generative_panel(f, centered(area, 70, 70), app)
+                let r = centered(area, 70, 70);
+                clear_overlay_bg(f, r);
+                generative_view::render_generative_panel(f, r, app)
             }
-            Overlay::CrateView => crate_view::render_crate_view(f, centered(area, 70, 70), app),
+            Overlay::CrateView => {
+                let r = centered(area, 70, 70);
+                clear_overlay_bg(f, r);
+                crate_view::render_crate_view(f, r, app)
+            }
             Overlay::CommandPalette => {
-                command_palette::render_command_palette(f, centered(area, 60, 70), app)
+                let r = centered(area, 60, 70);
+                clear_overlay_bg(f, r);
+                command_palette::render_command_palette(f, r, app)
             }
         }
     }
+}
+
+/// Paint an opaque theme-colored backdrop over `rect` for a modal overlay:
+/// `Clear` drops whatever the workspace base drew there, then a theme-bg block
+/// writes an opaque background so the panel's internal gaps don't reveal the
+/// base beneath it.
+fn clear_overlay_bg(f: &mut Frame, rect: Rect) {
+    f.render_widget(ratatui::widgets::Clear, rect);
+    f.render_widget(
+        ratatui::widgets::Block::default().style(Style::default().bg(EMBER.bg)),
+        rect,
+    );
 }
 
 #[cfg(test)]
@@ -305,6 +385,60 @@ mod tests {
             .iter()
             .map(|c| c.symbol())
             .collect()
+    }
+
+    // --- Bug A: full-frame paint + proper per-workspace bases ---
+
+    #[test]
+    fn song_base_is_scenes_not_step_editor() {
+        // The Song workspace base must render the scenes view filling the body,
+        // NOT the transport+lanes+step-editor backdrop with a floating panel.
+        let set = Set::default_set(default_profiles());
+        let mut app = App::new(set, empty_library());
+        app.set_workspace(Workspace::Song);
+        let whole = render_to_string(&app);
+        assert!(
+            whole.contains("SCENES"),
+            "Song base must show the scenes view; got: {whole:?}"
+        );
+        // "steps" only appears in the drum/melodic step-editor title/indicator.
+        assert!(
+            !whole.contains("steps"),
+            "Song base must NOT render the step editor; got: {whole:?}"
+        );
+    }
+
+    #[test]
+    fn every_cell_is_painted_with_a_background() {
+        // Regression for scrollback bleed-through: render must write a background
+        // to EVERY cell each frame (ratatui only diffs against its own buffer, so
+        // untouched cells would leave the real terminal's scrollback visible).
+        for ws in [
+            Workspace::Perform,
+            Workspace::Pattern,
+            Workspace::Library,
+            Workspace::Song,
+            Workspace::Setup,
+        ] {
+            let set = Set::default_set(default_profiles());
+            let mut app = App::new(set, empty_library());
+            app.set_workspace(ws);
+            let backend = TestBackend::new(120, 30);
+            let mut term = Terminal::new(backend).unwrap();
+            term.draw(|f| render(f, &app)).unwrap();
+            let buf = term.backend().buffer();
+            // An "unpainted" cell keeps the terminal-default background
+            // (`Color::Reset`); ratatui then never emits it, so the real
+            // terminal's scrollback shows through. Every cell must instead carry
+            // an explicit background from the full-frame theme paint.
+            for cell in buf.content() {
+                assert_ne!(
+                    cell.style().bg,
+                    Some(ratatui::style::Color::Reset),
+                    "found an unpainted cell in {ws:?} (Color::Reset bg): {cell:?}"
+                );
+            }
+        }
     }
 
     #[test]
