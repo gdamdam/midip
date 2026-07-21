@@ -189,6 +189,8 @@ cargo test                   # run the test suite (1010 tests, no hardware neede
 
 Press **`?`** in‑app for the full scrollable two-column list. `space` and `!` work in every mode.
 
+The UI is organized into five workspaces — **Perform**, **Pattern**, **Library**, **Song**, **Setup** — switched with `Ctrl+1`..`Ctrl+5` (or by clicking the tab strip). Press `:` (or `Ctrl+P`) to open the **command palette**, a fuzzy finder over every command. Ableton Link auto-joins on startup; set `MIDIP_LINK=0` to opt out for a session (the SETUP toggle persists the preference).
+
 ### Transport
 
 | Key | Action |
