@@ -36,12 +36,10 @@ pub fn key_to_action(
             KeyCode::Char('p') => return Action::OpenPalette,
             _ => {}
         }
-        if let KeyCode::Char(c @ '1'..='5') = key.code {
-            let idx = (c as u8) - b'1';
-            if let Some(ws) = Workspace::from_index(idx) {
-                return Action::SwitchWorkspace(ws);
-            }
-        }
+        // NOTE: Ctrl+1..5 used to switch workspaces here, but terminals cannot
+        // deliver Ctrl+digit without keyboard-enhancement flags (which we do not
+        // enable), so those events never arrived. Workspace cycling now uses the
+        // reliably-delivered ',' / '.' keys in the bare-workspace path below.
     }
 
     // In NameEntry, space is a name character — override the global TogglePlay for it.
@@ -275,6 +273,22 @@ pub fn key_to_action(
         } else {
             Action::SwitchWorkspace(Workspace::Perform)
         };
+    }
+
+    // Workspace cycling from any bare workspace: '.' → next, ',' → previous,
+    // wrapping in tab order Perform→Pattern→Library→Song→Setup→Perform. These
+    // replace the old Ctrl+1..5 bindings (which terminals could not deliver).
+    // Reached only when `overlay.is_none()`, so they never shadow overlay or
+    // text-entry keys. Guarded out for melodic Perform/Pattern, where ',' / '.'
+    // remain the note-length accelerator (AdjustLen) handled in the Edit block.
+    let melodic_edit =
+        matches!(workspace, Workspace::Perform | Workspace::Pattern) && kind == LaneKind::Melodic;
+    if !melodic_edit {
+        match key.code {
+            KeyCode::Char('.') => return Action::SwitchWorkspace(workspace.next()),
+            KeyCode::Char(',') => return Action::SwitchWorkspace(workspace.prev()),
+            _ => {}
+        }
     }
 
     // No overlay → the active workspace's base keymap.
@@ -783,22 +797,106 @@ mod tests {
         }
     }
 
+    // ── comma/period workspace cycling (replaces Ctrl+digit switching) ──────
+
     #[test]
-    fn ctrl_digits_switch_workspaces() {
-        use crate::app::Workspace;
-        use crossterm::event::{KeyCode, KeyModifiers};
-        let mk = |c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL);
+    fn period_and_comma_cycle_workspaces() {
+        // '.' → next, ',' → previous, wrapping in tab order. Drums lane so the
+        // melodic AdjustLen guard does not apply.
         assert_eq!(
-            kta(mk('1'), Mode::Edit, LaneKind::Drums),
+            key_to_action(
+                k(KeyCode::Char('.')),
+                Workspace::Perform,
+                None,
+                LaneKind::Drums
+            ),
+            Action::SwitchWorkspace(Workspace::Pattern)
+        );
+        assert_eq!(
+            key_to_action(
+                k(KeyCode::Char(',')),
+                Workspace::Library,
+                None,
+                LaneKind::Drums
+            ),
+            Action::SwitchWorkspace(Workspace::Pattern)
+        );
+        // Wrap: Setup.next() == Perform; Perform.prev() == Setup.
+        assert_eq!(
+            key_to_action(
+                k(KeyCode::Char('.')),
+                Workspace::Setup,
+                None,
+                LaneKind::Drums
+            ),
             Action::SwitchWorkspace(Workspace::Perform)
         );
         assert_eq!(
-            kta(mk('3'), Mode::Edit, LaneKind::Drums),
-            Action::SwitchWorkspace(Workspace::Library)
+            key_to_action(
+                k(KeyCode::Char(',')),
+                Workspace::Perform,
+                None,
+                LaneKind::Drums
+            ),
+            Action::SwitchWorkspace(Workspace::Setup)
+        );
+        // Non-edit workspace switches regardless of lane kind.
+        assert_eq!(
+            key_to_action(
+                k(KeyCode::Char('.')),
+                Workspace::Song,
+                None,
+                LaneKind::Melodic
+            ),
+            Action::SwitchWorkspace(Workspace::Setup)
+        );
+    }
+
+    #[test]
+    fn comma_period_do_not_switch_when_overlay_open() {
+        // With any overlay raised, ',' / '.' must not switch workspaces (they
+        // belong to overlay/text-entry handling instead).
+        assert_eq!(
+            key_to_action(
+                k(KeyCode::Char('.')),
+                Workspace::Perform,
+                Some(Overlay::Help),
+                LaneKind::Drums
+            ),
+            Action::None
+        );
+        assert_ne!(
+            key_to_action(
+                k(KeyCode::Char(',')),
+                Workspace::Perform,
+                Some(Overlay::Help),
+                LaneKind::Drums
+            ),
+            Action::SwitchWorkspace(Workspace::Setup)
+        );
+    }
+
+    #[test]
+    fn melodic_perform_keeps_comma_period_for_note_len() {
+        // Preserve the melodic note-length accelerator in Perform/Pattern: ','/'.'
+        // stay AdjustLen for melodic lanes (workspace cycling is guarded out there).
+        assert_eq!(
+            key_to_action(
+                k(KeyCode::Char(',')),
+                Workspace::Perform,
+                None,
+                LaneKind::Melodic
+            ),
+            Action::AdjustLen(-1)
         );
         assert_eq!(
-            kta(mk('5'), Mode::Edit, LaneKind::Drums),
-            Action::SwitchWorkspace(Workspace::Setup)
+            key_to_action(
+                k(KeyCode::Char('.')),
+                Workspace::Pattern,
+                None,
+                LaneKind::Melodic
+            ),
+            Action::AdjustLen(1)
         );
     }
 

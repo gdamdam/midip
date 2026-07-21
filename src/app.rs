@@ -177,6 +177,14 @@ impl Workspace {
             Self::Setup => "SETUP",
         }
     }
+    /// Next workspace in tab order, wrapping Setup→Perform.
+    pub fn next(self) -> Workspace {
+        Workspace::from_index(((self.index() + 1) % 5) as u8).expect("index in 0..5")
+    }
+    /// Previous workspace in tab order, wrapping Perform→Setup.
+    pub fn prev(self) -> Workspace {
+        Workspace::from_index(((self.index() + 4) % 5) as u8).expect("index in 0..5")
+    }
 }
 
 /// Derive the shadow [`Mode`] from the authoritative `(workspace, overlay)` pair.
