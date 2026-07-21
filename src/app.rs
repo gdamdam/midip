@@ -755,6 +755,10 @@ pub struct App {
     pub playhead: usize,
     pub bar: u32,
     pub link_enabled: bool,
+    /// Persisted Link auto-join PREFERENCE (prefs.link_on), distinct from the
+    /// runtime `link_enabled`: `MIDIP_LINK=0` suppresses Link for the session
+    /// without touching this, so unrelated saves never clobber the user's choice.
+    pub link_pref_on: bool,
     pub link_tempo: f64,
     pub link_peers: u64,
     /// Previous peer count — used to detect 2→0 (Link lost) and 0→N (Link gained) transitions.
@@ -941,6 +945,8 @@ impl App {
             playhead: 0,
             bar: 0,
             link_enabled: false,
+            // Matches Prefs::default(); main.rs overwrites from loaded prefs.
+            link_pref_on: true,
             link_tempo: 120.0,
             link_peers: 0,
             prev_peers: 0,
@@ -1009,6 +1015,16 @@ impl App {
     ///
     /// All status writes MUST go through this method so that every toast
     /// expires automatically after `STATUS_TTL_FRAMES` loop iterations.
+    /// The prefs payload every `save_prefs` call must write: built from the
+    /// persisted PREFERENCES (`mirror_on`, `link_pref_on`), never from runtime
+    /// state like `link_enabled` (which MIDIP_LINK=0 forces off per-session).
+    pub fn current_prefs(&self) -> crate::pattern::store::Prefs {
+        crate::pattern::store::Prefs {
+            mirror_on: self.mirror_on,
+            link_on: self.link_pref_on,
+        }
+    }
+
     pub fn set_status(&mut self, s: impl Into<String>) {
         self.status = s.into();
         self.status_ttl = STATUS_TTL_FRAMES;
@@ -1805,6 +1821,15 @@ impl App {
                 } else {
                     "Link off"
                 });
+                // Persist the SETUP choice so the next launch honors it
+                // (auto-join defaults on; an explicit off here opts out).
+                // Only this explicit toggle updates the pref — never runtime
+                // state changes (e.g. the MIDIP_LINK=0 session kill-switch).
+                self.link_pref_on = self.link_enabled;
+                let _ = crate::pattern::store::save_prefs(
+                    &crate::config::data_dir(),
+                    &self.current_prefs(),
+                );
                 cmds.push(UiCommand::ToggleLink(self.link_enabled));
             }
             Action::OpenTempo => {
@@ -2863,9 +2888,7 @@ impl App {
                 });
                 let _ = crate::pattern::store::save_prefs(
                     &crate::config::data_dir(),
-                    &crate::pattern::store::Prefs {
-                        mirror_on: self.mirror_on,
-                    },
+                    &self.current_prefs(),
                 );
                 cmds.push(crate::engine::UiCommand::SetMirror(self.mirror_on));
             }
@@ -7356,6 +7379,40 @@ mod tests {
             "RecoveryOpenSaved must go to SetBrowser mode"
         );
         assert!(cmds.is_empty());
+    }
+
+    #[test]
+    fn mirror_toggle_never_clobbers_link_pref() {
+        let set =
+            crate::pattern::model::Set::default_set(crate::devices::profiles::default_profiles());
+        let lib = crate::pattern::library::Library::empty();
+        let mut app = App::new(set, lib);
+        // MIDIP_LINK=0 session: pref says auto-join, runtime Link forced off.
+        app.link_pref_on = true;
+        app.link_enabled = false;
+
+        // Toggling Mirror is unrelated to Link — the persisted payload must
+        // keep link_on=true (regression: it used to write runtime link_enabled).
+        app.apply(Action::ToggleMirror);
+        assert!(
+            app.link_pref_on,
+            "Mirror toggle must not touch the Link pref"
+        );
+        assert!(
+            app.current_prefs().link_on,
+            "saved prefs must keep link_on=true while Link is only session-disabled"
+        );
+
+        // An EXPLICIT Link toggle updates both runtime state and the pref.
+        app.apply(Action::ToggleLink);
+        assert!(app.link_enabled);
+        assert!(app.link_pref_on, "explicit toggle on updates the pref");
+        app.apply(Action::ToggleLink);
+        assert!(!app.link_enabled);
+        assert!(
+            !app.link_pref_on && !app.current_prefs().link_on,
+            "explicit toggle off persists the opt-out"
+        );
     }
 
     #[test]

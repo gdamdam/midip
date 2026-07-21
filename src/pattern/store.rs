@@ -11,10 +11,29 @@ use crate::pattern::refs::PatternRef;
 use crate::persist;
 
 /// User preferences persisted across sessions (session pref, not part of the Set).
-#[derive(Serialize, Deserialize, Default, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct Prefs {
     #[serde(default)]
     pub mirror_on: bool,
+    /// Link auto-join preference. Defaults TRUE (absent field in an old
+    /// prefs.json means "no opt-out"): auto-join is the new default, and only
+    /// an explicit `link_on: false` — saved when the user toggles Link off in
+    /// SETUP — restores the old manual behavior.
+    #[serde(default = "default_true")]
+    pub link_on: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for Prefs {
+    fn default() -> Self {
+        Self {
+            mirror_on: false,
+            link_on: true,
+        }
+    }
 }
 
 /// Path of the prefs file under `dir`.
@@ -1779,12 +1798,37 @@ mod tests {
     #[test]
     fn prefs_roundtrip() {
         let dir = unique_dir("prefs-roundtrip");
-        let prefs = Prefs { mirror_on: true };
+        let prefs = Prefs {
+            mirror_on: true,
+            link_on: false,
+        };
         save_prefs(&dir, &prefs).unwrap();
         let (loaded, note) = load_prefs(&dir);
         assert_eq!(loaded, prefs, "mirror_on must survive save/load round-trip");
         assert!(note.is_none(), "clean round-trip emits no note");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn prefs_link_on_roundtrips_and_old_json_defaults_on() {
+        // Explicit values survive a serde round-trip.
+        let p = Prefs {
+            mirror_on: false,
+            link_on: false,
+        };
+        let json = serde_json::to_string(&p).unwrap();
+        let back: Prefs = serde_json::from_str(&json).unwrap();
+        assert!(!back.link_on, "explicit link_on=false must round-trip");
+        // Old prefs.json without the field still loads; absent means "no
+        // opt-out", so it defaults ON (auto-join is the new default).
+        let old: Prefs = serde_json::from_str("{\"mirror_on\":true}").unwrap();
+        assert!(old.mirror_on);
+        assert!(
+            old.link_on,
+            "absent link_on must default to true (auto-join)"
+        );
+        // Fresh install (Prefs::default) also auto-joins.
+        assert!(Prefs::default().link_on);
     }
 
     #[test]
