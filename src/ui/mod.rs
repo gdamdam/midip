@@ -263,7 +263,6 @@ pub fn render(f: &mut Frame, app: &App) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::{App, Mode};
     use crate::devices::profiles::default_profiles;
     use crate::pattern::library::{GenreMap, Library};
     use crate::pattern::model::Set;
@@ -308,7 +307,7 @@ mod tests {
     fn footer_edit_drums_shows_euclid_and_toggle() {
         let set = Set::default_set(default_profiles());
         let mut app = App::new(set, empty_library());
-        app.mode = Mode::Edit;
+        app.set_workspace(Workspace::Perform);
         // Default focused lane should be Drums; verify via focused_kind.
         assert_eq!(app.focused_kind(), LaneKind::Drums);
         let whole = render_to_string(&app);
@@ -331,9 +330,8 @@ mod tests {
     fn footer_edit_melodic_shows_pitch_and_slide() {
         let set = Set::default_set(default_profiles());
         let mut app = App::new(set, empty_library());
-        app.mode = Mode::Edit;
+        app.set_workspace(Workspace::Perform);
         // Switch to a melodic lane (if one exists in the default set; otherwise skip gracefully)
-        app.mode = Mode::Edit;
         if app.focused_kind() == LaneKind::Melodic {
             let whole = render_to_string(&app);
             assert!(
