@@ -164,8 +164,11 @@ fn run(mut terminal: Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
     // Auto-join Ableton Link (default ON). Two opt-outs restore the old manual
     // behavior: MIDIP_LINK falsy (session kill-switch, overrides the pref) or
     // the persisted SETUP preference `link_on=false`. Mirrors the "on" branch
-    // of Action::ToggleLink (state flip + engine command).
-    if midip::config::link_autojoin_enabled() && prefs.link_on {
+    // of Action::ToggleLink (state flip + engine command). The pref is tracked
+    // separately from runtime `link_enabled` so the env kill-switch never
+    // leaks into prefs.json via unrelated saves.
+    app.link_pref_on = prefs.link_on;
+    if midip::config::link_autojoin_enabled() && app.link_pref_on {
         app.link_enabled = true;
         send_or_toast(
             &engine.tx,
