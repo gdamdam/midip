@@ -12439,11 +12439,15 @@ mod workspace_tests {
     fn palette_chars_and_backspace_edit_query() {
         let mut app = crate::test_support::app_for_tests();
         app.apply(Action::OpenPalette);
-        for c in "lib".chars() {
+        // '!' included: it is typeable query text in the palette (input.rs
+        // routes it to PaletteChar instead of the global Panic while open).
+        for c in "li!b".chars() {
             app.apply(Action::PaletteChar(c));
         }
-        assert_eq!(app.palette_query, "lib");
-        app.apply(Action::PaletteBackspace);
+        assert_eq!(app.palette_query, "li!b");
+        for _ in 0..2 {
+            app.apply(Action::PaletteBackspace);
+        }
         assert_eq!(app.palette_query, "li");
     }
 

@@ -48,10 +48,15 @@ pub fn key_to_action(
     if matches!(overlay, Some(Overlay::NameEntry(_))) && key.code == KeyCode::Char(' ') {
         return Action::NameChar(' ');
     }
-    // Likewise in the command palette: space types into the query (command
-    // names contain spaces, e.g. "Open library") instead of toggling play.
-    if matches!(overlay, Some(Overlay::CommandPalette)) && key.code == KeyCode::Char(' ') {
-        return Action::PaletteChar(' ');
+    // Likewise in the command palette: space and '!' are query text (command
+    // names contain spaces, e.g. "Open library"; '!' is a printable the user
+    // may type) — override the global TogglePlay/Panic for them. These are the
+    // only two bare printable-char globals checked before the overlay branch
+    // (the ctrl block above is modifier-gated), so no other key leaks.
+    if matches!(overlay, Some(Overlay::CommandPalette)) {
+        if let KeyCode::Char(c @ (' ' | '!')) = key.code {
+            return Action::PaletteChar(c);
+        }
     }
 
     // Global play/panic — checked before per-mode branches so they fire in ALL modes.
@@ -236,8 +241,8 @@ pub fn key_to_action(
                 KeyCode::Up => Action::PaletteMove(-1),
                 KeyCode::Down => Action::PaletteMove(1),
                 KeyCode::Backspace => Action::PaletteBackspace,
-                // Any printable character extends the query (space is handled
-                // above; '!' stays the global Panic — it never reaches here).
+                // Any printable character extends the query (space and '!'
+                // are routed here by the pre-global override above).
                 KeyCode::Char(c) => Action::PaletteChar(c),
                 _ => Action::None,
             },
@@ -2685,6 +2690,11 @@ mod tests {
             kta_p(k(KeyCode::Char(' '))),
             Action::PaletteChar(' '),
             "space must type into the palette query, not TogglePlay"
+        );
+        assert_eq!(
+            kta_p(k(KeyCode::Char('!'))),
+            Action::PaletteChar('!'),
+            "'!' must type into the palette query, not fire the global Panic"
         );
     }
 }
