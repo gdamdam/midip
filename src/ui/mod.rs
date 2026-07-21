@@ -408,7 +408,7 @@ mod tests {
         let set = Set::default_set(default_profiles());
         let mut app = App::new(set, empty_library());
 
-        app.mode = Mode::Edit;
+        // Perform/Edit is the App::new() default — no sync-helper call needed.
         let whole = render_to_string(&app);
         assert!(
             whole.contains("EDIT DRUM"),
