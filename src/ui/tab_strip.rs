@@ -70,7 +70,11 @@ mod tests {
             !text.contains("PATTERN"),
             "inactive labels must not be bold, got: {text:?}"
         );
-        assert_eq!(bg, Some(EMBER.synth), "active tab uses the synth background");
+        assert_eq!(
+            bg,
+            Some(EMBER.synth),
+            "active tab uses the synth background"
+        );
     }
 
     #[test]
@@ -78,7 +82,13 @@ mod tests {
         let mut app = crate::test_support::app_for_tests();
         app.set_workspace(Workspace::Setup);
         let (text, _) = bold_run(&app);
-        assert!(text.contains("SETUP"), "expected SETUP highlighted, got: {text:?}");
-        assert!(!text.contains("PERFORM"), "PERFORM should no longer be bold: {text:?}");
+        assert!(
+            text.contains("SETUP"),
+            "expected SETUP highlighted, got: {text:?}"
+        );
+        assert!(
+            !text.contains("PERFORM"),
+            "PERFORM should no longer be bold: {text:?}"
+        );
     }
 }

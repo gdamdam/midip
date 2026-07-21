@@ -110,6 +110,20 @@ pub enum Overlay {
     NameEntry(NamePurpose),
     Confirm(ConfirmAction),
     Recovery,
+    /// Saved-set browser (was `Mode::SetBrowser`). Floats over the current workspace.
+    SetBrowser,
+    /// Chain manager (was `Mode::Chains`). Floats over the current workspace.
+    Chains,
+    /// Clock-in source selector (was `Mode::ClockInSelector`).
+    ClockInSelector,
+    /// Per-lane device picker (was `Mode::DevicePicker`).
+    DevicePicker,
+    /// QWERTY piano note-input sub-mode (was `Mode::NoteInput`); melodic lanes only.
+    NoteInput,
+    /// Generative pattern tool (was `Mode::Generative`).
+    Generative,
+    /// Live crate browser (was `Mode::CrateView`), scoped to the Perform workspace.
+    CrateView,
 }
 
 /// Top-level TUI workspace. Five sibling workspaces the user switches between;
@@ -151,6 +165,34 @@ impl Workspace {
             Self::Song => "SONG",
             Self::Setup => "SETUP",
         }
+    }
+}
+
+/// Derive the shadow [`Mode`] from the authoritative `(workspace, overlay)` pair.
+///
+/// A present overlay always determines the mode; otherwise the workspace base does.
+/// Perform and Pattern share the `Edit` base (their keymaps/views are split in a later
+/// task); Library/Song/Setup map to their base sub-view mode.
+fn derive_mode(workspace: Workspace, overlay: &Option<Overlay>) -> Mode {
+    match overlay {
+        Some(Overlay::Help) => Mode::Help,
+        Some(Overlay::TempoEntry) => Mode::TempoEntry,
+        Some(Overlay::NameEntry(p)) => Mode::NameEntry(p.clone()),
+        Some(Overlay::Confirm(a)) => Mode::Confirm(a.clone()),
+        Some(Overlay::Recovery) => Mode::RecoveryPrompt,
+        Some(Overlay::SetBrowser) => Mode::SetBrowser,
+        Some(Overlay::Chains) => Mode::Chains,
+        Some(Overlay::ClockInSelector) => Mode::ClockInSelector,
+        Some(Overlay::DevicePicker) => Mode::DevicePicker,
+        Some(Overlay::NoteInput) => Mode::NoteInput,
+        Some(Overlay::Generative) => Mode::Generative,
+        Some(Overlay::CrateView) => Mode::CrateView,
+        None => match workspace {
+            Workspace::Perform | Workspace::Pattern => Mode::Edit,
+            Workspace::Library => Mode::Library,
+            Workspace::Song => Mode::Scenes,
+            Workspace::Setup => Mode::RouteEditor,
+        },
     }
 }
 
@@ -894,20 +936,41 @@ impl App {
         self.status_ttl = STATUS_TTL_FRAMES;
     }
 
-    /// Switch the active workspace and surface a toast naming it.
+    /// Switch the active workspace and surface a toast naming it. Dismisses any
+    /// transient overlay (a workspace switch is a deliberate navigation).
     pub fn set_workspace(&mut self, ws: Workspace) {
         self.workspace = ws;
+        self.overlay = None;
+        self.sync_mode();
         self.set_status(ws.label());
+    }
+
+    /// Enter a workspace base WITHOUT a status toast — used by in-flow transitions
+    /// (open/close of a former sub-view) that set their own status. Clears overlay.
+    fn enter_workspace(&mut self, ws: Workspace) {
+        self.workspace = ws;
+        self.overlay = None;
+        self.sync_mode();
     }
 
     /// Raise a transient overlay over the active workspace.
     pub fn open_overlay(&mut self, overlay: Overlay) {
         self.overlay = Some(overlay);
+        self.sync_mode();
     }
 
     /// Dismiss the current overlay (if any) without touching the workspace.
     pub fn close_overlay(&mut self) {
         self.overlay = None;
+        self.sync_mode();
+    }
+
+    /// Recompute the shadow [`Mode`] from the authoritative `(workspace, overlay)`
+    /// pair. `Mode` is retained during the workspace migration (Task 11 removes it);
+    /// keeping it in sync here lets every existing `mode` reader stay correct while
+    /// input/render dispatch on `(workspace, overlay)`.
+    fn sync_mode(&mut self) {
+        self.mode = derive_mode(self.workspace, &self.overlay);
     }
 
     /// Decrement the status TTL by one frame; clear `status` when it reaches 0.
@@ -1667,7 +1730,6 @@ impl App {
                 cmds.push(UiCommand::ToggleLink(self.link_enabled));
             }
             Action::OpenTempo => {
-                self.mode = Mode::TempoEntry;
                 self.open_overlay(Overlay::TempoEntry);
                 self.tempo_input.clear();
             }
@@ -1680,7 +1742,6 @@ impl App {
                 self.tempo_input.pop();
             }
             Action::TempoCommit => {
-                self.mode = Mode::Edit;
                 self.close_overlay();
                 if let Ok(bpm) = self.tempo_input.parse::<f64>() {
                     let bpm = bpm.clamp(20.0, 300.0);
@@ -1695,7 +1756,6 @@ impl App {
                 self.tempo_input.clear();
             }
             Action::TempoCancel => {
-                self.mode = Mode::Edit;
                 self.close_overlay();
                 self.tempo_input.clear();
             }
@@ -1855,7 +1915,7 @@ impl App {
             }
             Action::OpenLibrary => {
                 self.refresh_user_patterns();
-                self.mode = Mode::Library;
+                self.enter_workspace(Workspace::Library);
             }
             Action::CloseLibrary => {
                 if self.audition.take().is_some() {
@@ -1867,7 +1927,7 @@ impl App {
                     });
                     self.set_status("Audition cancelled");
                 }
-                self.mode = Mode::Edit;
+                self.enter_workspace(Workspace::Perform);
             }
             Action::LibNav(dx, dy) => {
                 self.lib_nav(dx, dy);
@@ -1924,7 +1984,7 @@ impl App {
                             pattern: pat,
                         });
                     }
-                    self.mode = Mode::Edit;
+                    self.enter_workspace(Workspace::Perform);
                 }
             }
             Action::Audition => {
@@ -1956,7 +2016,7 @@ impl App {
                     crate::pattern::store::list_sets(&crate::config::data_dir().join("sets"))
                         .unwrap_or_default();
                 self.set_sel = 0;
-                self.mode = Mode::SetBrowser;
+                self.open_overlay(Overlay::SetBrowser);
             }
             Action::SetBrowserNav(d) => {
                 if !self.set_files.is_empty() {
@@ -1970,7 +2030,7 @@ impl App {
                     if self.dirty {
                         // Confirm before discarding unsaved work: loading is destructive
                         // (it replaces the live Set and clears undo/redo).
-                        self.mode = Mode::Confirm(ConfirmAction::LoadSet(path));
+                        self.open_overlay(Overlay::Confirm(ConfirmAction::LoadSet(path)));
                     } else {
                         cmds.extend(self.apply(Action::DoLoadSet(path)));
                     }
@@ -1991,7 +2051,7 @@ impl App {
                         // on the NEW sequencer — otherwise SetSet resets the source to Manual
                         // and the freshly-built sequencer loses its clock-driven state.
                         let clk_cmds = self.load_set_document(set, stem);
-                        self.mode = Mode::Edit;
+                        self.close_overlay();
                         cmds.push(UiCommand::SetSet(self.set.clone()));
                         cmds.extend(clk_cmds);
                     }
@@ -2002,7 +2062,7 @@ impl App {
                 }
             }
             Action::CloseSetBrowser => {
-                self.mode = Mode::Edit;
+                self.close_overlay();
             }
             Action::Save => {
                 // Cross-task dependency: `config::data_dir()` is defined in Task 21.
@@ -2029,12 +2089,10 @@ impl App {
                 }
             }
             Action::Help => {
-                if self.mode == Mode::Help {
-                    self.mode = Mode::Edit;
+                if self.overlay == Some(Overlay::Help) {
                     self.close_overlay();
                 } else {
                     self.help_scroll = 0;
-                    self.mode = Mode::Help;
                     self.open_overlay(Overlay::Help);
                 }
             }
@@ -2043,10 +2101,10 @@ impl App {
                 self.route_editor_field = RouteField::Port;
                 // Refresh the available port list on the UI thread (safe — not the timing thread).
                 self.route_editor_ports = crate::midi::ports::list_output_ports();
-                self.mode = Mode::RouteEditor;
+                self.enter_workspace(Workspace::Setup);
             }
             Action::CloseRouteEditor => {
-                self.mode = Mode::Edit;
+                self.enter_workspace(Workspace::Perform);
             }
             Action::RouteNavLane(d) => {
                 let n = self.set.lanes.len();
@@ -2184,10 +2242,10 @@ impl App {
                 let choices = crate::ui::device_picker::choices(kind);
                 let cur_id = self.set.lanes[lane].profile.id;
                 self.device_picker_index = choices.iter().position(|p| p.id == cur_id).unwrap_or(0);
-                self.mode = Mode::DevicePicker;
+                self.open_overlay(Overlay::DevicePicker);
             }
             Action::CloseDevicePicker => {
-                self.mode = Mode::Edit;
+                self.close_overlay();
             }
             Action::DevicePickerNav(d) => {
                 let kind = self.set.lanes[self.device_picker_lane].profile.kind;
@@ -2200,7 +2258,7 @@ impl App {
             Action::DevicePickerConfirm => {
                 let lane = self.device_picker_lane;
                 if lane >= self.set.lanes.len() {
-                    self.mode = Mode::Edit;
+                    self.close_overlay();
                     return cmds;
                 }
                 let kind = self.set.lanes[lane].profile.kind;
@@ -2227,7 +2285,7 @@ impl App {
                         self.set_status(format!("Lane {lane}: device → {}", new_profile.label));
                     }
                 }
-                self.mode = Mode::Edit;
+                self.close_overlay();
             }
             Action::Quit => {
                 if self.playing && !self.quit_armed {
@@ -2257,7 +2315,6 @@ impl App {
                         self.clock_in_locked = None;
                         self.clock_in_tempo = 0.0;
                         self.clamp_cursor();
-                        self.mode = Mode::Edit;
                         self.close_overlay();
                         self.set_status("Recovered unsaved work");
                         crate::pattern::store::clear_recovery(&dir);
@@ -2268,14 +2325,12 @@ impl App {
                     }
                     Err(e) => {
                         self.set_status(format!("Recovery failed: {e}"));
-                        self.mode = Mode::Edit;
                         self.close_overlay();
                     }
                 }
             }
             Action::RecoveryDiscard => {
                 crate::pattern::store::clear_recovery(&crate::config::data_dir());
-                self.mode = Mode::Edit;
                 self.close_overlay();
                 self.set_status("Discarded recovered work");
             }
@@ -2284,8 +2339,7 @@ impl App {
                     crate::pattern::store::list_sets(&crate::config::data_dir().join("sets"))
                         .unwrap_or_default();
                 self.set_sel = 0;
-                self.mode = Mode::SetBrowser;
-                self.close_overlay();
+                self.open_overlay(Overlay::SetBrowser);
             }
             Action::ToggleLaunchQuant => {
                 self.launch_quant = match self.launch_quant {
@@ -2325,10 +2379,10 @@ impl App {
             Action::OpenScenes => {
                 self.scene_sel = 0;
                 self.scene_issues.clear();
-                self.mode = Mode::Scenes;
+                self.enter_workspace(Workspace::Song);
             }
             Action::CloseScenes => {
-                self.mode = Mode::Edit;
+                self.enter_workspace(Workspace::Perform);
             }
             Action::SceneSelect(d) => {
                 let n = self.set.scenes.len();
@@ -2349,7 +2403,7 @@ impl App {
             Action::RenameScene => {
                 if let Some(scene) = self.set.scenes.get(self.scene_sel) {
                     self.name_input = scene.name.clone();
-                    self.mode = Mode::NameEntry(NamePurpose::RenameScene);
+                    self.open_overlay(Overlay::NameEntry(NamePurpose::RenameScene));
                 }
             }
             Action::DoRenameScene(name) => {
@@ -2359,7 +2413,7 @@ impl App {
                     self.dirty = true;
                     self.set_status(format!("Renamed to \"{name}\""));
                 }
-                self.mode = Mode::Scenes;
+                self.enter_workspace(Workspace::Song);
             }
             Action::DuplicateScene => {
                 if let Some(scene) = self.set.scenes.get(self.scene_sel).cloned() {
@@ -2376,7 +2430,7 @@ impl App {
             Action::DeleteScene => {
                 if self.set.scenes.get(self.scene_sel).is_some() {
                     let idx = self.scene_sel;
-                    self.mode = Mode::Confirm(ConfirmAction::DeleteScene(idx));
+                    self.open_overlay(Overlay::Confirm(ConfirmAction::DeleteScene(idx)));
                 }
             }
             Action::DoDeleteScene(idx) => {
@@ -2392,7 +2446,7 @@ impl App {
                     }
                     self.set_status("Scene deleted");
                 }
-                self.mode = Mode::Scenes;
+                self.enter_workspace(Workspace::Song);
             }
             Action::RecallSelectedScene => {
                 if self.set.scenes.is_empty() {
@@ -2423,10 +2477,10 @@ impl App {
             }
             // ── M7 Chain manager ─────────────────────────────────────────────
             Action::OpenChains => {
-                self.mode = Mode::Chains;
+                self.open_overlay(Overlay::Chains);
             }
             Action::CloseChains => {
-                self.mode = Mode::Edit;
+                self.close_overlay();
             }
             Action::ChainSelect(delta) => {
                 let n = self.set.chains.len();
@@ -2446,7 +2500,7 @@ impl App {
             Action::RenameChain => {
                 if let Some(chain) = self.set.chains.get(self.chain_sel) {
                     self.name_input = chain.name.clone();
-                    self.mode = Mode::NameEntry(NamePurpose::RenameChain);
+                    self.open_overlay(Overlay::NameEntry(NamePurpose::RenameChain));
                 }
             }
             Action::DoRenameChain(name) => {
@@ -2455,7 +2509,7 @@ impl App {
                     crate::pattern::chain::rename_chain(&mut self.set, self.chain_sel, &name);
                     self.set_status(format!("Renamed to \"{name}\""));
                 }
-                self.mode = Mode::Chains;
+                self.open_overlay(Overlay::Chains);
             }
             Action::DuplicateChain => {
                 if self.set.chains.get(self.chain_sel).is_some() {
@@ -2469,7 +2523,7 @@ impl App {
             Action::DeleteChain => {
                 let idx = self.chain_sel;
                 if self.set.chains.get(idx).is_some() {
-                    self.mode = Mode::Confirm(ConfirmAction::DeleteChain(idx));
+                    self.open_overlay(Overlay::Confirm(ConfirmAction::DeleteChain(idx)));
                 }
             }
             Action::DoDeleteChain(idx) => {
@@ -2480,7 +2534,7 @@ impl App {
                     self.chain_sel = if n == 0 { 0 } else { self.chain_sel.min(n - 1) };
                     self.set_status("Chain deleted");
                 }
-                self.mode = Mode::Chains;
+                self.open_overlay(Overlay::Chains);
             }
             Action::AddChainEntry { chain, scene_id } => {
                 if self.set.chains.get(chain).is_some() {
@@ -2910,8 +2964,7 @@ impl App {
             // ── Name-entry dialog ─────────────────────────────────────────────
             Action::OpenNameEntry(purpose) => {
                 self.name_input.clear();
-                self.open_overlay(Overlay::NameEntry(purpose.clone()));
-                self.mode = Mode::NameEntry(purpose);
+                self.open_overlay(Overlay::NameEntry(purpose));
             }
             Action::NameChar(c) => {
                 let ok = c.is_ascii_alphanumeric() || matches!(c, ' ' | '-' | '#');
@@ -2923,12 +2976,11 @@ impl App {
                 self.name_input.pop();
             }
             Action::NameCommit => {
-                let purpose = match &self.mode {
-                    Mode::NameEntry(p) => p.clone(),
+                let purpose = match &self.overlay {
+                    Some(Overlay::NameEntry(p)) => p.clone(),
                     _ => return cmds,
                 };
                 let name = self.name_input.trim().to_string();
-                self.mode = Mode::Edit;
                 self.close_overlay();
                 self.name_input.clear();
                 if !name.is_empty() {
@@ -2943,32 +2995,30 @@ impl App {
                 }
             }
             Action::NameCancel => {
-                let purpose = match &self.mode {
-                    Mode::NameEntry(p) => p.clone(),
+                let purpose = match &self.overlay {
+                    Some(Overlay::NameEntry(p)) => p.clone(),
                     _ => {
                         self.name_input.clear();
                         return cmds;
                     }
                 };
                 self.name_input.clear();
-                self.close_overlay();
-                self.mode = match purpose {
-                    NamePurpose::RenameScene => Mode::Scenes,
-                    NamePurpose::RenameChain => Mode::Chains,
-                    _ => Mode::Edit,
-                };
+                // A rename opened from the Chains overlay returns to it; scene rename
+                // returns to the Song base (Scenes); everything else drops to the base.
+                match purpose {
+                    NamePurpose::RenameChain => self.open_overlay(Overlay::Chains),
+                    _ => self.close_overlay(),
+                }
             }
             // ── Confirm dialog ────────────────────────────────────────────────
             Action::OpenConfirm(action) => {
-                self.open_overlay(Overlay::Confirm(action.clone()));
-                self.mode = Mode::Confirm(action);
+                self.open_overlay(Overlay::Confirm(action));
             }
             Action::ConfirmYes => {
-                let action = match &self.mode {
-                    Mode::Confirm(a) => a.clone(),
+                let action = match &self.overlay {
+                    Some(Overlay::Confirm(a)) => a.clone(),
                     _ => return cmds,
                 };
-                self.mode = Mode::Edit;
                 self.close_overlay();
                 let sub = match action {
                     ConfirmAction::NewSet => Action::NewSet,
@@ -2982,31 +3032,31 @@ impl App {
                 cmds.extend(self.apply(sub));
             }
             Action::ConfirmNo => {
-                let action = match &self.mode {
-                    Mode::Confirm(a) => a.clone(),
+                let action = match &self.overlay {
+                    Some(Overlay::Confirm(a)) => a.clone(),
                     _ => {
                         self.set_status("Cancelled");
                         return cmds;
                     }
                 };
-                self.close_overlay();
-                self.mode = match action {
-                    ConfirmAction::DeleteScene(_) => Mode::Scenes,
-                    ConfirmAction::DeleteChain(_) => Mode::Chains,
-                    // Cancelling a load returns to the browser so the user can pick again.
-                    ConfirmAction::LoadSet(_) => Mode::SetBrowser,
-                    _ => Mode::Edit,
-                };
+                // Return to the surface the confirm was raised from: chain-delete to the
+                // Chains overlay, load-cancel to the set browser, scene-delete to the Song
+                // base (Scenes), everything else to the workspace base.
+                match action {
+                    ConfirmAction::DeleteChain(_) => self.open_overlay(Overlay::Chains),
+                    ConfirmAction::LoadSet(_) => self.open_overlay(Overlay::SetBrowser),
+                    _ => self.close_overlay(),
+                }
                 self.set_status("Cancelled");
             }
             // ── Set-browser management ────────────────────────────────────────
             Action::SetBrowserRename => {
                 self.name_input.clear();
-                self.mode = Mode::NameEntry(NamePurpose::RenameSet);
+                self.open_overlay(Overlay::NameEntry(NamePurpose::RenameSet));
             }
             Action::SetBrowserSaveAs => {
                 self.name_input.clear();
-                self.mode = Mode::NameEntry(NamePurpose::SaveSetAs);
+                self.open_overlay(Overlay::NameEntry(NamePurpose::SaveSetAs));
             }
             Action::SetBrowserDuplicate => {
                 cmds.extend(self.apply(Action::DuplicateSet));
@@ -3014,12 +3064,12 @@ impl App {
             Action::SetBrowserDelete => {
                 if !self.set_files.is_empty() {
                     let path = self.set_files[self.set_sel].clone();
-                    self.mode = Mode::Confirm(ConfirmAction::DeleteSet(path));
+                    self.open_overlay(Overlay::Confirm(ConfirmAction::DeleteSet(path)));
                 }
             }
             Action::SetBrowserNewSet => {
                 if self.dirty {
-                    self.mode = Mode::Confirm(ConfirmAction::NewSet);
+                    self.open_overlay(Overlay::Confirm(ConfirmAction::NewSet));
                 } else {
                     cmds.extend(self.apply(Action::NewSet));
                 }
@@ -3027,11 +3077,11 @@ impl App {
             // ── Edit-mode pattern management ──────────────────────────────────
             Action::OpenSaveUserPattern => {
                 self.name_input.clear();
-                self.mode = Mode::NameEntry(NamePurpose::SaveUserPattern);
+                self.open_overlay(Overlay::NameEntry(NamePurpose::SaveUserPattern));
             }
             Action::OpenClearPattern => {
                 if self.pattern_has_material() {
-                    self.mode = Mode::Confirm(ConfirmAction::ClearPattern);
+                    self.open_overlay(Overlay::Confirm(ConfirmAction::ClearPattern));
                 } else {
                     cmds.extend(self.apply(Action::ClearPattern));
                 }
@@ -3059,7 +3109,9 @@ impl App {
                     if out_of_scale == 0 {
                         self.set_status("All notes already in scale");
                     } else {
-                        self.mode = Mode::Confirm(ConfirmAction::ConformToScale(out_of_scale));
+                        self.open_overlay(Overlay::Confirm(ConfirmAction::ConformToScale(
+                            out_of_scale,
+                        )));
                     }
                 }
             }
@@ -3097,14 +3149,14 @@ impl App {
                         self.snapshot();
                         self.set.lanes[self.focus].pattern = pat;
                         self.set_status(format!("Loaded user pattern {}", name));
-                        self.mode = Mode::Edit;
+                        self.close_overlay();
                         cmds.push(self.load_focused());
                     }
                     Err(e) => self.set_status(format!("Load failed: {}", e)),
                 }
             }
             Action::HelpScroll(delta) => {
-                if self.mode == Mode::Help {
+                if self.overlay == Some(Overlay::Help) {
                     let d = self.help_scroll as i32 + delta;
                     // Saturate to u16 range: End sends a huge positive delta, so a plain
                     // `as u16` would truncate (wrap) instead of landing at the max. Clamp
@@ -3218,7 +3270,7 @@ impl App {
             Action::OpenCrateView => {
                 self.crate_sel = 0;
                 self.crate_entry_sel = 0;
-                self.mode = Mode::CrateView;
+                self.open_overlay(Overlay::CrateView);
             }
             Action::CloseCrateView => {
                 if let Some(prev) = self.audition.take() {
@@ -3231,7 +3283,7 @@ impl App {
                     self.set_status("Audition cancelled");
                 }
                 self.crate_issues.clear();
-                self.mode = Mode::Edit;
+                self.close_overlay();
             }
             Action::CrateEntrySel(d) => {
                 if let Some(cr) = self.crates.crates.get(self.crate_sel) {
@@ -3332,7 +3384,7 @@ impl App {
                     self.snapshot();
                     self.note_input_octave = 0;
                     let is_poly = self.set.lanes[self.focus].profile.poly;
-                    self.mode = Mode::NoteInput;
+                    self.open_overlay(Overlay::NoteInput);
                     // Poly lanes STACK keys into a chord on one step (press the same key
                     // again to toggle it off); mono lanes replace+advance like typing a
                     // melody. Reflect that distinction in the entry banner.
@@ -3344,12 +3396,12 @@ impl App {
                 }
             }
             Action::CloseNoteInput => {
-                if self.mode == Mode::NoteInput {
-                    self.mode = Mode::Edit;
+                if self.overlay == Some(Overlay::NoteInput) {
+                    self.close_overlay();
                 }
             }
             Action::NoteInputPlace(offset) => {
-                if self.mode == Mode::NoteInput {
+                if self.overlay == Some(Overlay::NoteInput) {
                     let semi_raw = offset as i32 + self.note_input_octave as i32 * 12;
                     let lane_scale = self.set.lanes[self.focus].scale;
                     let semi_folded = fold_to_scale(semi_raw, lane_scale).clamp(-128, 127) as i8;
@@ -3403,13 +3455,13 @@ impl App {
                 }
             }
             Action::NoteInputOctave(d) => {
-                if self.mode == Mode::NoteInput {
+                if self.overlay == Some(Overlay::NoteInput) {
                     self.note_input_octave = (self.note_input_octave + d).clamp(-3, 3);
                     self.set_status(format!("Octave offset: {:+}", self.note_input_octave));
                 }
             }
             Action::NoteInputBackspace => {
-                if self.mode == Mode::NoteInput {
+                if self.overlay == Some(Overlay::NoteInput) {
                     // Clear the current step.
                     self.clear_step();
                     // Step back one, wrapping.
@@ -3511,7 +3563,7 @@ impl App {
                 let candidate = generate(&params, &original, &self.set.lanes[lane]);
                 self.set.lanes[lane].pattern = candidate;
                 self.temp_transform = Some(TempTransform { lane, original });
-                self.mode = Mode::Generative;
+                self.open_overlay(Overlay::Generative);
                 self.set_status("Generative: preview active");
                 cmds.push(UiCommand::LoadPattern {
                     lane,
@@ -3582,7 +3634,7 @@ impl App {
                     }
                     self.redo.clear();
                     self.dirty = true;
-                    self.mode = Mode::Edit;
+                    self.close_overlay();
                     self.set_status("Generative: committed");
                 } else {
                     self.set_status("No generative preview to commit");
@@ -3597,7 +3649,7 @@ impl App {
                         pattern: self.set.lanes[lane].pattern.clone(),
                     });
                 }
-                self.mode = Mode::Edit;
+                self.close_overlay();
                 self.set_status("Generative: cancelled");
             }
             // ── M10 T5: clock-in source selector ─────────────────────────
@@ -3612,10 +3664,10 @@ impl App {
                         .map(|i| i + 1)
                         .unwrap_or(0),
                 };
-                self.mode = Mode::ClockInSelector;
+                self.open_overlay(Overlay::ClockInSelector);
             }
             Action::CloseClockInSelector => {
-                self.mode = Mode::Edit;
+                self.close_overlay();
             }
             Action::ClockInNavPort(d) => {
                 let total = self.clock_in_ports.len() + 1; // +1 for the "(none)" slot
@@ -3651,7 +3703,7 @@ impl App {
                     cmds.push(UiCommand::SetClockInPort(Some(pr)));
                     self.set_status(format!("CLK-IN → {name}"));
                 }
-                self.mode = Mode::Edit;
+                self.close_overlay();
             }
             Action::None => {}
         }
@@ -5286,7 +5338,7 @@ mod tests {
     #[test]
     fn help_scroll_end_saturates_instead_of_truncating() {
         let mut app = new_app();
-        app.mode = Mode::Help;
+        app.open_overlay(Overlay::Help);
         app.help_scroll = 1;
         app.apply(Action::HelpScroll(i32::MAX / 2));
         assert_eq!(
@@ -5808,7 +5860,8 @@ mod tests {
         // Drums Up should decrease cur_row (previous voice).
         let up_action = key_to_action(
             KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
-            crate::app::Mode::Edit,
+            crate::app::Workspace::Perform,
+            None,
             crate::pattern::model::LaneKind::Drums,
         );
         app.apply(up_action);
@@ -5821,7 +5874,8 @@ mod tests {
         // Drums Left should decrease cur_col (previous step).
         let left_action = key_to_action(
             KeyEvent::new(KeyCode::Left, KeyModifiers::NONE),
-            crate::app::Mode::Edit,
+            crate::app::Workspace::Perform,
+            None,
             crate::pattern::model::LaneKind::Drums,
         );
         app.apply(left_action);
@@ -5844,7 +5898,8 @@ mod tests {
         // Melodic Left should decrease cur_col (previous step).
         let left_action = key_to_action(
             KeyEvent::new(KeyCode::Left, KeyModifiers::NONE),
-            crate::app::Mode::Edit,
+            crate::app::Workspace::Perform,
+            None,
             crate::pattern::model::LaneKind::Melodic,
         );
         app.apply(left_action);
@@ -9133,7 +9188,12 @@ mod tests {
             state: KeyEventState::NONE,
         };
         assert_eq!(
-            key_to_action(k(KeyCode::Char('z')), Mode::CrateView, LaneKind::Drums),
+            key_to_action(
+                k(KeyCode::Char('z')),
+                Workspace::Perform,
+                Some(Overlay::CrateView),
+                LaneKind::Drums
+            ),
             Action::ValidateCrate,
             "'z' must map to ValidateCrate in CrateView"
         );
@@ -11940,7 +12000,7 @@ mod tests {
         use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         let key = KeyEvent::new(KeyCode::Char('W'), KeyModifiers::SHIFT);
         assert_eq!(
-            key_to_action(key, Mode::Edit, LaneKind::Drums),
+            key_to_action(key, Workspace::Perform, None, LaneKind::Drums),
             Action::OpenClockInSelector
         );
     }

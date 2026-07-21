@@ -180,7 +180,7 @@ fn run(mut terminal: Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
     // the previous run was killed or crashed — prompt the performer to recover.
     let dir = midip::config::data_dir();
     if midip::pattern::store::unclean_shutdown_detected(&dir) {
-        app.mode = midip::app::Mode::RecoveryPrompt;
+        // open_overlay keeps the shadow `mode` in sync (→ RecoveryPrompt).
         app.open_overlay(midip::app::Overlay::Recovery);
     }
     // Always remove the clean marker at startup so that if THIS run crashes,
@@ -196,8 +196,12 @@ fn run(mut terminal: Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
                 // On Windows, crossterm emits both Press and Release; only act on Press
                 // so each keystroke triggers its action once. (Unix reports only Press.)
                 Event::Key(key) if key.kind == KeyEventKind::Press => {
-                    let action =
-                        midip::input::key_to_action(key, app.mode.clone(), app.focused_kind());
+                    let action = midip::input::key_to_action(
+                        key,
+                        app.workspace,
+                        app.overlay.clone(),
+                        app.focused_kind(),
+                    );
                     let cmds = app.apply(action);
                     for cmd in cmds {
                         send_or_toast(&engine.tx, cmd, &mut app);

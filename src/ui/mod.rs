@@ -23,7 +23,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
-use crate::app::{App, Mode};
+use crate::app::{App, Mode, Overlay, Workspace};
 use crate::pattern::model::LaneKind;
 
 fn context_footer(app: &App) -> Line<'static> {
@@ -141,26 +141,39 @@ pub fn render(f: &mut Frame, app: &App) {
 
     f.render_widget(Paragraph::new(context_footer(app)), chunks[3]);
 
-    match &app.mode {
-        Mode::Library => library::render_library(f, centered(area, 90, 70), app),
-        Mode::Help => help::render_help(f, centered(area, 60, 70), app.help_scroll),
-        Mode::SetBrowser => library::render_set_browser(f, centered(area, 60, 70), app),
-        Mode::RouteEditor => route_editor::render_route_editor(f, centered(area, 80, 70), app),
-        Mode::RecoveryPrompt => recovery::render_recovery_prompt(f, centered(area, 70, 60)),
-        Mode::NameEntry(_) => mgmt::render_name_entry(f, centered(area, 50, 30), app),
-        Mode::Confirm(_) => mgmt::render_confirm(f, centered(area, 50, 25), app),
-        Mode::CrateView => crate_view::render_crate_view(f, centered(area, 70, 70), app),
-        Mode::Scenes => scene_view::render_scene_view(f, centered(area, 70, 70), app),
-        Mode::Chains => chain_view::render_chain_view(f, centered(area, 70, 80), app),
-        Mode::NoteInput => mgmt::render_note_input(f, centered(area, 60, 20), app),
-        Mode::Generative => {
-            generative_view::render_generative_panel(f, centered(area, 70, 70), app)
+    // Workspace base panels: Library/Song/Setup render their view centered over the
+    // transport+lanes+editor base. Perform/Pattern show only that base (their render
+    // specialization is a later task).
+    match app.workspace {
+        Workspace::Library => library::render_library(f, centered(area, 90, 70), app),
+        Workspace::Song => scene_view::render_scene_view(f, centered(area, 70, 70), app),
+        Workspace::Setup => route_editor::render_route_editor(f, centered(area, 80, 70), app),
+        Workspace::Perform | Workspace::Pattern => {}
+    }
+
+    // Overlays float centered on top of the active workspace base.
+    if let Some(overlay) = &app.overlay {
+        match overlay {
+            Overlay::Help => help::render_help(f, centered(area, 60, 70), app.help_scroll),
+            // Tempo entry is shown inline in the transport bar; no centered panel.
+            Overlay::TempoEntry => {}
+            Overlay::NameEntry(_) => mgmt::render_name_entry(f, centered(area, 50, 30), app),
+            Overlay::Confirm(_) => mgmt::render_confirm(f, centered(area, 50, 25), app),
+            Overlay::Recovery => recovery::render_recovery_prompt(f, centered(area, 70, 60)),
+            Overlay::SetBrowser => library::render_set_browser(f, centered(area, 60, 70), app),
+            Overlay::Chains => chain_view::render_chain_view(f, centered(area, 70, 80), app),
+            Overlay::ClockInSelector => {
+                clock_in_selector::render_clock_in_selector(f, centered(area, 60, 60), app)
+            }
+            Overlay::DevicePicker => {
+                device_picker::render_device_picker(f, centered(area, 70, 70), app)
+            }
+            Overlay::NoteInput => mgmt::render_note_input(f, centered(area, 60, 20), app),
+            Overlay::Generative => {
+                generative_view::render_generative_panel(f, centered(area, 70, 70), app)
+            }
+            Overlay::CrateView => crate_view::render_crate_view(f, centered(area, 70, 70), app),
         }
-        Mode::ClockInSelector => {
-            clock_in_selector::render_clock_in_selector(f, centered(area, 60, 60), app)
-        }
-        Mode::DevicePicker => device_picker::render_device_picker(f, centered(area, 70, 70), app),
-        Mode::Edit | Mode::TempoEntry => {}
     }
 }
 
