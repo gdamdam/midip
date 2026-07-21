@@ -4163,7 +4163,12 @@ impl App {
                 Vec::new()
             }
             HitTarget::Button(action) => {
-                if !dragging {
+                // Mirrors overlay-scoped keyboard input: background chrome
+                // buttons (e.g. the transport ▶) must not fire while a modal
+                // overlay is open. No overlay registers its own Button hit,
+                // so this is always a background-chrome gate, never a
+                // conflict with overlay-owned controls.
+                if !dragging && self.overlay.is_none() {
                     self.apply(action)
                 } else {
                     Vec::new()
@@ -12745,6 +12750,51 @@ mod mouse_target_tests {
             cmds.iter().any(|c| matches!(c, UiCommand::Play)),
             "TogglePlay button must forward the engine Play command; got {cmds:?}"
         );
+    }
+
+    #[test]
+    fn clicking_button_while_overlay_open_is_ignored() {
+        let mut app = crate::test_support::app_for_tests();
+        app.open_overlay(Overlay::CommandPalette);
+        assert!(!app.playing);
+        push_hit(&app, 1, HitTarget::Button(Action::TogglePlay));
+        let cmds = app.mouse_press(3, 1, false);
+        assert!(
+            !app.playing,
+            "background transport button must not fire while an overlay is open"
+        );
+        assert!(cmds.is_empty(), "no engine command should be dispatched");
+    }
+
+    #[test]
+    fn clicking_background_list_row_while_overlay_open_is_ignored() {
+        let mut app = crate::test_support::app_for_tests();
+        app.apply(Action::CaptureScene);
+        app.apply(Action::CaptureScene);
+        app.apply(Action::CaptureScene);
+        app.set_workspace(Workspace::Song);
+        app.scene_sel = 0;
+        app.open_overlay(Overlay::CommandPalette);
+        push_hit(&app, 5, HitTarget::ListRow(2));
+        let _ = app.mouse_press(4, 5, false);
+        assert_eq!(
+            app.scene_sel, 0,
+            "background scene list must not react to a click while the palette is open"
+        );
+    }
+
+    #[test]
+    fn clicking_tab_strip_still_switches_workspace_with_overlay_open() {
+        let mut app = crate::test_support::app_for_tests();
+        app.open_overlay(Overlay::CommandPalette);
+        app.register_tab_hits(0, &[(0..9, Workspace::Perform), (10..19, Workspace::Song)]);
+        let _ = app.mouse_press(12, 0, false);
+        assert_eq!(
+            app.workspace,
+            Workspace::Song,
+            "tab-strip clicks mirror the global Ctrl+1..5 chord and stay live over overlays"
+        );
+        assert!(app.overlay.is_none(), "workspace switch clears the overlay");
     }
 
     #[test]
