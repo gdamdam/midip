@@ -225,6 +225,20 @@ pub fn key_to_action(
         };
     }
 
+    // No overlay → standardized Esc-home grammar first. In any bare workspace that
+    // is NOT Perform, Esc returns to the Perform "home" workspace. Perform itself
+    // treats a bare Esc as inert (Action::None); Panic stays reachable via '!', so
+    // the existing quit/panic semantics are preserved. This intercepts Esc before
+    // the per-workspace matches below (whose former CloseLibrary/CloseScenes/
+    // CloseRouteEditor/Panic Esc arms are now reached only via their letter keys).
+    if key.code == KeyCode::Esc {
+        return if workspace == Workspace::Perform {
+            Action::None
+        } else {
+            Action::SwitchWorkspace(Workspace::Perform)
+        };
+    }
+
     // No overlay → the active workspace's base keymap.
     match workspace {
         Workspace::Library => match key.code {
@@ -245,6 +259,9 @@ pub fn key_to_action(
             return match key.code {
                 KeyCode::Up => Action::SceneSelect(-1),
                 KeyCode::Down => Action::SceneSelect(1),
+                // Unified +/- grammar: adjust (move) the selected scene. Additive to Up/Down.
+                KeyCode::Char('+') => Action::SceneSelect(1),
+                KeyCode::Char('-') => Action::SceneSelect(-1),
                 KeyCode::Enter => Action::RecallSelectedScene,
                 KeyCode::Char('c') => Action::CaptureScene,
                 KeyCode::Char('r') => Action::RenameScene,
@@ -276,6 +293,10 @@ pub fn key_to_action(
                 }
                 KeyCode::Char('[') => Action::RouteAdjustChannel(-1),
                 KeyCode::Char(']') => Action::RouteAdjustChannel(1),
+                // Unified +/- grammar: adjust the selected route's MIDI channel.
+                // Additive to the dedicated [ / ] keys.
+                KeyCode::Char('+') => Action::RouteAdjustChannel(1),
+                KeyCode::Char('-') => Action::RouteAdjustChannel(-1),
                 KeyCode::Char('z') => Action::RouteToggleClockOut,
                 _ => Action::None,
             };
@@ -567,6 +588,161 @@ mod tests {
         );
     }
 
+    // ── Task 5: standardized grammar (Esc-home + unified +/- adjust) ─────────
+
+    #[test]
+    fn esc_from_bare_workspace_goes_home() {
+        use crossterm::event::KeyCode;
+        // A bare (no-overlay) workspace that is NOT Perform returns home to Perform.
+        assert_eq!(
+            key_to_action(
+                KeyEvent::from(KeyCode::Esc),
+                Workspace::Setup,
+                None,
+                LaneKind::Drums
+            ),
+            Action::SwitchWorkspace(Workspace::Perform)
+        );
+        // PERFORM + no overlay: Esc is inert (Panic stays reachable via '!').
+        assert_eq!(
+            key_to_action(
+                KeyEvent::from(KeyCode::Esc),
+                Workspace::Perform,
+                None,
+                LaneKind::Drums
+            ),
+            Action::None
+        );
+    }
+
+    #[test]
+    fn esc_home_from_every_non_perform_bare_workspace() {
+        for ws in [
+            Workspace::Pattern,
+            Workspace::Library,
+            Workspace::Song,
+            Workspace::Setup,
+        ] {
+            assert_eq!(
+                key_to_action(k(KeyCode::Esc), ws, None, LaneKind::Drums),
+                Action::SwitchWorkspace(Workspace::Perform),
+                "Esc in bare {ws:?} must go home to Perform"
+            );
+        }
+    }
+
+    #[test]
+    fn plus_minus_unified_adjust_per_workspace() {
+        // Perform/Pattern → velocity adjust of the focused step (existing accelerator).
+        assert_eq!(
+            key_to_action(
+                k(KeyCode::Char('+')),
+                Workspace::Perform,
+                None,
+                LaneKind::Drums
+            ),
+            Action::AdjustVel(1)
+        );
+        assert_eq!(
+            key_to_action(
+                k(KeyCode::Char('-')),
+                Workspace::Perform,
+                None,
+                LaneKind::Drums
+            ),
+            Action::AdjustVel(-1)
+        );
+        assert_eq!(
+            key_to_action(
+                k(KeyCode::Char('+')),
+                Workspace::Pattern,
+                None,
+                LaneKind::Drums
+            ),
+            Action::AdjustVel(1)
+        );
+        // Song → adjust the selected scene.
+        assert_eq!(
+            key_to_action(
+                k(KeyCode::Char('+')),
+                Workspace::Song,
+                None,
+                LaneKind::Drums
+            ),
+            Action::SceneSelect(1)
+        );
+        assert_eq!(
+            key_to_action(
+                k(KeyCode::Char('-')),
+                Workspace::Song,
+                None,
+                LaneKind::Drums
+            ),
+            Action::SceneSelect(-1)
+        );
+        // Setup → adjust the selected route's MIDI channel.
+        assert_eq!(
+            key_to_action(
+                k(KeyCode::Char('+')),
+                Workspace::Setup,
+                None,
+                LaneKind::Drums
+            ),
+            Action::RouteAdjustChannel(1)
+        );
+        assert_eq!(
+            key_to_action(
+                k(KeyCode::Char('-')),
+                Workspace::Setup,
+                None,
+                LaneKind::Drums
+            ),
+            Action::RouteAdjustChannel(-1)
+        );
+        // Library has no obvious focused-item adjust → intentionally None (documented).
+        assert_eq!(
+            key_to_action(
+                k(KeyCode::Char('+')),
+                Workspace::Library,
+                None,
+                LaneKind::Drums
+            ),
+            Action::None
+        );
+    }
+
+    #[test]
+    fn plus_minus_keep_dedicated_adjust_keys_working() {
+        // The unified +/- is additive: existing dedicated adjust keys still fire.
+        assert_eq!(
+            key_to_action(
+                k(KeyCode::Char('[')),
+                Workspace::Setup,
+                None,
+                LaneKind::Drums
+            ),
+            Action::RouteAdjustChannel(-1)
+        );
+        assert_eq!(
+            key_to_action(k(KeyCode::Down), Workspace::Song, None, LaneKind::Drums),
+            Action::SceneSelect(1)
+        );
+    }
+
+    #[test]
+    fn tab_still_moves_focus_in_pattern_and_perform() {
+        for ws in [Workspace::Perform, Workspace::Pattern] {
+            assert_eq!(
+                key_to_action(k(KeyCode::Tab), ws, None, LaneKind::Drums),
+                Action::FocusNext
+            );
+            assert_eq!(
+                key_to_action(k(KeyCode::BackTab), ws, None, LaneKind::Drums),
+                Action::FocusPrev
+            );
+        }
+    }
+
     #[test]
     fn ctrl_digits_switch_workspaces() {
         use crate::app::Workspace;
@@ -855,9 +1031,10 @@ mod tests {
             kta(k(KeyCode::Enter), Mode::Library, LaneKind::Drums),
             Action::LibLoad
         );
+        // Task 5: bare Library Esc goes home to Perform ('l' still closes the library).
         assert_eq!(
             kta(k(KeyCode::Esc), Mode::Library, LaneKind::Drums),
-            Action::CloseLibrary
+            Action::SwitchWorkspace(Workspace::Perform)
         );
         assert_eq!(
             kta(k(KeyCode::Char('a')), Mode::Library, LaneKind::Drums),
@@ -902,14 +1079,21 @@ mod tests {
         );
     }
 
+    // Task 5 grammar: Esc in the bare Perform base is now inert (Panic moved to '!');
+    // Esc in any other bare workspace returns home to Perform.
     #[test]
-    fn edit_esc_is_panic() {
+    fn edit_esc_is_inert_and_library_esc_goes_home() {
         for kind in [LaneKind::Drums, LaneKind::Melodic] {
-            assert_eq!(kta(k(KeyCode::Esc), Mode::Edit, kind), Action::Panic);
+            assert_eq!(kta(k(KeyCode::Esc), Mode::Edit, kind), Action::None);
         }
-        // Library Esc = CloseLibrary (not Panic).
+        // Library (bare) Esc now goes home to Perform (was CloseLibrary; 'l' still closes).
         assert_eq!(
             kta(k(KeyCode::Esc), Mode::Library, LaneKind::Drums),
+            Action::SwitchWorkspace(Workspace::Perform)
+        );
+        // 'l' still closes the library.
+        assert_eq!(
+            kta(k(KeyCode::Char('l')), Mode::Library, LaneKind::Drums),
             Action::CloseLibrary
         );
     }
@@ -984,11 +1168,12 @@ mod tests {
         }
     }
 
+    // Task 5: the Setup base is a bare workspace, so Esc now goes home to Perform.
     #[test]
-    fn route_editor_esc_closes() {
+    fn route_editor_esc_goes_home() {
         assert_eq!(
             kta(k(KeyCode::Esc), Mode::RouteEditor, LaneKind::Drums),
-            Action::CloseRouteEditor
+            Action::SwitchWorkspace(Workspace::Perform)
         );
     }
 
@@ -2025,11 +2210,12 @@ mod tests {
     }
 
     #[test]
-    fn scene_mode_esc_and_g_close() {
+    fn scene_mode_esc_goes_home_and_g_closes() {
+        // Task 5: bare Song Esc goes home to Perform; 'G' still closes the scene manager.
         assert_eq!(
             kta(k(KeyCode::Esc), Mode::Scenes, LaneKind::Drums),
-            Action::CloseScenes,
-            "Esc in Scenes must CloseScenes"
+            Action::SwitchWorkspace(Workspace::Perform),
+            "Esc in bare Song must go home to Perform"
         );
         assert_eq!(
             kta(k(KeyCode::Char('G')), Mode::Scenes, LaneKind::Drums),

@@ -121,29 +121,61 @@ pub fn render(f: &mut Frame, app: &App) {
     tab_strip::render(f, rows[0], app);
     let area = rows[1];
 
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(3), // transport
-            Constraint::Length(5), // lanes
-            Constraint::Min(3),    // editor
-            Constraint::Length(1), // footer
-        ])
-        .split(area);
-
-    transport::render_transport(f, chunks[0], app);
-    lanes::render_lanes(f, chunks[1], app);
-
-    match app.focused_kind() {
-        LaneKind::Drums => editor_drums::render_drum_editor(f, chunks[2], app),
-        LaneKind::Melodic => editor_melodic::render_melodic_editor(f, chunks[2], app),
+    // Base composition is workspace-specialized:
+    //   • PERFORM  → transport + all-lane OVERVIEW (launch/perform focus), no editor.
+    //   • PATTERN  → transport + the FOCUSED lane's step editor, no overview.
+    //   • LIBRARY/SONG/SETUP → the combined transport+lanes+editor base as a backdrop
+    //     for their centered panel (unchanged).
+    // Keymaps for Perform/Pattern remain shared (Edit); only the render differs.
+    let footer = |f: &mut Frame, area: Rect| {
+        f.render_widget(Paragraph::new(context_footer(app)), area);
+    };
+    match app.workspace {
+        Workspace::Perform => {
+            let chunks = Layout::vertical([
+                Constraint::Length(3), // transport
+                Constraint::Min(3),    // lane overview
+                Constraint::Length(1), // footer
+            ])
+            .split(area);
+            transport::render_transport(f, chunks[0], app);
+            lanes::render_lanes(f, chunks[1], app);
+            footer(f, chunks[2]);
+        }
+        Workspace::Pattern => {
+            let chunks = Layout::vertical([
+                Constraint::Length(3), // transport
+                Constraint::Min(3),    // step editor
+                Constraint::Length(1), // footer
+            ])
+            .split(area);
+            transport::render_transport(f, chunks[0], app);
+            match app.focused_kind() {
+                LaneKind::Drums => editor_drums::render_drum_editor(f, chunks[1], app),
+                LaneKind::Melodic => editor_melodic::render_melodic_editor(f, chunks[1], app),
+            }
+            footer(f, chunks[2]);
+        }
+        Workspace::Library | Workspace::Song | Workspace::Setup => {
+            let chunks = Layout::vertical([
+                Constraint::Length(3), // transport
+                Constraint::Length(5), // lanes
+                Constraint::Min(3),    // editor
+                Constraint::Length(1), // footer
+            ])
+            .split(area);
+            transport::render_transport(f, chunks[0], app);
+            lanes::render_lanes(f, chunks[1], app);
+            match app.focused_kind() {
+                LaneKind::Drums => editor_drums::render_drum_editor(f, chunks[2], app),
+                LaneKind::Melodic => editor_melodic::render_melodic_editor(f, chunks[2], app),
+            }
+            footer(f, chunks[3]);
+        }
     }
 
-    f.render_widget(Paragraph::new(context_footer(app)), chunks[3]);
-
-    // Workspace base panels: Library/Song/Setup render their view centered over the
-    // transport+lanes+editor base. Perform/Pattern show only that base (their render
-    // specialization is a later task).
+    // Workspace centered panels: Library/Song/Setup float their view over the combined
+    // base rendered above. Perform/Pattern draw no centered panel.
     match app.workspace {
         Workspace::Library => library::render_library(f, centered(area, 90, 70), app),
         Workspace::Song => scene_view::render_scene_view(f, centered(area, 70, 70), app),
@@ -369,6 +401,44 @@ mod tests {
         assert!(
             whole.contains("ROUTES"),
             "RouteEditor context label should be 'ROUTES'; got: {whole:?}"
+        );
+    }
+
+    // --- Task 5: PERFORM/PATTERN render specialization ---
+
+    #[test]
+    fn perform_base_shows_lane_overview_not_step_editor() {
+        let set = Set::default_set(default_profiles());
+        let mut app = App::new(set, empty_library());
+        app.set_workspace(Workspace::Perform);
+        let whole = render_to_string(&app);
+        // Overview: the LANES panel is present…
+        assert!(
+            whole.contains("LANES"),
+            "Perform base should render the lane overview panel, got: {whole:?}"
+        );
+        // …and the focused-lane step editor (its " EDIT · … steps " title) is NOT.
+        assert!(
+            !whole.contains("steps"),
+            "Perform base must not render the step editor, got: {whole:?}"
+        );
+    }
+
+    #[test]
+    fn pattern_base_shows_step_editor_not_lane_overview() {
+        let set = Set::default_set(default_profiles());
+        let mut app = App::new(set, empty_library());
+        app.set_workspace(Workspace::Pattern);
+        let whole = render_to_string(&app);
+        // Step editor: the focused-lane grid title includes "steps"…
+        assert!(
+            whole.contains("steps"),
+            "Pattern base should render the focused-lane step editor, got: {whole:?}"
+        );
+        // …and the multi-lane overview panel is NOT shown.
+        assert!(
+            !whole.contains("LANES"),
+            "Pattern base must not render the lane overview, got: {whole:?}"
         );
     }
 
