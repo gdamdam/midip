@@ -1,4 +1,5 @@
 pub mod app;
+pub mod commands;
 pub mod config;
 pub mod devices;
 pub mod engine;

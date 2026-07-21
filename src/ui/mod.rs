@@ -23,42 +23,93 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
-use crate::app::{App, Mode, Overlay, Workspace};
+use crate::app::{Action, App, Overlay, Workspace};
+use crate::commands;
 use crate::pattern::model::LaneKind;
+
+/// Build the footer hint text for the current `(workspace, overlay)` state —
+/// the authoritative pair (see `App::sync_mode`), not the derived `Mode`
+/// shadow. Overlays fully own the keymap while raised (their legends stay
+/// hand-authored below: registry entries don't carry overlay membership, see
+/// `commands.rs`'s module doc). The bare-workspace branch instead sources its
+/// discrete accelerator-bound commands from the registry via
+/// [`workspace_more_hint`], so those labels can never drift from `input.rs`.
+fn footer_hint(app: &App) -> String {
+    if let Some(overlay) = &app.overlay {
+        return match overlay {
+            Overlay::Help => "[?/esc]close".to_string(),
+            Overlay::TempoEntry => "[0-9]type BPM [enter]set [esc]cancel".to_string(),
+            Overlay::NameEntry(_) => {
+                "[a-z 0-9 - #]type name [enter]confirm [esc]cancel".to_string()
+            }
+            Overlay::Confirm(_) => "[y/enter]yes [n/esc]no".to_string(),
+            Overlay::Recovery => "[r/enter]recover [d/esc]discard [o]open saved".to_string(),
+            Overlay::SetBrowser => {
+                "[↑↓]select [enter]open  [r]rename [a/S]save-as [D]dup [d]del [n]new  [o/esc]close"
+                    .to_string()
+            }
+            Overlay::Chains => "[↑↓]chain [enter]play [c]create [r]rename [d]dup [x]del [m]loop [a]add [X]rm [[/]]bars [{/}]rpts [K/esc]close".to_string(),
+            Overlay::ClockInSelector => "[↑↓]select port  [enter]confirm  [esc]cancel".to_string(),
+            Overlay::DevicePicker => "[↑↓]device  [enter]select  [esc]cancel".to_string(),
+            Overlay::NoteInput => {
+                "[a-k]white [w/e/t/y/u]black [z]oct- [x]oct+ [bksp]del [esc]exit".to_string()
+            }
+            Overlay::Generative => {
+                "[tab]mode  [d/D]density  [r/R]range  [m/M]mutate  [z]reroll  [enter]commit  [esc]cancel".to_string()
+            }
+            Overlay::CrateView => {
+                "[↑↓]entry [←→]crate [enter]launch [a]audition [f]fav [V/esc]close".to_string()
+            }
+        };
+    }
+
+    match app.workspace {
+        Workspace::Perform | Workspace::Pattern => {
+            let editing = match app.focused_kind() {
+                LaneKind::Drums => {
+                    "[space]play [tab]lane [arrows]move [enter]toggle [0-9]vel [e/E][/]]euclid"
+                }
+                LaneKind::Melodic => {
+                    "[space]play [tab]lane [←→]step [↑↓]pitch [enter]note [g]slide [[/]]oct"
+                }
+            };
+            format!("{editing} {}", workspace_more_hint())
+        }
+        Workspace::Library => "[←→]column [↑↓]select [enter]load [esc]close".to_string(),
+        Workspace::Song => {
+            "[↑↓]select [enter]recall [c]capture [r]rename [d]dup [x]del [z]validate [G/esc]close"
+                .to_string()
+        }
+        Workspace::Setup => "[↑↓]lane [←→]field [c]port [[ /]]ch [z]clk-out [esc]close".to_string(),
+    }
+}
+
+/// Compact "more" suffix for the Perform/Pattern footer: a hand-picked subset
+/// of the command registry (discrete, single-key, accelerator-bound
+/// commands — not the continuous editing grammar covered by `editing` above).
+/// Each label's accelerator is looked up live via [`commands::accel_for`], so
+/// if `input.rs` ever rebinds one of these keys again (as the Task-4/5
+/// workspace reroute did to `l`, `w`, `G`, …), this hint updates with it
+/// instead of silently going stale.
+fn workspace_more_hint() -> String {
+    [
+        (&Action::OpenLibrary, "lib"),
+        (&Action::OpenSetBrowser, "sets"),
+        (&Action::OpenRouteEditor, "routes"),
+        (&Action::Save, "save"),
+        (&Action::Help, "more"),
+    ]
+    .into_iter()
+    .filter_map(|(action, label)| {
+        commands::accel_for(action).map(|accel| format!("[{accel}]{label}"))
+    })
+    .collect::<Vec<_>>()
+    .join(" ")
+}
 
 fn context_footer(app: &App) -> Line<'static> {
     let label = app.context_label();
-    let hint: &str = match &app.mode {
-        Mode::Edit => match app.focused_kind() {
-            LaneKind::Drums => {
-                "[space]play [tab]lane [arrows]move [enter]toggle [0-9]vel [e/E][/]]euclid [?]more"
-            }
-            LaneKind::Melodic => {
-                "[space]play [tab]lane [←→]step [↑↓]pitch [enter]note [g]slide [[/]]oct [?]more"
-            }
-        },
-        Mode::Library => "[←→]column [↑↓]select [enter]load [esc]close",
-        Mode::SetBrowser => {
-            "[↑↓]select [enter]open  [r]rename [a/S]save-as [D]dup [d]del [n]new  [o/esc]close"
-        }
-        Mode::TempoEntry => "[0-9]type BPM [enter]set [esc]cancel",
-        Mode::Help => "[?/esc]close",
-        Mode::RouteEditor => "[↑↓]lane [←→]field [c]port [[ /]]ch [z]clk-out [esc]close",
-        Mode::RecoveryPrompt => "[r/enter]recover [d/esc]discard [o]open saved",
-        Mode::NameEntry(_) => "[a-z 0-9 - #]type name [enter]confirm [esc]cancel",
-        Mode::Confirm(_) => "[y/enter]yes [n/esc]no",
-        Mode::CrateView => "[↑↓]entry [←→]crate [enter]launch [a]audition [f]fav [V/esc]close",
-        Mode::Scenes => {
-            "[↑↓]select [enter]recall [c]capture [r]rename [d]dup [x]del [z]validate [G/esc]close"
-        }
-        Mode::Chains => "[↑↓]chain [enter]play [c]create [r]rename [d]dup [x]del [m]loop [a]add [X]rm [[/]]bars [{/}]rpts [K/esc]close",
-        Mode::NoteInput => "[a-k]white [w/e/t/y/u]black [z]oct- [x]oct+ [bksp]del [esc]exit",
-        Mode::Generative => {
-            "[tab]mode  [d/D]density  [r/R]range  [m/M]mutate  [z]reroll  [enter]commit  [esc]cancel"
-        }
-        Mode::ClockInSelector => "[↑↓]select port  [enter]confirm  [esc]cancel",
-        Mode::DevicePicker => "[↑↓]device  [enter]select  [esc]cancel",
-    };
+    let hint = footer_hint(app);
     let label_style = Style::default()
         .fg(EMBER.bg)
         .bg(EMBER.synth)
@@ -304,7 +355,7 @@ mod tests {
     fn footer_library_shows_column_and_load_not_euclid() {
         let set = Set::default_set(default_profiles());
         let mut app = App::new(set, empty_library());
-        app.mode = Mode::Library;
+        app.set_workspace(Workspace::Library);
         let whole = render_to_string(&app);
         assert!(
             whole.contains("column"),
@@ -324,7 +375,7 @@ mod tests {
     fn footer_setbrowser_shows_open_not_euclid() {
         let set = Set::default_set(default_profiles());
         let mut app = App::new(set, empty_library());
-        app.mode = Mode::SetBrowser;
+        app.open_overlay(Overlay::SetBrowser);
         let whole = render_to_string(&app);
         assert!(
             whole.contains("open"),
@@ -340,7 +391,7 @@ mod tests {
     fn footer_tempo_entry_shows_bpm_not_euclid() {
         let set = Set::default_set(default_profiles());
         let mut app = App::new(set, empty_library());
-        app.mode = Mode::TempoEntry;
+        app.open_overlay(Overlay::TempoEntry);
         let whole = render_to_string(&app);
         assert!(
             whole.contains("BPM"),
@@ -364,7 +415,7 @@ mod tests {
             "should show context label EDIT DRUM"
         );
 
-        app.mode = Mode::Library;
+        app.set_workspace(Workspace::Library);
         let whole = render_to_string(&app);
         assert!(
             whole.contains("LIBRARY"),
@@ -376,7 +427,7 @@ mod tests {
     fn footer_help_mode_shows_close_hint() {
         let set = Set::default_set(default_profiles());
         let mut app = App::new(set, empty_library());
-        app.mode = Mode::Help;
+        app.open_overlay(Overlay::Help);
         let whole = render_to_string(&app);
         assert!(
             whole.contains("close"),
@@ -388,7 +439,7 @@ mod tests {
     fn footer_route_editor_shows_lane_and_close_hints() {
         let set = Set::default_set(default_profiles());
         let mut app = App::new(set, empty_library());
-        app.mode = Mode::RouteEditor;
+        app.set_workspace(Workspace::Setup);
         let whole = render_to_string(&app);
         assert!(
             whole.contains("lane"),
