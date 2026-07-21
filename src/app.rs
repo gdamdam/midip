@@ -654,20 +654,39 @@ fn cond_cycle_next(cond: &crate::pattern::model::TrigCond) -> crate::pattern::mo
     }
 }
 
-/// One clickable region of the editor grid, in absolute terminal coordinates.
-/// Rebuilt every render by the editor draw code and consumed by mouse input, so
+/// What a clickable region resolves to when the mouse lands on it.
+///
+/// `Step` is the original editor-grid target; the rest extend hit-testing to
+/// the persistent chrome (tab strip), list rows, and button-like fields.
+#[derive(Clone, Debug, PartialEq)]
+pub enum HitTarget {
+    /// One editor grid cell (drum voice row × step, or melodic step column).
+    Step {
+        /// Drum voice row index (into the focused lane's voices); 0 for melodic lanes.
+        row: usize,
+        /// Absolute step column.
+        col: usize,
+        is_drums: bool,
+    },
+    /// A workspace tab in the top-row tab strip; click → `set_workspace`.
+    Workspace(Workspace),
+    /// Row `i` of the list owned by the active overlay/workspace view
+    /// (scenes, chains, sets, crate entries, library patterns); click → select.
+    ListRow(usize),
+    /// A button-like field; click dispatches the action through `apply`.
+    Button(Action),
+}
+
+/// One clickable region, in absolute terminal coordinates.
+/// Rebuilt every render by the draw code and consumed by mouse input, so
 /// hit-testing is exact-by-construction (no separate layout math to drift from).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct HitCell {
     pub x0: u16,
     pub x1: u16,
     pub y0: u16,
     pub y1: u16,
-    /// Drum voice row index (into the focused lane's voices); 0 for melodic lanes.
-    pub row: usize,
-    /// Absolute step column.
-    pub col: usize,
-    pub is_drums: bool,
+    pub target: HitTarget,
 }
 
 pub struct App {
@@ -3875,14 +3894,83 @@ impl App {
     // that map. Kept on `App` (not main.rs) so the behavior is unit-testable.
 
     /// The topmost `HitCell` under the terminal coordinate `(x, y)`, if any.
-    /// Searched last-pushed-first so overlapping cells resolve to the most recent.
+    /// Searched last-pushed-first so overlapping cells resolve to the most recent
+    /// (render order is z-order: chrome → base panes → panels/overlays).
     pub fn hit_test(&self, x: u16, y: u16) -> Option<HitCell> {
         self.hits
             .borrow()
             .iter()
             .rev()
             .find(|c| x >= c.x0 && x <= c.x1 && y >= c.y0 && y <= c.y1)
-            .copied()
+            .cloned()
+    }
+
+    /// Record one `HitTarget::Workspace` region per tab on tab-strip row `row`.
+    /// Called by the tab-strip renderer with the column ranges it just drew;
+    /// exposed as a seam so tab-click behavior is testable without a full render.
+    pub fn register_tab_hits(&self, row: u16, tabs: &[(std::ops::Range<u16>, Workspace)]) {
+        let mut hits = self.hits.borrow_mut();
+        for (range, ws) in tabs {
+            if range.is_empty() {
+                continue;
+            }
+            hits.push(HitCell {
+                x0: range.start,
+                x1: range.end - 1,
+                y0: row,
+                y1: row,
+                target: HitTarget::Workspace(*ws),
+            });
+        }
+    }
+
+    /// Apply a clicked `ListRow(i)` to whatever list the active overlay (or,
+    /// with no overlay, the active workspace) owns. Out-of-range indices are
+    /// ignored (stale hit-map defensiveness); contexts without a wired list no-op.
+    fn select_list_row(&mut self, i: usize) {
+        // Overlays float above workspace panels, so they resolve first.
+        match &self.overlay {
+            Some(Overlay::Chains) => {
+                if i < self.set.chains.len() {
+                    self.chain_sel = i;
+                    self.chain_entry_sel = 0;
+                }
+                return;
+            }
+            Some(Overlay::SetBrowser) => {
+                if i < self.set_files.len() {
+                    self.set_sel = i;
+                }
+                return;
+            }
+            Some(Overlay::CrateView) => {
+                let n = self
+                    .crates
+                    .crates
+                    .get(self.crate_sel)
+                    .map(|c| c.entries.len())
+                    .unwrap_or(0);
+                if i < n {
+                    self.crate_entry_sel = i;
+                }
+                return;
+            }
+            Some(_) => return,
+            None => {}
+        }
+        match self.workspace {
+            Workspace::Song if i < self.set.scenes.len() => {
+                self.scene_sel = i;
+            }
+            // Rows are registered for the PATTERN column only (see
+            // `ui::library::render_library`), so a click both selects the
+            // pattern and moves column focus there, like [→] then [↑↓].
+            Workspace::Library if i < self.visible_lib_patterns().len() => {
+                self.lib_pattern = i;
+                self.lib_col = LibCol::Pattern;
+            }
+            _ => {}
+        }
     }
 
     /// Whether the focused drum lane has a hit on voice `row` at step `col`.
@@ -3909,40 +3997,77 @@ impl App {
     /// stays keyboard-driven, since a click can't disambiguate which pitch to place).
     /// Returns engine commands (pattern reloads) to forward. Only acts in Edit mode.
     pub fn mouse_press(&mut self, x: u16, y: u16, dragging: bool) -> Vec<UiCommand> {
+        let Some(cell) = self.hit_test(x, y) else {
+            return Vec::new();
+        };
+        match cell.target {
+            HitTarget::Step { row, col, is_drums } => {
+                self.mouse_press_step(row, col, is_drums, dragging)
+            }
+            // Non-grid targets only respond to a fresh click: a drag that
+            // wanders off the grid onto chrome must not navigate or dispatch.
+            HitTarget::Workspace(ws) => {
+                if !dragging {
+                    self.set_workspace(ws);
+                }
+                Vec::new()
+            }
+            HitTarget::ListRow(i) => {
+                if !dragging {
+                    self.select_list_row(i);
+                }
+                Vec::new()
+            }
+            HitTarget::Button(action) => {
+                if !dragging {
+                    self.apply(action)
+                } else {
+                    Vec::new()
+                }
+            }
+        }
+    }
+
+    /// Grid-cell press/drag (the original mouse behavior). Only acts in Edit mode,
+    /// exactly as before non-grid targets existed.
+    fn mouse_press_step(
+        &mut self,
+        row: usize,
+        col: usize,
+        is_drums: bool,
+        dragging: bool,
+    ) -> Vec<UiCommand> {
         let mut cmds = Vec::new();
         if self.mode != Mode::Edit {
             return cmds;
         }
-        let Some(cell) = self.hit_test(x, y) else {
-            return cmds;
-        };
-        if !cell.is_drums {
+        if !is_drums {
             // Melodic: only a fresh click repositions the cursor; ignore drag.
             if !dragging {
-                self.cur_col = cell.col;
+                self.cur_col = col;
                 self.update_step_scroll();
             }
             return cmds;
         }
         if !dragging {
-            self.cur_row = cell.row;
-            self.cur_col = cell.col;
+            self.cur_row = row;
+            self.cur_col = col;
             self.update_step_scroll();
             self.snapshot();
             self.toggle_step();
-            self.mouse_paint = Some(self.drum_hit_present(cell.row, cell.col));
-            self.mouse_last = Some((cell.row, cell.col));
+            self.mouse_paint = Some(self.drum_hit_present(row, col));
+            self.mouse_last = Some((row, col));
             cmds.push(self.load_focused());
-        } else if self.mouse_last != Some((cell.row, cell.col)) {
+        } else if self.mouse_last != Some((row, col)) {
             if let Some(want) = self.mouse_paint {
-                self.cur_row = cell.row;
-                self.cur_col = cell.col;
+                self.cur_row = row;
+                self.cur_col = col;
                 self.update_step_scroll();
-                if self.drum_hit_present(cell.row, cell.col) != want {
+                if self.drum_hit_present(row, col) != want {
                     self.toggle_step();
                     cmds.push(self.load_focused());
                 }
-                self.mouse_last = Some((cell.row, cell.col));
+                self.mouse_last = Some((row, col));
             }
         }
         cmds
@@ -3955,7 +4080,8 @@ impl App {
     }
 
     /// Scroll wheel at `(x, y)`: nudge the velocity of the step under the pointer.
-    /// `dir` is +1 (up / louder) or −1 (down / softer). Only acts in Edit mode.
+    /// `dir` is +1 (up / louder) or −1 (down / softer). Only acts in Edit mode,
+    /// and only on grid `Step` targets — scrolling over chrome/lists is a no-op.
     pub fn mouse_scroll(&mut self, x: u16, y: u16, dir: i8) -> Vec<UiCommand> {
         if self.mode != Mode::Edit {
             return Vec::new();
@@ -3963,8 +4089,11 @@ impl App {
         let Some(cell) = self.hit_test(x, y) else {
             return Vec::new();
         };
-        self.cur_row = cell.row;
-        self.cur_col = cell.col;
+        let HitTarget::Step { row, col, .. } = cell.target else {
+            return Vec::new();
+        };
+        self.cur_row = row;
+        self.cur_col = col;
         self.update_step_scroll();
         self.snapshot();
         // A single detent moves velocity a musical step (~4% of range).
@@ -12308,6 +12437,176 @@ mod tests {
                 .any(|c| matches!(c, UiCommand::SetClockInPort(None))),
             "expected SetClockInPort(None) command; got {cmds:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod mouse_target_tests {
+    use super::*;
+
+    /// Push a full-width hit region on row `y` with the given target.
+    fn push_hit(app: &App, y: u16, target: HitTarget) {
+        app.hits.borrow_mut().push(HitCell {
+            x0: 0,
+            x1: 79,
+            y0: y,
+            y1: y,
+            target,
+        });
+    }
+
+    #[test]
+    fn clicking_tab_strip_switches_workspace() {
+        let mut app = crate::test_support::app_for_tests();
+        // Simulate a rendered frame that registers tab-strip regions:
+        app.register_tab_hits(
+            0,
+            &[(0..9, Workspace::Perform), (10..19, Workspace::Pattern)],
+        );
+        let _ = app.mouse_press(12, 0, false); // row 0 = tab strip
+        assert_eq!(app.workspace, Workspace::Pattern);
+    }
+
+    #[test]
+    fn clicking_tab_gap_does_nothing() {
+        let mut app = crate::test_support::app_for_tests();
+        app.register_tab_hits(
+            0,
+            &[(0..9, Workspace::Perform), (10..19, Workspace::Pattern)],
+        );
+        let _ = app.mouse_press(9, 0, false); // the 1-col gap between tabs
+        assert_eq!(app.workspace, Workspace::Perform);
+    }
+
+    #[test]
+    fn clicking_tab_closes_overlay_via_set_workspace() {
+        let mut app = crate::test_support::app_for_tests();
+        app.open_overlay(Overlay::Help);
+        app.register_tab_hits(0, &[(0..9, Workspace::Perform), (10..19, Workspace::Song)]);
+        let _ = app.mouse_press(12, 0, false);
+        assert_eq!(app.workspace, Workspace::Song);
+        assert!(
+            app.overlay.is_none(),
+            "tab click is deliberate navigation; overlay must close"
+        );
+        assert_eq!(app.mode, derive_mode(app.workspace, &app.overlay));
+    }
+
+    #[test]
+    fn dragging_across_tab_strip_does_not_switch() {
+        let mut app = crate::test_support::app_for_tests();
+        app.register_tab_hits(
+            0,
+            &[(0..9, Workspace::Perform), (10..19, Workspace::Pattern)],
+        );
+        let _ = app.mouse_press(12, 0, true); // drag, not a fresh click
+        assert_eq!(app.workspace, Workspace::Perform);
+    }
+
+    #[test]
+    fn clicking_scene_row_selects_scene_in_song_workspace() {
+        let mut app = crate::test_support::app_for_tests();
+        app.apply(Action::CaptureScene);
+        app.apply(Action::CaptureScene);
+        app.apply(Action::CaptureScene);
+        app.set_workspace(Workspace::Song);
+        app.scene_sel = 0;
+        push_hit(&app, 5, HitTarget::ListRow(2));
+        let _ = app.mouse_press(4, 5, false);
+        assert_eq!(app.scene_sel, 2);
+    }
+
+    #[test]
+    fn clicking_out_of_range_list_row_is_ignored() {
+        let mut app = crate::test_support::app_for_tests();
+        app.apply(Action::CaptureScene);
+        app.set_workspace(Workspace::Song);
+        app.scene_sel = 0;
+        push_hit(&app, 5, HitTarget::ListRow(7)); // no scene 7
+        let _ = app.mouse_press(4, 5, false);
+        assert_eq!(app.scene_sel, 0);
+    }
+
+    #[test]
+    fn clicking_chain_row_selects_chain_in_chains_overlay() {
+        let mut app = crate::test_support::app_for_tests();
+        app.apply(Action::CaptureScene);
+        app.apply(Action::CreateChain);
+        app.apply(Action::CreateChain);
+        app.open_overlay(Overlay::Chains);
+        app.chain_sel = 0;
+        push_hit(&app, 6, HitTarget::ListRow(1));
+        let _ = app.mouse_press(4, 6, false);
+        assert_eq!(app.chain_sel, 1);
+    }
+
+    #[test]
+    fn clicking_set_row_selects_set_in_set_browser() {
+        let mut app = crate::test_support::app_for_tests();
+        app.set_files = vec![
+            std::path::PathBuf::from("a.json"),
+            std::path::PathBuf::from("b.json"),
+        ];
+        app.open_overlay(Overlay::SetBrowser);
+        app.set_sel = 0;
+        push_hit(&app, 4, HitTarget::ListRow(1));
+        let _ = app.mouse_press(4, 4, false);
+        assert_eq!(app.set_sel, 1);
+    }
+
+    #[test]
+    fn clicking_button_dispatches_its_action() {
+        let mut app = crate::test_support::app_for_tests();
+        assert!(!app.playing);
+        push_hit(&app, 1, HitTarget::Button(Action::TogglePlay));
+        let cmds = app.mouse_press(3, 1, false);
+        assert!(app.playing, "button click must dispatch its Action");
+        assert!(
+            cmds.iter().any(|c| matches!(c, UiCommand::Play)),
+            "TogglePlay button must forward the engine Play command; got {cmds:?}"
+        );
+    }
+
+    #[test]
+    fn grid_step_click_still_requires_edit_mode() {
+        let mut app = crate::test_support::app_for_tests();
+        app.set_workspace(Workspace::Song); // mode != Edit
+        push_hit(
+            &app,
+            8,
+            HitTarget::Step {
+                row: 0,
+                col: 3,
+                is_drums: true,
+            },
+        );
+        let cmds = app.mouse_press(4, 8, false);
+        assert!(cmds.is_empty(), "grid edits stay gated to Edit mode");
+        assert_eq!(app.cur_col, 0, "cursor must not move outside Edit mode");
+    }
+
+    #[test]
+    fn tab_click_works_even_outside_edit_mode() {
+        let mut app = crate::test_support::app_for_tests();
+        app.set_workspace(Workspace::Library); // mode == Library, not Edit
+        app.register_tab_hits(
+            0,
+            &[(0..9, Workspace::Perform), (10..19, Workspace::Pattern)],
+        );
+        let _ = app.mouse_press(2, 0, false);
+        assert_eq!(app.workspace, Workspace::Perform);
+    }
+
+    #[test]
+    fn scroll_on_non_step_target_is_ignored() {
+        let mut app = crate::test_support::app_for_tests();
+        app.register_tab_hits(
+            0,
+            &[(0..9, Workspace::Perform), (10..19, Workspace::Pattern)],
+        );
+        let cmds = app.mouse_scroll(12, 0, 1);
+        assert!(cmds.is_empty());
+        assert_eq!(app.workspace, Workspace::Perform);
     }
 }
 

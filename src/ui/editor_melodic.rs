@@ -7,7 +7,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 
-use crate::app::{App, HitCell};
+use crate::app::{App, HitCell, HitTarget};
 use crate::devices::profiles::{melodic_velocity, resolve_melodic_pitch};
 use crate::music::scale::{degree_label, note_name as scale_note_name};
 #[cfg(test)]
@@ -67,8 +67,8 @@ pub fn render_melodic_editor(f: &mut Frame, area: Rect, app: &App) {
     // indices 2..=4 (after the EDIT header + step-number row); each column is a uniform
     // 4-cell field after the 5-cell row label, with no bar separators. A click anywhere
     // in a column selects that step (pitch stays keyboard-driven).
+    // Cleared once per frame in `ui::render`; here we only append this pane's cells.
     let mut hits = app.hits.borrow_mut();
-    hits.clear();
     let cell_x0 = area.x + 1 + 5;
     let cell_y0 = area.y + 1 + 2;
     let cell_y1 = area.y + 1 + 4;
@@ -137,9 +137,11 @@ pub fn render_melodic_editor(f: &mut Frame, area: Rect, app: &App) {
             x1: hx + 3,
             y0: cell_y0,
             y1: cell_y1,
-            row: 0,
-            col,
-            is_drums: false,
+            target: HitTarget::Step {
+                row: 0,
+                col,
+                is_drums: false,
+            },
         });
 
         let is_cursor = col == app.cur_col;
@@ -844,8 +846,17 @@ mod tests {
             .hits
             .borrow()
             .iter()
-            .find(|c| !c.is_drums && c.col == 6)
-            .copied()
+            .find(|c| {
+                matches!(
+                    c.target,
+                    crate::app::HitTarget::Step {
+                        col: 6,
+                        is_drums: false,
+                        ..
+                    }
+                )
+            })
+            .cloned()
             .expect("hit-map must contain step 6");
         let cx = (cell.x0 + cell.x1) / 2;
         app.mouse_press(cx, cell.y0, false);

@@ -6,7 +6,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 
-use crate::app::{App, LibCol};
+use crate::app::{App, HitCell, HitTarget, LibCol};
 use crate::devices::profiles::{drum_label, resolve_melodic_pitch, T8_DRUMS};
 use crate::pattern::library::{GenreMap, LibRole};
 #[cfg(test)]
@@ -287,6 +287,20 @@ pub fn render_library(f: &mut Frame, area: Rect, app: &App) {
         } else {
             " "
         };
+        {
+            // Feature: mouse hit region for this pattern row (pattern column only;
+            // clicking selects the pattern and moves column focus there).
+            let y = cols[1].y + pattern_lines.len() as u16;
+            if y < cols[1].y + cols[1].height && cols[1].width > 0 {
+                app.hits.borrow_mut().push(HitCell {
+                    x0: cols[1].x,
+                    x1: cols[1].x + cols[1].width - 1,
+                    y0: y,
+                    y1: y,
+                    target: HitTarget::ListRow(display_i),
+                });
+            }
+        }
         pattern_lines.push(Line::from(Span::styled(
             format!("{marker}{star}{:02} {}", orig_i + 1, p.name),
             style,
@@ -363,6 +377,19 @@ pub fn render_set_browser(f: &mut Frame, area: Rect, app: &App) {
             } else {
                 Style::default()
             };
+            {
+                // Feature: mouse hit region for this row (full inner width).
+                let y = inner.y + lines.len() as u16;
+                if y < inner.y + inner.height && inner.width > 0 {
+                    app.hits.borrow_mut().push(HitCell {
+                        x0: inner.x,
+                        x1: inner.x + inner.width - 1,
+                        y0: y,
+                        y1: y,
+                        target: HitTarget::ListRow(i),
+                    });
+                }
+            }
             lines.push(Line::from(Span::styled(format!("{marker}{}", stem), style)));
         }
         lines.push(Line::from(Span::raw(format!(

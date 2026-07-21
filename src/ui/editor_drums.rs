@@ -7,7 +7,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 
-use crate::app::{App, HitCell};
+use crate::app::{App, HitCell, HitTarget};
 use crate::devices::profiles::drum_label;
 use crate::pattern::model::{PatternData, TrigCond};
 use crate::ui::theme::{
@@ -65,8 +65,8 @@ pub fn render_drum_editor(f: &mut Frame, area: Rect, app: &App) {
     // prefix is 11 cells wide; voice rows begin at content line index 2 (after the EDIT
     // header + step-number row). Each step cell is 2 cells (glyph + marker), plus a
     // "│ " bar separator after every 4th step.
+    // Cleared once per frame in `ui::render`; here we only append this pane's cells.
     let mut hits = app.hits.borrow_mut();
-    hits.clear();
     let grid_x0 = area.x + 1 + 11;
 
     // Use app.visible_step_range() for the paged window.
@@ -219,9 +219,11 @@ pub fn render_drum_editor(f: &mut Frame, area: Rect, app: &App) {
                 x1: x + 1,
                 y0: y,
                 y1: y,
-                row: ri,
-                col,
-                is_drums: true,
+                target: HitTarget::Step {
+                    row: ri,
+                    col,
+                    is_drums: true,
+                },
             });
             x += 2;
             if col % 4 == 3 {
@@ -754,8 +756,17 @@ mod tests {
             .hits
             .borrow()
             .iter()
-            .find(|c| c.is_drums && c.row == 0 && c.col == 5)
-            .copied()
+            .find(|c| {
+                matches!(
+                    c.target,
+                    crate::app::HitTarget::Step {
+                        row: 0,
+                        col: 5,
+                        is_drums: true
+                    }
+                )
+            })
+            .cloned()
             .expect("hit-map must contain voice 0 / step 5");
         let note = crate::devices::profiles::DRUM_VOICES[0].note;
         let cx = (cell.x0 + cell.x1) / 2;

@@ -9,7 +9,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 
-use crate::app::{App, Mode};
+use crate::app::{Action, App, HitCell, HitTarget, Mode};
 use crate::ui::theme::{lane_color, EMBER};
 
 // --- static styles -----------------------------------------------------------
@@ -62,6 +62,18 @@ pub fn render_transport(f: &mut Frame, area: Rect, app: &App) {
     } else {
         ("■ ", "STOP")
     };
+    // Feature: the play/stop field doubles as a mouse button. Its cell starts at
+    // the block's inner origin; glyph is 2 columns wide plus the label.
+    if area.height > 2 && area.width > 2 {
+        let btn_w = 2 + play_label.chars().count() as u16;
+        app.hits.borrow_mut().push(HitCell {
+            x0: area.x + 1,
+            x1: (area.x + btn_w).min(area.x + area.width - 2),
+            y0: area.y + 1,
+            y1: area.y + 1,
+            target: HitTarget::Button(Action::TogglePlay),
+        });
+    }
 
     // --- BPM ----------------------------------------------------------------
     let bpm_field: String = if app.mode == Mode::TempoEntry {

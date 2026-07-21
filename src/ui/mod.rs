@@ -150,6 +150,12 @@ const MIN_HEIGHT: u16 = 16;
 pub fn render(f: &mut Frame, app: &App) {
     let area = f.area();
 
+    // Rebuild the mouse hit-map from scratch each frame: every interactive
+    // widget below appends its regions in render order, so `hit_test`'s
+    // last-pushed-first search resolves overlaps by z-order. Clearing here
+    // (not per-pane) also drops stale grid cells when no editor renders.
+    app.hits.borrow_mut().clear();
+
     // Guard: if the terminal is too small, show a resize prompt and bail out.
     // Attempting the normal multi-pane layout on a tiny frame produces garbage.
     if area.width < MIN_WIDTH || area.height < MIN_HEIGHT {

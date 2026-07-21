@@ -8,6 +8,11 @@ use ratatui::{prelude::*, widgets::*};
 
 pub fn render(f: &mut Frame, area: Rect, app: &App) {
     let mut spans = Vec::new();
+    // Feature: mouse hit regions. Track the x cursor of each " LABEL " cell as
+    // it is emitted so the recorded ranges match the drawn geometry exactly.
+    let mut tabs: Vec<(std::ops::Range<u16>, Workspace)> = Vec::new();
+    let mut x = area.x;
+    let x_max = area.x + area.width; // clip to the strip's own area
     for ws in [
         Workspace::Perform,
         Workspace::Pattern,
@@ -24,9 +29,15 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
         } else {
             Style::default().fg(EMBER.dim)
         };
-        spans.push(Span::styled(format!(" {} ", ws.label()), style));
+        let label = format!(" {} ", ws.label());
+        // Labels are ASCII, so chars == columns.
+        let w = label.chars().count() as u16;
+        tabs.push((x..(x + w).min(x_max), ws));
+        x += w + 1; // +1 for the inter-tab gap (not clickable)
+        spans.push(Span::styled(label, style));
         spans.push(Span::raw(" "));
     }
+    app.register_tab_hits(area.y, &tabs);
     f.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
@@ -75,6 +86,39 @@ mod tests {
             Some(EMBER.synth),
             "active tab uses the synth background"
         );
+    }
+
+    /// The regions registered during render must map each drawn label's
+    /// columns to its workspace, so a click lands on the tab under the pointer.
+    #[test]
+    fn render_registers_clickable_tab_regions() {
+        use crate::app::HitTarget;
+        let mut app = crate::test_support::app_for_tests();
+        let backend = TestBackend::new(80, 1);
+        let mut term = Terminal::new(backend).unwrap();
+        term.draw(|f| render(f, f.area(), &app)).unwrap();
+
+        // Locate each label in the drawn buffer, then hit-test its middle column.
+        let buf = term.backend().buffer().clone();
+        let row: String = (0..buf.area.width)
+            .map(|x| buf.cell((x, 0)).unwrap().symbol().to_string())
+            .collect();
+        for ws in [
+            Workspace::Perform,
+            Workspace::Pattern,
+            Workspace::Library,
+            Workspace::Song,
+            Workspace::Setup,
+        ] {
+            let x = row.find(ws.label()).expect("label drawn") as u16 + 2;
+            let cell = app.hit_test(x, 0).expect("region registered");
+            assert_eq!(cell.target, HitTarget::Workspace(ws), "at column {x}");
+        }
+
+        // End-to-end: press on PATTERN's columns switches the workspace.
+        let x = row.find(Workspace::Pattern.label()).unwrap() as u16;
+        let _ = app.mouse_press(x, 0, false);
+        assert_eq!(app.workspace, Workspace::Pattern);
     }
 
     #[test]

@@ -7,7 +7,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 
-use crate::app::App;
+use crate::app::{App, HitCell, HitTarget};
 
 /// Number of chain rows visible before scrolling.
 const VISIBLE_CHAINS: usize = 10;
@@ -112,6 +112,19 @@ pub fn render_chain_view(f: &mut Frame, area: Rect, app: &App) {
                 Style::default()
             };
 
+            {
+                // Feature: mouse hit region for this row (full inner width).
+                let y = inner.y + lines.len() as u16;
+                if y < inner.y + inner.height && inner.width > 0 {
+                    app.hits.borrow_mut().push(HitCell {
+                        x0: inner.x,
+                        x1: inner.x + inner.width - 1,
+                        y0: y,
+                        y1: y,
+                        target: HitTarget::ListRow(i),
+                    });
+                }
+            }
             lines.push(Line::from(Span::styled(
                 format!(
                     "{marker}{}{loop_tag}{playing_tag}  ({} entries)",

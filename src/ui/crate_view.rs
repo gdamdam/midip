@@ -7,7 +7,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 
-use crate::app::{App, CrateIssue};
+use crate::app::{App, CrateIssue, HitCell, HitTarget};
 use crate::pattern::refs::resolve_pattern_ref;
 
 /// Number of entry rows visible before scrolling.
@@ -99,6 +99,19 @@ pub fn render_crate_view(f: &mut Frame, area: Rect, app: &App) {
             } else {
                 Style::default()
             };
+            {
+                // Feature: mouse hit region for this row (full inner width).
+                let y = inner.y + lines.len() as u16;
+                if y < inner.y + inner.height && inner.width > 0 {
+                    app.hits.borrow_mut().push(HitCell {
+                        x0: inner.x,
+                        x1: inner.x + inner.width - 1,
+                        y0: y,
+                        y1: y,
+                        target: HitTarget::ListRow(i),
+                    });
+                }
+            }
             lines.push(Line::from(Span::styled(
                 format!("{marker}{star}{display}{missing_tag}{queued_tag}"),
                 style,
