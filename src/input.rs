@@ -4,7 +4,7 @@
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::app::{Action, GenField, Mode};
+use crate::app::{Action, GenField, Mode, Workspace};
 use crate::pattern::generate::GenMode;
 use crate::pattern::model::LaneKind;
 
@@ -27,6 +27,12 @@ pub fn key_to_action(key: KeyEvent, mode: Mode, kind: LaneKind) -> Action {
             KeyCode::Char('y') => return Action::Redo,
             KeyCode::Char('r') => return Action::Redo,
             _ => {}
+        }
+        if let KeyCode::Char(c @ '1'..='5') = key.code {
+            let idx = (c as u8) - b'1';
+            if let Some(ws) = Workspace::from_index(idx) {
+                return Action::SwitchWorkspace(ws);
+            }
         }
     }
 
@@ -465,6 +471,25 @@ mod tests {
 
     fn csk(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::CONTROL | KeyModifiers::SHIFT)
+    }
+
+    #[test]
+    fn ctrl_digits_switch_workspaces() {
+        use crate::app::Workspace;
+        use crossterm::event::{KeyCode, KeyModifiers};
+        let mk = |c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL);
+        assert_eq!(
+            key_to_action(mk('1'), Mode::Edit, LaneKind::Drums),
+            Action::SwitchWorkspace(Workspace::Perform)
+        );
+        assert_eq!(
+            key_to_action(mk('3'), Mode::Edit, LaneKind::Drums),
+            Action::SwitchWorkspace(Workspace::Library)
+        );
+        assert_eq!(
+            key_to_action(mk('5'), Mode::Edit, LaneKind::Drums),
+            Action::SwitchWorkspace(Workspace::Setup)
+        );
     }
 
     #[test]

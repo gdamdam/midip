@@ -12,6 +12,7 @@ pub mod mgmt;
 pub mod recovery;
 pub mod route_editor;
 pub mod scene_view;
+pub mod tab_strip;
 pub mod theme;
 pub mod transport;
 
@@ -112,6 +113,13 @@ pub fn render(f: &mut Frame, app: &App) {
         f.render_widget(para, area);
         return;
     }
+
+    // Reserve the top row for the persistent workspace tab strip; everything
+    // else (base panes + centered overlays) renders into the remaining area, so
+    // nothing below shifts except by one row.
+    let rows = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(area);
+    tab_strip::render(f, rows[0], app);
+    let area = rows[1];
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)

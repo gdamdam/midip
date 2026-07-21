@@ -202,6 +202,8 @@ pub enum Action {
     ClearStep,
     Undo,
     Redo,
+    /// Switch the active top-level workspace (Ctrl+1..5). Pure UI state; no engine command.
+    SwitchWorkspace(Workspace),
     ToggleMute,
     ToggleSolo,
     SetBpm(f64),
@@ -1510,6 +1512,9 @@ impl App {
                 cmds.push(UiCommand::RestoreBpm(self.set.bpm));
                 cmds.push(UiCommand::SetSwing(self.set.swing));
                 cmds.push(UiCommand::SyncLanes(self.set.lanes.clone()));
+            }
+            Action::SwitchWorkspace(ws) => {
+                self.set_workspace(ws);
             }
             Action::ToggleMute => {
                 self.snapshot();
