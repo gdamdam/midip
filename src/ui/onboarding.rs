@@ -15,31 +15,31 @@ use ratatui::Frame;
 /// (key, title, body) for each tour page. Length must equal `ONBOARDING_STEPS`.
 const STEPS: [(&str, &str, &str); ONBOARDING_STEPS] = [
     (
-        "ctrl+1",
+        "F1",
         "PERFORM",
         "Your live surface. Launch patterns, mute and solo lanes, drop fills — \
          everything here is quantized so nothing ever lands off the grid.",
     ),
     (
-        "ctrl+2",
+        "F2",
         "PATTERN",
         "The step editor. Program drum grids and melodic lines, tweak velocity, \
          probability, ratchets and micro-timing per step.",
     ),
     (
-        "ctrl+3",
+        "F3",
         "LIBRARY",
         "Browse the pattern library, audition before loading, mark favorites \
          and organize crates for the gig.",
     ),
     (
-        "ctrl+4",
+        "F4",
         "SONG",
         "Scenes capture the whole set's state; chains string scenes into an \
          arrangement you can play back or jump around in.",
     ),
     (
-        "ctrl+5",
+        "F5",
         "SETUP",
         "Route lanes to MIDI ports and channels, pick devices, and configure \
          clock in/out and Ableton Link.",

@@ -29,7 +29,7 @@ pub struct Command {
     /// The `Action` this command dispatches.
     pub action: Action,
     /// `None` = reachable regardless of the active workspace (a truly global
-    /// shortcut, e.g. Space/Panic/Undo/Ctrl+1..5, or one bound in more than
+    /// shortcut, e.g. Space/Panic/Undo/F1..F5, or one bound in more than
     /// one workspace, e.g. `?` for Help). `Some(ws)` = only bound in `ws`'s
     /// base keymap. Perform and Pattern share the Edit keymap (see
     /// `input.rs`), so `Some(Workspace::Perform)` entries are also reachable
@@ -37,7 +37,7 @@ pub struct Command {
     /// treat the two as equivalent (see `ui::mod::footer_workspace_hint`).
     pub workspace: Option<Workspace>,
     /// Real accelerator label as bound in `src/input.rs`, e.g. `"l"` or
-    /// `"Ctrl+3"`. Empty only if a command is intentionally unbound.
+    /// `"F3"`. Empty only if a command is intentionally unbound.
     pub accel: &'static str,
 }
 
@@ -74,31 +74,31 @@ static REGISTRY: [Command; 35] = [
         name: "Switch to Perform",
         action: Action::SwitchWorkspace(Workspace::Perform),
         workspace: None,
-        accel: "Ctrl+1",
+        accel: "F1",
     },
     Command {
         name: "Switch to Pattern",
         action: Action::SwitchWorkspace(Workspace::Pattern),
         workspace: None,
-        accel: "Ctrl+2",
+        accel: "F2",
     },
     Command {
         name: "Switch to Library",
         action: Action::SwitchWorkspace(Workspace::Library),
         workspace: None,
-        accel: "Ctrl+3",
+        accel: "F3",
     },
     Command {
         name: "Switch to Song",
         action: Action::SwitchWorkspace(Workspace::Song),
         workspace: None,
-        accel: "Ctrl+4",
+        accel: "F4",
     },
     Command {
         name: "Switch to Setup",
         action: Action::SwitchWorkspace(Workspace::Setup),
         workspace: None,
-        accel: "Ctrl+5",
+        accel: "F5",
     },
     // '?' opens Help from Perform/Pattern/Library (not Song/Setup, which
     // return early from their own keymaps); not tied to a single workspace.
@@ -311,7 +311,7 @@ mod tests {
 
     /// Spot-check accelerators against the real `key_to_action` mapping in
     /// `input.rs`, focusing on the keys the Task-4/5 workspace reroute
-    /// touched or added (`l`, `G`, `w`, Ctrl+1..5) plus a few long-standing
+    /// touched or added (`l`, `G`, `w`, F1..F5) plus a few long-standing
     /// globals, so drift is caught here rather than only in the UI.
     #[test]
     fn accel_for_matches_input_rs_spot_checks() {
@@ -325,11 +325,11 @@ mod tests {
         assert_eq!(accel_for(&Action::TogglePlay), Some("Space"));
         assert_eq!(
             accel_for(&Action::SwitchWorkspace(Workspace::Library)),
-            Some("Ctrl+3")
+            Some("F3")
         );
         assert_eq!(
             accel_for(&Action::SwitchWorkspace(Workspace::Perform)),
-            Some("Ctrl+1")
+            Some("F1")
         );
         // An action with no registry entry returns None.
         assert_eq!(accel_for(&Action::FocusNext), None);

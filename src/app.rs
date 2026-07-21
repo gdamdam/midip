@@ -177,14 +177,6 @@ impl Workspace {
             Self::Setup => "SETUP",
         }
     }
-    /// Next workspace in tab order, wrapping Setup→Perform.
-    pub fn next(self) -> Workspace {
-        Workspace::from_index(((self.index() + 1) % 5) as u8).expect("index in 0..5")
-    }
-    /// Previous workspace in tab order, wrapping Perform→Setup.
-    pub fn prev(self) -> Workspace {
-        Workspace::from_index(((self.index() + 4) % 5) as u8).expect("index in 0..5")
-    }
 }
 
 /// Derive the shadow [`Mode`] from the authoritative `(workspace, overlay)` pair.
@@ -280,7 +272,7 @@ pub enum Action {
     ClearStep,
     Undo,
     Redo,
-    /// Switch the active top-level workspace (Ctrl+1..5). Pure UI state; no engine command.
+    /// Switch the active top-level workspace (F1..F5). Pure UI state; no engine command.
     SwitchWorkspace(Workspace),
     /// Dismiss the active transient overlay. Pure UI state; no engine command.
     CloseOverlay,
@@ -12800,7 +12792,7 @@ mod mouse_target_tests {
         assert_eq!(
             app.workspace,
             Workspace::Song,
-            "tab-strip clicks mirror the global Ctrl+1..5 chord and stay live over overlays"
+            "tab-strip clicks mirror the global F1..F5 jump and stay live over overlays"
         );
         assert!(app.overlay.is_none(), "workspace switch clears the overlay");
     }

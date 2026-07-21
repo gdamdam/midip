@@ -210,8 +210,8 @@ fn right_column_lines() -> Vec<Line<'static>> {
 fn basic_lines() -> Vec<Line<'static>> {
     vec![
         header("Essentials"),
-        row("[ctrl+1..5]    switch workspace"),
-        row("               1 Perform  2 Pattern  3 Library  4 Song  5 Setup"),
+        row("[F1..F5]       switch workspace"),
+        row("               F1 Perform  F2 Pattern  F3 Library  F4 Song  F5 Setup"),
         row("[:] / [ctrl+p] command palette"),
         row("[space]        play / stop"),
         row("[enter]        toggle step / place note"),
@@ -360,7 +360,7 @@ mod tests {
     #[test]
     fn basic_view_shows_essentials_and_hides_deep_reference() {
         let basic = render_help_view(80, 30, 0, true);
-        for needle in ["ctrl+1", "play", "save", "quit", "help", "palette"] {
+        for needle in ["F1..F5", "play", "save", "quit", "help", "palette"] {
             assert!(
                 basic.contains(needle),
                 "basic view must mention {needle:?}, got: {basic:?}"
