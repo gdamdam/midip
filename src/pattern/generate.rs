@@ -1,4 +1,4 @@
-use crate::music::scale::{Scale, fold_to_scale};
+use crate::music::scale::{fold_to_scale, Scale};
 use crate::pattern::euclid::bjorklund;
 use crate::pattern::model::{
     DrumHit, Lane, MelodicNote, MelodicStep, Pattern, PatternData, TrigCond,
@@ -431,8 +431,8 @@ fn generate_arp(params: &GenParams, source: &Pattern, lane: &Lane) -> Pattern {
 
             // Drop (rest) any note that would fall outside i8 or MIDI 0..=127.
             let abs = root + semi_raw;
-            let fits = (i8::MIN as i32..=i8::MAX as i32).contains(&semi_raw)
-                && (0..=127).contains(&abs);
+            let fits =
+                (i8::MIN as i32..=i8::MAX as i32).contains(&semi_raw) && (0..=127).contains(&abs);
             if !fits {
                 return MelodicStep::default();
             }
@@ -1343,8 +1343,14 @@ mod gen_core_tests {
         use crate::music::scale::Scale;
         // Under Chromatic, degrees()==0..11, so scale-index would not be a chord.
         // Use fixed intervals instead.
-        assert_eq!(arp_pool(ArpChord::Triad, 1, Scale::Chromatic), vec![0, 4, 7]);
-        assert_eq!(arp_pool(ArpChord::Seventh, 1, Scale::Chromatic), vec![0, 4, 7, 11]);
+        assert_eq!(
+            arp_pool(ArpChord::Triad, 1, Scale::Chromatic),
+            vec![0, 4, 7]
+        );
+        assert_eq!(
+            arp_pool(ArpChord::Seventh, 1, Scale::Chromatic),
+            vec![0, 4, 7, 11]
+        );
         assert_eq!(arp_pool(ArpChord::Power, 1, Scale::Chromatic), vec![0, 7]);
         assert_eq!(arp_pool(ArpChord::Octaves, 1, Scale::Chromatic), vec![0]);
     }
@@ -1395,7 +1401,11 @@ mod gen_core_tests {
         // One full cycle (count == pool.len()) is a permutation — every pitch once.
         let mut sorted = sa.clone();
         sorted.sort_unstable();
-        assert_eq!(sorted, vec![1, 2, 3, 4], "a shuffled cycle covers the whole pool");
+        assert_eq!(
+            sorted,
+            vec![1, 2, 3, 4],
+            "a shuffled cycle covers the whole pool"
+        );
     }
 
     #[test]
@@ -1436,7 +1446,11 @@ mod gen_core_tests {
         params.mode = GenMode::Arp;
         params.density = 100;
         let out = generate_arp(&params, &source, &lane);
-        assert_eq!(arp_notes(&out).len(), source.length, "density 100 => every step fires");
+        assert_eq!(
+            arp_notes(&out).len(),
+            source.length,
+            "density 100 => every step fires"
+        );
     }
 
     #[test]
