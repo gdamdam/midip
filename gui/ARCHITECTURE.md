@@ -70,3 +70,22 @@ a `$state` snapshot store updated by events + command returns.
 4. Drum + melodic grids (click/paint) + playhead.
 5. Step inspector + library + setup.
 6. Persistence (save / save-as / load) + undo/redo.
+
+## Implemented since the first slice
+
+- **Routing** (Setup): per-lane output-port cycling, MIDI-channel adjust, clock-out
+  toggle — reuses the engine's route-editor actions via `route_editor_lane` +
+  `gui_output_ports`.
+- **Library**: audition (isolated preview, gated to muted/stopped lanes),
+  favorites (persisted), favorites-only filter.
+- **Song mode**: scene recall + capture, chain play/stop with a live current-entry
+  highlight (chain auto-advance flows through the event pump). `SongDto` in the snapshot.
+- **Chromatic note entry**: click any pitch row in the piano-roll to place that
+  (scale-folded) pitch via the note-input path; double-click removes; drag re-pitches.
+
+## Still TUI-only / next
+
+- Scene/chain *editing* (create/reorder/delete entries) — playback + recall work in the GUI.
+- Crates, generative tools, command palette, onboarding/recovery.
+- Live GUI QA on a desktop session (window open, close-during-playback) — verified
+  logically via the headless engine boot/shutdown test, not run headlessly here.
