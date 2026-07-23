@@ -3714,7 +3714,15 @@ impl App {
             }
             Action::GenCycleMode(delta) => {
                 if let Some(tt) = &self.temp_transform {
-                    let order = [GenMode::Generate, GenMode::Vary, GenMode::Arp];
+                    let lane = tt.lane;
+                    // Arp is melodic-only (§Integration/§UI): exclude it from the cycle
+                    // on drum lanes so a drum lane can never land on `mode == Arp`.
+                    let order: &[GenMode] =
+                        if self.set.lanes[lane].pattern.kind() == LaneKind::Melodic {
+                            &[GenMode::Generate, GenMode::Vary, GenMode::Arp]
+                        } else {
+                            &[GenMode::Generate, GenMode::Vary]
+                        };
                     let cur = order
                         .iter()
                         .position(|&m| m == self.gen_params.mode)
@@ -3722,7 +3730,6 @@ impl App {
                     let n = order.len() as i32;
                     let next = (((cur as i32 + delta as i32) % n) + n) % n;
                     self.gen_params.mode = order[next as usize];
-                    let lane = tt.lane;
                     let original = tt.original.clone();
                     let candidate = generate(&self.gen_params, &original, &self.set.lanes[lane]);
                     self.set.lanes[lane].pattern = candidate;
@@ -12285,7 +12292,10 @@ mod tests {
     #[test]
     fn gen_cycle_mode_advances_generate_vary_arp() {
         use crate::pattern::generate::GenMode;
-        let mut app = app_with_generative_preview();
+        // Arp is melodic-only: focus the bass (melodic) lane so the cycle can reach it.
+        let mut app = new_app();
+        app.apply(Action::FocusLane(1)); // bass = melodic
+        app.apply(Action::OpenGenerative);
         assert_eq!(app.gen_params.mode, GenMode::Generate);
         app.apply(Action::GenCycleMode(1));
         assert_eq!(app.gen_params.mode, GenMode::Vary);
@@ -12295,6 +12305,32 @@ mod tests {
         assert_eq!(app.gen_params.mode, GenMode::Generate, "wraps around");
         app.apply(Action::GenCycleMode(-1));
         assert_eq!(app.gen_params.mode, GenMode::Arp, "reverse wraps");
+    }
+
+    /// On a drum lane, Arp is excluded from the cycle entirely (melodic-only per spec):
+    /// GenCycleMode must only ever toggle Generate <-> Vary, never landing on Arp.
+    #[test]
+    fn gen_cycle_mode_skips_arp_on_drum_lane() {
+        use crate::pattern::generate::GenMode;
+        // new_app()'s focused lane (0) is drums.
+        let mut app = app_with_generative_preview();
+        assert_eq!(app.gen_params.mode, GenMode::Generate);
+        app.apply(Action::GenCycleMode(1));
+        assert_eq!(app.gen_params.mode, GenMode::Vary);
+        app.apply(Action::GenCycleMode(1));
+        assert_eq!(
+            app.gen_params.mode,
+            GenMode::Generate,
+            "wraps without ever hitting Arp"
+        );
+        app.apply(Action::GenCycleMode(-1));
+        assert_eq!(
+            app.gen_params.mode,
+            GenMode::Vary,
+            "reverse wraps without ever hitting Arp"
+        );
+        app.apply(Action::GenCycleMode(-1));
+        assert_eq!(app.gen_params.mode, GenMode::Generate);
     }
 
     #[test]
