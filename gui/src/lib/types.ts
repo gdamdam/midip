@@ -183,6 +183,7 @@ export interface Snapshot {
   song: Song;
   gen: Gen;
   crates: CrateItem[];
+  recovery_available: boolean;
   status: string;
 }
 
@@ -297,6 +298,8 @@ export type GuiCommand =
   | { type: "genReroll" }
   | { type: "genCommit" }
   | { type: "genCancel" }
+  | { type: "recoveryRecover" }
+  | { type: "recoveryDiscard" }
   | { type: "undo" }
   | { type: "redo" }
   | { type: "save" }

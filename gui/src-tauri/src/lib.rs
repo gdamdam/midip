@@ -41,6 +41,8 @@ pub struct Core {
     pub app: App,
     cmd_tx: Sender<UiCommand>,
     data_dir: PathBuf,
+    /// True when boot detected an unclean previous shutdown with recoverable work.
+    recovery: bool,
 }
 
 impl Core {
@@ -49,6 +51,7 @@ impl Core {
             app,
             cmd_tx,
             data_dir,
+            recovery: false,
         }
     }
 
@@ -137,6 +140,18 @@ impl Core {
                 | GuiCommand::DeleteUserPattern(_)
         ) {
             self.app.refresh_user_patterns();
+        }
+        // Recover/Discard resolves the recovery prompt.
+        if matches!(
+            cmd,
+            GuiCommand::RecoveryRecover | GuiCommand::RecoveryDiscard
+        ) {
+            self.recovery = false;
+        }
+        // Crash-recovery autosave: persist the committed set whenever it is dirty
+        // so an unclean exit can be recovered on next launch.
+        if self.app.dirty {
+            let _ = midip::pattern::store::save_recovery(&self.data_dir, &self.app.committed_set());
         }
     }
 
@@ -305,7 +320,9 @@ impl Core {
     }
 
     pub fn snapshot(&self) -> Snapshot {
-        Snapshot::build(&self.app)
+        let mut s = Snapshot::build(&self.app);
+        s.recovery_available = self.recovery;
+        s
     }
 
     pub fn library(&self) -> LibraryDto {
@@ -590,6 +607,14 @@ enum Payload {
 /// lock while joining.
 fn shutdown(handle: &tauri::AppHandle) {
     let state = handle.state::<GuiState>();
+    // Clean shutdown: write the marker + drop the recovery snapshot so the next
+    // launch does not offer to recover. Read data_dir under a brief lock (never
+    // held across the join below).
+    {
+        let core = state.core.lock().unwrap();
+        let _ = midip::pattern::store::mark_clean_shutdown(&core.data_dir);
+        midip::pattern::store::clear_recovery(&core.data_dir);
+    }
     let _ = state.cmd_tx.send(UiCommand::Quit);
     let join = state.engine_join.lock().unwrap().take();
     if let Some(join) = join {
@@ -621,6 +646,13 @@ pub fn run() {
     // Populate saved user patterns (adds the "User" library genre) at startup.
     core.app.refresh_user_patterns();
     core.app.set_status(lib_status);
+
+    // Crash recovery: an unclean previous shutdown left the clean-marker absent.
+    let dd = midip::config::data_dir();
+    core.recovery = midip::pattern::store::unclean_shutdown_detected(&dd)
+        && midip::pattern::store::recovery_exists(&dd);
+    // Clear the marker so if THIS session crashes it is detected next launch.
+    midip::pattern::store::clear_clean_marker(&dd);
 
     tauri::Builder::default()
         .manage(GuiState {

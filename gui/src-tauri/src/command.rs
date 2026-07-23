@@ -247,6 +247,10 @@ pub enum GuiCommand {
     GenCommit,
     GenCancel,
 
+    // --- recovery ---
+    RecoveryRecover,
+    RecoveryDiscard,
+
     // --- history ---
     Undo,
     Redo,
@@ -382,6 +386,8 @@ pub fn gui_to_actions(cmd: &GuiCommand) -> Vec<Action> {
         G::ToggleMirror => vec![Action::ToggleMirror],
         G::Undo => vec![Action::Undo],
         G::Redo => vec![Action::Redo],
+        G::RecoveryRecover => vec![Action::RecoveryRecover],
+        G::RecoveryDiscard => vec![Action::RecoveryDiscard],
 
         // song — App guards scene/chain indices internally
         G::RecallScene(i) => vec![Action::RecallScene(i)],
@@ -743,6 +749,18 @@ mod tests {
             delta: 1
         })
         .is_empty());
+    }
+
+    #[test]
+    fn recovery_translation() {
+        assert_eq!(
+            gui_to_actions(&GuiCommand::RecoveryRecover),
+            vec![Action::RecoveryRecover]
+        );
+        assert_eq!(
+            gui_to_actions(&GuiCommand::RecoveryDiscard),
+            vec![Action::RecoveryDiscard]
+        );
     }
 
     #[test]

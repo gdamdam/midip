@@ -24,6 +24,8 @@ pub struct Snapshot {
     pub song: SongDto,
     pub gen: GenDto,
     pub crates: Vec<CrateDto>,
+    /// True when an unclean previous shutdown left recoverable work (set by Core).
+    pub recovery_available: bool,
     pub status: String,
 }
 
@@ -388,6 +390,7 @@ impl Snapshot {
             song,
             gen,
             crates,
+            recovery_available: false, // overridden by Core::snapshot
             status: app.status.clone(),
         }
     }
