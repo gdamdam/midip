@@ -1,7 +1,17 @@
 <script lang="ts">
-  import { app, send } from "../lib/store.svelte";
+  import { app, send, userPatternCmd } from "../lib/store.svelte";
   import DrumGrid from "./DrumGrid.svelte";
   import MelodicGrid from "./MelodicGrid.svelte";
+
+  let saving = $state(false);
+  let saveName = $state("");
+  async function saveUserPattern() {
+    const n = saveName.trim();
+    if (!n) return;
+    await userPatternCmd({ type: "saveLanePattern", args: n });
+    saving = false;
+    saveName = "";
+  }
 
   const pat = $derived(app.snap!.focused_pattern);
   const lane = $derived(app.snap!.focused_lane);
@@ -72,6 +82,13 @@
     </div>
 
     <div class="spacer"></div>
+    {#if saving}
+      <input class="savein" placeholder="pattern name" bind:value={saveName}
+        onkeydown={(e) => e.key === "Enter" && saveUserPattern()} />
+      <button onclick={saveUserPattern}>save</button>
+    {:else}
+      <button onclick={() => (saving = true)} title="Save this lane's pattern to your library">save→lib</button>
+    {/if}
     <button class="gen" onclick={() => send({ type: "openGenerative" })} title="Generate / vary / arpeggiate this lane">⚡ Generate</button>
     <button class="danger" onclick={() => send({ type: "clearPattern", args: lane })}>clear</button>
   </div>
@@ -145,6 +162,10 @@
   .clr {
     padding: 2px 6px;
     color: var(--fg-dim);
+  }
+  .savein {
+    width: 120px;
+    font-size: 11px;
   }
   .gen {
     color: var(--ember);

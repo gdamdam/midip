@@ -119,6 +119,17 @@ impl Core {
             let cmds = self.app.apply(action);
             self.forward(cmds);
         }
+        // Commands that mutate the user-pattern store: refresh the in-memory list
+        // (and the injected "User" library genre) so the browser stays in sync.
+        if matches!(
+            cmd,
+            GuiCommand::SaveLanePattern(_)
+                | GuiCommand::RenameUserPattern { .. }
+                | GuiCommand::DuplicateUserPattern(_)
+                | GuiCommand::DeleteUserPattern(_)
+        ) {
+            self.app.refresh_user_patterns();
+        }
     }
 
     /// Load (or queue, if playing) a vendored library pattern into its role's
@@ -359,6 +370,35 @@ fn gui_input_ports() -> Vec<String> {
     midip::midi::ports::list_input_ports()
 }
 
+#[derive(serde::Serialize)]
+pub struct UserPatternEntry {
+    pub name: String,
+    pub path: String,
+    pub kind: String,
+    pub length: usize,
+}
+
+#[tauri::command]
+fn gui_user_patterns(state: tauri::State<GuiState>) -> Vec<UserPatternEntry> {
+    let core = state.core.lock().unwrap();
+    let dir = core.data_dir.join("patterns");
+    midip::pattern::store::list_user_patterns(&dir)
+        .into_iter()
+        .filter_map(|p| {
+            let pat = midip::pattern::store::load_user_pattern(&p).ok()?;
+            Some(UserPatternEntry {
+                name: pat.name.clone(),
+                path: p.to_string_lossy().to_string(),
+                kind: match pat.kind() {
+                    LaneKind::Drums => "drums".into(),
+                    LaneKind::Melodic => "melodic".into(),
+                },
+                length: pat.length,
+            })
+        })
+        .collect()
+}
+
 // --- Event pump ----------------------------------------------------------
 
 /// Drain engine events on a dedicated thread. Per event: acquire the `core`
@@ -430,6 +470,8 @@ pub fn run() {
         join,
         cmd_tx,
     } = boot(link, set, library, data_dir);
+    // Populate saved user patterns (adds the "User" library genre) at startup.
+    core.app.refresh_user_patterns();
     core.app.set_status(lib_status);
 
     tauri::Builder::default()
@@ -450,6 +492,7 @@ pub fn run() {
             gui_set_list,
             gui_output_ports,
             gui_input_ports,
+            gui_user_patterns,
         ])
         .setup(move |app| {
             let handle = app.handle().clone();

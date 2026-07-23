@@ -9,18 +9,26 @@ import {
   getSetList,
   getSnapshot,
   loadLibraryPattern,
+  getUserPatterns,
   onSnapshot,
   onTransport,
   placeNote as bridgePlaceNote,
   stopAudition,
   toggleFavorite,
 } from "./bridge";
-import type { GuiCommand, LibraryData, SetEntry, Snapshot } from "./types";
+import type {
+  GuiCommand,
+  LibraryData,
+  SetEntry,
+  Snapshot,
+  UserPatternEntry,
+} from "./types";
 
 interface AppState {
   snap: Snapshot | null;
   library: LibraryData | null;
   sets: SetEntry[];
+  userPatterns: UserPatternEntry[];
   version: string;
   ready: boolean;
   error: string | null;
@@ -30,6 +38,7 @@ export const app = $state<AppState>({
   snap: null,
   library: null,
   sets: [],
+  userPatterns: [],
   version: "",
   ready: false,
   error: null,
@@ -48,6 +57,7 @@ export async function init(): Promise<void> {
     });
     app.library = await getLibrary();
     app.sets = await getSetList();
+    app.userPatterns = await getUserPatterns();
     try {
       app.version = await getAppVersion();
     } catch {
@@ -117,6 +127,18 @@ export async function favorite(
 ): Promise<void> {
   try {
     app.library = await toggleFavorite(role, genre, name);
+  } catch (e) {
+    app.error = String(e);
+  }
+}
+
+/// Run a user-pattern-store command, then refresh the library (which carries the
+/// injected "User" genre) and the management list.
+export async function userPatternCmd(cmd: GuiCommand): Promise<void> {
+  try {
+    app.snap = await bridgeDispatch(cmd);
+    app.library = await getLibrary();
+    app.userPatterns = await getUserPatterns();
   } catch (e) {
     app.error = String(e);
   }

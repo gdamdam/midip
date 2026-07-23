@@ -228,6 +228,12 @@ pub enum GuiCommand {
     DeleteSet(String),
     LoadUserPattern(String),
     SaveLanePattern(String),
+    RenameUserPattern {
+        path: String,
+        name: String,
+    },
+    DuplicateUserPattern(String),
+    DeleteUserPattern(String),
 }
 
 /// Cell-targeted commands report the `(lane,row,col)` the dispatcher must move
@@ -367,6 +373,18 @@ pub fn gui_to_actions(cmd: &GuiCommand) -> Vec<Action> {
             vec![Action::LoadUserPattern(std::path::PathBuf::from(path))]
         }
         G::SaveLanePattern(ref name) => vec![Action::SaveAsUserPattern(name.clone())],
+        G::RenameUserPattern { ref path, ref name } => {
+            vec![Action::RenameUserPattern(
+                std::path::PathBuf::from(path),
+                name.clone(),
+            )]
+        }
+        G::DuplicateUserPattern(ref path) => {
+            vec![Action::DuplicateUserPattern(std::path::PathBuf::from(path))]
+        }
+        G::DeleteUserPattern(ref path) => {
+            vec![Action::DeleteUserPattern(std::path::PathBuf::from(path))]
+        }
 
         G::FocusLane(l) => vec![Action::FocusLane(l)],
 

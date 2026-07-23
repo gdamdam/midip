@@ -1,10 +1,12 @@
 <script lang="ts">
-  import { app, loadPattern, audition, endAudition, favorite } from "../lib/store.svelte";
+  import { app, loadPattern, audition, endAudition, favorite, send, userPatternCmd } from "../lib/store.svelte";
 
   let role = $state("drums");
   let query = $state("");
   let favOnly = $state(false);
   let auditioning = $state<string | null>(null);
+  let confirmDelete = $state<string | null>(null);
+  let showUser = $state(false);
 
   const roleData = $derived(app.library?.roles.find((r) => r.role === role) ?? null);
 
@@ -92,6 +94,33 @@
       {/each}
     </div>
   {/if}
+  <div class="mine">
+    <button class="mine-head" onclick={() => (showUser = !showUser)}>
+      {showUser ? "▾" : "▸"} My patterns ({app.userPatterns.length})
+    </button>
+    {#if showUser}
+      <div class="mine-list">
+        {#if app.userPatterns.length === 0}
+          <span class="muted small">Save a lane's pattern with “save→lib”.</span>
+        {:else}
+          {#each app.userPatterns as up (up.path)}
+            <div class="mine-row">
+              <button class="mine-load" onclick={() => send({ type: "loadUserPattern", args: up.path })} title="Load into its role's lane">
+                <span class="pn">{up.name}</span><span class="meta mono">{up.kind[0]}·{up.length}</span>
+              </button>
+              <button class="mini" onclick={() => userPatternCmd({ type: "duplicateUserPattern", args: up.path })} title="Duplicate">⧉</button>
+              {#if confirmDelete === up.path}
+                <button class="mini del" onclick={() => { userPatternCmd({ type: "deleteUserPattern", args: up.path }); confirmDelete = null; }}>sure?</button>
+              {:else}
+                <button class="mini" onclick={() => (confirmDelete = up.path)} title="Delete">🗑</button>
+              {/if}
+            </div>
+          {/each}
+        {/if}
+      </div>
+    {/if}
+  </div>
+
   <p class="hint muted">Load queues at the next bar while playing · ♪ auditions on a muted/stopped lane.</p>
 </section>
 
@@ -213,6 +242,55 @@
   }
   .pad {
     padding: 12px;
+  }
+  .mine {
+    border-top: var(--border);
+    padding: 6px;
+    max-height: 30%;
+    overflow-y: auto;
+  }
+  .mine-head {
+    width: 100%;
+    text-align: left;
+    background: transparent;
+    border: none;
+    color: var(--pink);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+  .mine-list {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    margin-top: 4px;
+  }
+  .mine-row {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+  }
+  .mine-load {
+    flex: 1;
+    display: flex;
+    justify-content: space-between;
+    text-align: left;
+    background: transparent;
+    border: 1px solid transparent;
+  }
+  .mine-load:hover {
+    background: var(--panel-2);
+    border-color: var(--dim);
+  }
+  .mini {
+    padding: 2px 6px;
+    background: transparent;
+    color: var(--fg-dim);
+  }
+  .mini.del {
+    color: var(--err);
+    border-color: var(--err);
+    font-size: 10px;
   }
   .hint {
     font-size: 10px;

@@ -201,6 +201,13 @@ export interface SetEntry {
   path: string;
 }
 
+export interface UserPatternEntry {
+  name: string;
+  path: string;
+  kind: "drums" | "melodic";
+  length: number;
+}
+
 // --- Commands (adjacently-tagged: {type, args?}) ---
 
 export type GuiCommand =
@@ -275,4 +282,7 @@ export type GuiCommand =
   | { type: "newSet" }
   | { type: "loadSet"; args: string }
   | { type: "loadUserPattern"; args: string }
-  | { type: "saveLanePattern"; args: string };
+  | { type: "saveLanePattern"; args: string }
+  | { type: "renameUserPattern"; args: { path: string; name: string } }
+  | { type: "duplicateUserPattern"; args: string }
+  | { type: "deleteUserPattern"; args: string };

@@ -10,6 +10,7 @@ import type {
   SetEntry,
   Snapshot,
   Transport,
+  UserPatternEntry,
 } from "./types";
 
 export const getAppVersion = (): Promise<string> => getVersion();
@@ -52,6 +53,9 @@ export const getSetList = (): Promise<SetEntry[]> => invoke("gui_set_list");
 export const getOutputPorts = (): Promise<string[]> => invoke("gui_output_ports");
 
 export const getInputPorts = (): Promise<string[]> => invoke("gui_input_ports");
+
+export const getUserPatterns = (): Promise<UserPatternEntry[]> =>
+  invoke("gui_user_patterns");
 
 export const onSnapshot = (cb: (s: Snapshot) => void): Promise<UnlistenFn> =>
   listen<Snapshot>("snapshot", (e) => cb(e.payload));
