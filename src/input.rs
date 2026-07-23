@@ -5,7 +5,6 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::app::{Action, GenField, Overlay, Workspace};
-use crate::pattern::generate::GenMode;
 use crate::pattern::model::LaneKind;
 
 /// Map a raw key event to an [`Action`], given the current app mode and focused lane kind.
@@ -200,8 +199,8 @@ pub fn key_to_action(
             Overlay::Generative => match key.code {
                 KeyCode::Esc => Action::GenCancel,
                 KeyCode::Enter => Action::GenCommit,
-                KeyCode::Tab => Action::GenSetMode(GenMode::Vary),
-                KeyCode::BackTab => Action::GenSetMode(GenMode::Generate),
+                KeyCode::Tab => Action::GenCycleMode(1),
+                KeyCode::BackTab => Action::GenCycleMode(-1),
                 KeyCode::Char('z') => Action::GenReroll,
                 // density −/+
                 KeyCode::Char('d') => Action::GenAdjust {
@@ -228,6 +227,51 @@ pub fn key_to_action(
                 },
                 KeyCode::Char('M') => Action::GenAdjust {
                     field: GenField::Mutate,
+                    delta: 5,
+                },
+                // arp chord preset −/+
+                KeyCode::Char('c') => Action::GenAdjust {
+                    field: GenField::Chord,
+                    delta: -1,
+                },
+                KeyCode::Char('C') => Action::GenAdjust {
+                    field: GenField::Chord,
+                    delta: 1,
+                },
+                // arp octaves −/+
+                KeyCode::Char('o') => Action::GenAdjust {
+                    field: GenField::Octaves,
+                    delta: -1,
+                },
+                KeyCode::Char('O') => Action::GenAdjust {
+                    field: GenField::Octaves,
+                    delta: 1,
+                },
+                // arp shape −/+
+                KeyCode::Char('s') => Action::GenAdjust {
+                    field: GenField::Shape,
+                    delta: -1,
+                },
+                KeyCode::Char('S') => Action::GenAdjust {
+                    field: GenField::Shape,
+                    delta: 1,
+                },
+                // arp gate −/+
+                KeyCode::Char('g') => Action::GenAdjust {
+                    field: GenField::Gate,
+                    delta: -5,
+                },
+                KeyCode::Char('G') => Action::GenAdjust {
+                    field: GenField::Gate,
+                    delta: 5,
+                },
+                // arp velocity variation −/+
+                KeyCode::Char('v') => Action::GenAdjust {
+                    field: GenField::VelVar,
+                    delta: -5,
+                },
+                KeyCode::Char('V') => Action::GenAdjust {
+                    field: GenField::VelVar,
                     delta: 5,
                 },
                 _ => Action::None,
@@ -2510,20 +2554,20 @@ mod tests {
     }
 
     #[test]
-    fn generative_tab_sets_vary_mode() {
+    fn generative_tab_cycles_mode_forward() {
         assert_eq!(
             kta(k(KeyCode::Tab), Mode::Generative, LaneKind::Drums),
-            Action::GenSetMode(GenMode::Vary),
-            "Tab in Generative must dispatch GenSetMode(Vary)"
+            Action::GenCycleMode(1),
+            "Tab in Generative must dispatch GenCycleMode(1)"
         );
     }
 
     #[test]
-    fn generative_backtab_sets_generate_mode() {
+    fn generative_backtab_cycles_mode_backward() {
         assert_eq!(
             kta(k(KeyCode::BackTab), Mode::Generative, LaneKind::Drums),
-            Action::GenSetMode(GenMode::Generate),
-            "BackTab in Generative must dispatch GenSetMode(Generate)"
+            Action::GenCycleMode(-1),
+            "BackTab in Generative must dispatch GenCycleMode(-1)"
         );
     }
 
@@ -2593,6 +2637,106 @@ mod tests {
                 delta: 5,
             },
             "'M' in Generative must increase mutate"
+        );
+    }
+
+    #[test]
+    fn generative_chord_keys() {
+        assert_eq!(
+            kta(k(KeyCode::Char('c')), Mode::Generative, LaneKind::Drums),
+            Action::GenAdjust {
+                field: GenField::Chord,
+                delta: -1,
+            },
+            "'c' in Generative must decrease chord"
+        );
+        assert_eq!(
+            kta(k(KeyCode::Char('C')), Mode::Generative, LaneKind::Drums),
+            Action::GenAdjust {
+                field: GenField::Chord,
+                delta: 1,
+            },
+            "'C' in Generative must increase chord"
+        );
+    }
+
+    #[test]
+    fn generative_octaves_keys() {
+        assert_eq!(
+            kta(k(KeyCode::Char('o')), Mode::Generative, LaneKind::Drums),
+            Action::GenAdjust {
+                field: GenField::Octaves,
+                delta: -1,
+            },
+            "'o' in Generative must decrease octaves"
+        );
+        assert_eq!(
+            kta(k(KeyCode::Char('O')), Mode::Generative, LaneKind::Drums),
+            Action::GenAdjust {
+                field: GenField::Octaves,
+                delta: 1,
+            },
+            "'O' in Generative must increase octaves"
+        );
+    }
+
+    #[test]
+    fn generative_shape_keys() {
+        assert_eq!(
+            kta(k(KeyCode::Char('s')), Mode::Generative, LaneKind::Drums),
+            Action::GenAdjust {
+                field: GenField::Shape,
+                delta: -1,
+            },
+            "'s' in Generative must decrease shape"
+        );
+        assert_eq!(
+            kta(k(KeyCode::Char('S')), Mode::Generative, LaneKind::Drums),
+            Action::GenAdjust {
+                field: GenField::Shape,
+                delta: 1,
+            },
+            "'S' in Generative must increase shape"
+        );
+    }
+
+    #[test]
+    fn generative_gate_keys() {
+        assert_eq!(
+            kta(k(KeyCode::Char('g')), Mode::Generative, LaneKind::Drums),
+            Action::GenAdjust {
+                field: GenField::Gate,
+                delta: -5,
+            },
+            "'g' in Generative must decrease gate"
+        );
+        assert_eq!(
+            kta(k(KeyCode::Char('G')), Mode::Generative, LaneKind::Drums),
+            Action::GenAdjust {
+                field: GenField::Gate,
+                delta: 5,
+            },
+            "'G' in Generative must increase gate"
+        );
+    }
+
+    #[test]
+    fn generative_vel_var_keys() {
+        assert_eq!(
+            kta(k(KeyCode::Char('v')), Mode::Generative, LaneKind::Drums),
+            Action::GenAdjust {
+                field: GenField::VelVar,
+                delta: -5,
+            },
+            "'v' in Generative must decrease velocity variation"
+        );
+        assert_eq!(
+            kta(k(KeyCode::Char('V')), Mode::Generative, LaneKind::Drums),
+            Action::GenAdjust {
+                field: GenField::VelVar,
+                delta: 5,
+            },
+            "'V' in Generative must increase velocity variation"
         );
     }
 

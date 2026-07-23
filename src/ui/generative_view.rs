@@ -8,7 +8,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
 use crate::app::App;
-use crate::pattern::generate::GenMode;
+use crate::pattern::generate::{ArpChord, ArpShape, GenMode};
 use crate::pattern::model::PatternData;
 
 /// Render the generative panel overlay into `area`.
@@ -52,7 +52,7 @@ pub fn render_generative_panel(f: &mut Frame, area: Rect, app: &App) {
 
     // ── Key hints ──────────────────────────────────────────────────────────────
     lines.push(Line::from(vec![
-        Span::styled("[tab]mode  ", key_style),
+        Span::styled("[tab/S-tab]mode(3)  ", key_style),
         Span::styled("[d/D]density  [r/R]range  [m/M]mutate  ", key_style),
         Span::styled("[z]reroll  [enter]commit  [esc]cancel", key_style),
     ]));
@@ -101,6 +101,51 @@ pub fn render_generative_panel(f: &mut Frame, area: Rect, app: &App) {
         Span::raw("  "),
         Span::styled("[z]reroll", key_style),
     ]));
+
+    if p.mode == GenMode::Arp {
+        let chord = match p.arp_chord {
+            ArpChord::Power => "Power (1-5)",
+            ArpChord::Triad => "Triad (1-3-5)",
+            ArpChord::Seventh => "7th (1-3-5-7)",
+            ArpChord::Octaves => "Octaves",
+        };
+        let shape = match p.arp_shape {
+            ArpShape::Up => "Up",
+            ArpShape::Down => "Down",
+            ArpShape::UpDown => "UpDown",
+            ArpShape::Random => "Random",
+        };
+        lines.push(Line::from(vec![
+            Span::styled("Chord       ", header_style),
+            Span::styled(chord, val_style),
+            Span::raw("  "),
+            Span::styled("[c/C]", key_style),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled("Octaves     ", header_style),
+            Span::styled(format!("{}", p.arp_octaves), val_style),
+            Span::raw("      "),
+            Span::styled("[o/O]", key_style),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled("Shape       ", header_style),
+            Span::styled(shape, val_style),
+            Span::raw("  "),
+            Span::styled("[s/S]", key_style),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled("Gate        ", header_style),
+            Span::styled(format!("{:.2}", p.arp_gate), val_style),
+            Span::raw(" st  "),
+            Span::styled("[g/G]", key_style),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled("VelVar      ", header_style),
+            Span::styled(format!("{:3}", p.arp_vel_var), val_style),
+            Span::raw("/100 "),
+            Span::styled("[v/V]", key_style),
+        ]));
+    }
 
     lines.push(Line::from(""));
 
@@ -160,6 +205,21 @@ mod tests {
     fn generative_panel_renders_without_panic() {
         let mut app = new_app();
         app.mode = Mode::Generative;
+
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                render_generative_panel(f, f.area(), &app);
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn generative_panel_renders_arp_params_without_panic() {
+        let mut app = new_app();
+        app.mode = Mode::Generative;
+        app.gen_params.mode = GenMode::Arp;
 
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend).unwrap();
