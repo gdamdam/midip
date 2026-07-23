@@ -242,6 +242,12 @@ export type GuiCommand =
   | { type: "adjustLaneSwing"; args: { lane: number; delta: number } }
   | { type: "clearLaneSwing"; args: number }
   | { type: "cycleClockDiv"; args: number }
+  | { type: "euclid"; args: { lane: number; row: number; dp: number; dr: number } }
+  | { type: "rotateRight"; args: number }
+  | { type: "rotateLeft"; args: number }
+  | { type: "conformToScale"; args: number }
+  | { type: "toggleFill"; args: number }
+  | { type: "commitTransform"; args: number }
   | { type: "renameSet"; args: string }
   | { type: "duplicateSet" }
   | { type: "deleteSet"; args: string }

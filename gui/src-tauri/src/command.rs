@@ -166,6 +166,20 @@ pub enum GuiCommand {
     ClearLaneSwing(usize),
     CycleClockDiv(usize),
 
+    // --- pattern transforms ---
+    /// Euclidean fill for a drum voice (cell-targeted at the voice row).
+    Euclid {
+        lane: usize,
+        row: usize,
+        dp: i32,
+        dr: i32,
+    },
+    RotateRight(usize),
+    RotateLeft(usize),
+    ConformToScale(usize),
+    ToggleFill(usize),
+    CommitTransform(usize),
+
     // --- per-lane melodic params ---
     CycleScale {
         lane: usize,
@@ -236,6 +250,8 @@ pub fn target_cell(cmd: &GuiCommand) -> Option<(usize, usize, usize)> {
         | CcAdd { lane, row, col }
         | CcRemove { lane, row, col }
         | AdjustCcVal { lane, row, col, .. } => Some((lane, row, col)),
+        // Euclid targets the drum voice row (column irrelevant).
+        Euclid { lane, row, .. } => Some((lane, row, 0)),
         // Note pitch edits are melodic (single row); target row 0.
         NoteUp { lane, col } | NoteDown { lane, col } => Some((lane, 0, col)),
         // Per-voice mute uses the drum row as the voice selector.
@@ -256,6 +272,9 @@ pub fn command_lane(cmd: &GuiCommand) -> Option<usize> {
         FocusLane(l) | ToggleMute(l) | ToggleSolo(l) | CancelQueue(l) | ClearPattern(l)
         | DoubleLength(l) | ToggleClockOut(l) => Some(l),
         ClearLaneSwing(l) | CycleClockDiv(l) => Some(l),
+        RotateRight(l) | RotateLeft(l) | ConformToScale(l) | ToggleFill(l) | CommitTransform(l) => {
+            Some(l)
+        }
         AdjustPatternLen { lane, .. }
         | CycleScale { lane, .. }
         | AdjustRoot { lane, .. }
@@ -370,6 +389,17 @@ pub fn gui_to_actions(cmd: &GuiCommand) -> Vec<Action> {
         }
         G::ClearLaneSwing(l) => vec![Action::FocusLane(l), Action::ClearLaneSwing],
         G::CycleClockDiv(l) => vec![Action::FocusLane(l), Action::CycleClockDiv],
+
+        // transforms — cursor/focus positioned by the dispatcher
+        G::Euclid { dp, dr, .. } => vec![Action::Euclid {
+            dp: clamp_i8(dp),
+            dr: clamp_i8(dr),
+        }],
+        G::RotateRight(l) => vec![Action::FocusLane(l), Action::RotateRight],
+        G::RotateLeft(l) => vec![Action::FocusLane(l), Action::RotateLeft],
+        G::ConformToScale(l) => vec![Action::FocusLane(l), Action::ConformToScale],
+        G::ToggleFill(l) => vec![Action::FocusLane(l), Action::ToggleFill],
+        G::CommitTransform(l) => vec![Action::FocusLane(l), Action::CommitTransform],
 
         // per-lane melodic params — focus then act
         G::CycleScale { lane, delta } => {

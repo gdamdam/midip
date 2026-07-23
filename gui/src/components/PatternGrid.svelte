@@ -6,6 +6,7 @@
   const pat = $derived(app.snap!.focused_pattern);
   const lane = $derived(app.snap!.focused_lane);
   const laneInfo = $derived(app.snap!.lanes[lane]);
+  const sel = $derived(app.snap!.selection);
 </script>
 
 <section class="patwrap">
@@ -53,6 +54,21 @@
     <div class="ctl">
       <span class="lbl">div</span>
       <button onclick={() => send({ type: "cycleClockDiv", args: lane })}>{laneInfo.clock_div ?? "1"}×</button>
+    </div>
+
+    <div class="ctl">
+      <span class="lbl">xform</span>
+      {#if pat.kind === "drums"}
+        <button onclick={() => send({ type: "euclid", args: { lane, row: sel.row, dp: -1, dr: 0 } })} title="Euclid pulses −">E−</button>
+        <button onclick={() => send({ type: "euclid", args: { lane, row: sel.row, dp: 1, dr: 0 } })} title="Euclid pulses +">E+</button>
+        <button onclick={() => send({ type: "euclid", args: { lane, row: sel.row, dp: 0, dr: 1 } })} title="Euclid rotate">⟳</button>
+      {:else}
+        <button onclick={() => send({ type: "conformToScale", args: lane })} title="Snap notes to scale">conform</button>
+      {/if}
+      <button onclick={() => send({ type: "rotateLeft", args: lane })} title="Rotate steps left">◀</button>
+      <button onclick={() => send({ type: "rotateRight", args: lane })} title="Rotate steps right">▶</button>
+      <button onclick={() => send({ type: "toggleFill", args: lane })} title="Toggle fill variant">fill</button>
+      <button onclick={() => send({ type: "commitTransform", args: lane })} title="Commit fill/transform">✓</button>
     </div>
 
     <div class="spacer"></div>
