@@ -1,0 +1,187 @@
+{
+  "schema": "midip.pattern",
+  "version": 2,
+  "factory_id": "drums.baile-funk.mandelao-heavy",
+  "role": "drums",
+  "kind": "drums",
+  "genre": "baile-funk",
+  "name": "Mandelao Heavy",
+  "desc": "Busy syncopated kick pattern with a hard backbeat and a metallic cowbell tick \u2014 heavier modern variant.",
+  "length": 16,
+  "steps": [
+    [
+      {
+        "note": 36,
+        "vel": 118
+      },
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 56,
+        "vel": 102
+      },
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 36,
+        "vel": 102
+      },
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 38,
+        "vel": 118
+      },
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 36,
+        "vel": 102
+      },
+      {
+        "note": 56,
+        "vel": 102
+      },
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 36,
+        "vel": 102
+      },
+      {
+        "note": 56,
+        "vel": 102
+      },
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 38,
+        "vel": 118
+      },
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 36,
+        "vel": 102
+      },
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 56,
+        "vel": 102
+      },
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ]
+  ],
+  "metadata": {
+    "bpm_min": 128,
+    "bpm_max": 140,
+    "feel": "straight-16",
+    "timing": "straight",
+    "energy": "high",
+    "density": "dense",
+    "tags": [
+      "baile-funk",
+      "tamborzao",
+      "brazilian"
+    ],
+    "harmonic": null,
+    "chord_poly": "none",
+    "subgenre": "baile-funk",
+    "compatible_devices": [
+      "t8-drums",
+      "rd-8",
+      "drumbrute-impact",
+      "circuit-drums",
+      "generic-gm-drums"
+    ]
+  },
+  "provenance": {
+    "source": "factory",
+    "author": "midip factory",
+    "pack": "reggaeton-dembow-baile",
+    "license": "original generic groove (no copyrighted material)",
+    "references": [
+      "'Funk carioca' (Wikipedia) & 'Tamborzao' (Rate Your Music): origins, tempo",
+      "How to Make Brazilian Funk (Loopcloud) \u2014 'do not over-quantize'",
+      "Magenta Groove MIDI Dataset"
+    ]
+  }
+}

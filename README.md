@@ -453,6 +453,11 @@ mirrors the full output stream additively; it does not double-send a lane alread
   `patterns-s1.json`, `catalog.json`) — a **read‑only vendored snapshot** of the mpump set,
   never modified at runtime. Genres are listed alphabetically; each pattern has a name and
   description from the catalog.
+- A documented, versioned **factory pattern format v2** (`assets/patterns/v2/*.json`, loaded
+  additively when present) can carry the full pattern model — chords, note length, probability,
+  ratchets, microtiming, trig conditions, per-step CC locks, a stable `factory_id`, and
+  provenance. See [`docs/pattern-format-v2.md`](docs/pattern-format-v2.md). Legacy files and
+  saved references keep working unchanged.
 - **Audition** (`a`) previews a library pattern without committing (only when the lane is
   stopped or muted); focus change or Esc reverts. **Enter** commits.
 - **Quantized launch**: committing a pattern while playing queues it (`QUEUED⟶`) for the next

@@ -212,7 +212,13 @@ fn test_library() -> Library {
         "dub".into(),
         vec![melodic_pattern("lib-synth", &[(0, 7, 0.5)])],
     );
-    Library { drums, bass, synth }
+    Library {
+        drums,
+        bass,
+        synth,
+        families: Vec::new(),
+        v2_index: Default::default(),
+    }
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -1927,7 +1933,7 @@ fn m8_per_step_cc_microtiming_cond_clock_div_roundtrip() {
     let expected_pitch: u8 = 45;
     let cc_num: u8 = 74; // filter cutoff
     let cc_val: u8 = 100;
-    let micro_ticks: i16 = 500; // positive → later; well within ±½ step at 120 BPM
+    let micro_ticks: i16 = 160; // permille of a step (+0.16); +20ms at 120 BPM
 
     // ── 1. Build the 4-step melodic pattern ───────────────────────────────────
     // step 0 — note (semi=0, micro=+500, cond=Always)  + CcLock(74,100)
@@ -2101,9 +2107,11 @@ fn m8_per_step_cc_microtiming_cond_clock_div_roundtrip() {
     );
 
     // ── (b) Microtiming ───────────────────────────────────────────────────────
-    // step-0 note has micro=+500; swing=0.6 on even step → swing_offset=0.
-    // Loop 0: step_start = 0; on_at = 0 + 500 = 500 µs.
-    // Loop 1: g8 → step_start = 8*step_dur; on_at = 8*step_dur + 500.
+    // step-0 note has micro=+160 permille; swing=0.6 on even step → swing_offset=0.
+    // micro is permille-of-step, so the offset is BPM-scaled: 160*step_dur/1000.
+    // Loop 0: step_start = 0; on_at = micro_us.
+    // Loop 1: g8 → step_start = 8*step_dur; on_at = 8*step_dur + micro_us.
+    let micro_us = (micro_ticks as i64 * step_dur as i64 / 1000) as u64;
     let step0_ons: Vec<u64> = sink
         .events
         .iter()
@@ -2125,14 +2133,14 @@ fn m8_per_step_cc_microtiming_cond_clock_div_roundtrip() {
         "step-0 note (cond=Always) must fire on both loops; got {step0_ons:?}"
     );
     assert_eq!(
-        step0_ons[0], micro_ticks as u64,
-        "loop 0 NoteOn must be shifted by micro={micro_ticks} µs (got {})",
+        step0_ons[0], micro_us,
+        "loop 0 NoteOn must be shifted by micro ({micro_us} µs) (got {})",
         step0_ons[0]
     );
     assert_eq!(
         step0_ons[1],
-        step_dur * 8 + micro_ticks as u64,
-        "loop 1 NoteOn must be shifted by micro={micro_ticks} µs from loop-1 base (got {})",
+        step_dur * 8 + micro_us,
+        "loop 1 NoteOn must be shifted by micro ({micro_us} µs) from loop-1 base (got {})",
         step0_ons[1]
     );
 

@@ -1,0 +1,96 @@
+{
+  "schema": "midip.pattern",
+  "version": 2,
+  "factory_id": "bass.tech-house.octave-roll",
+  "role": "bass",
+  "kind": "melodic",
+  "genre": "tech-house",
+  "name": "Octave Roll",
+  "desc": "Sixteenth octave-bounce roller for driving energy.",
+  "length": 16,
+  "steps": [
+    null,
+    null,
+    {
+      "semi": 0,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.4
+    },
+    {
+      "semi": 12,
+      "vel": 0.82,
+      "slide": false,
+      "len": 0.4
+    },
+    null,
+    null,
+    {
+      "semi": 0,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.4
+    },
+    {
+      "semi": 12,
+      "vel": 0.82,
+      "slide": false,
+      "len": 0.4
+    },
+    null,
+    null,
+    {
+      "semi": -2,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.4
+    },
+    null,
+    null,
+    null,
+    {
+      "semi": 0,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.4
+    },
+    {
+      "semi": 12,
+      "vel": 0.82,
+      "slide": false,
+      "len": 0.4
+    }
+  ],
+  "metadata": {
+    "bpm_min": 124,
+    "bpm_max": 128,
+    "feel": "straight",
+    "timing": "straight",
+    "energy": "high",
+    "density": "dense",
+    "tags": [
+      "tech-house",
+      "rolling",
+      "bass"
+    ],
+    "harmonic": "minor",
+    "chord_poly": "mono",
+    "subgenre": "tech-house",
+    "compatible_devices": [
+      "t8-bass",
+      "td-3",
+      "generic-mono"
+    ]
+  },
+  "provenance": {
+    "source": "factory",
+    "author": "midip factory",
+    "pack": "modern-club",
+    "license": "original generic groove (no copyrighted material)",
+    "references": [
+      "Tech-house production guides (Beatportal, Samplesound)",
+      "Roland TR-909 four-on-floor heritage",
+      "Magenta Groove MIDI Dataset"
+    ]
+  }
+}

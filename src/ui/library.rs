@@ -69,6 +69,29 @@ fn build_preview_lines(pattern: &Pattern, width: usize, max_height: usize) -> Ve
     // Length
     lines.push(Line::from(Span::raw(format!("len:{}", pattern.length))));
 
+    // Timing feel (Phase 7): does the pattern carry authored per-note microtiming?
+    // This is distinct from GLOBAL lane swing (shown in the transport bar) — the
+    // badge here means the *pattern itself* encodes push/pull/swing offsets.
+    let micro_hits = match &pattern.data {
+        PatternData::Drums(steps) => steps.iter().flatten().filter(|h| h.micro != 0).count(),
+        PatternData::Melodic(steps) => steps
+            .iter()
+            .flat_map(|s| s.iter())
+            .filter(|n| n.micro != 0)
+            .count(),
+    };
+    if micro_hits > 0 {
+        lines.push(Line::from(Span::styled(
+            format!("feel: microtiming ×{micro_hits}"),
+            Style::default().fg(theme::EMBER.warn),
+        )));
+    } else {
+        lines.push(Line::from(Span::styled(
+            "feel: straight",
+            Style::default().fg(theme::EMBER.dim),
+        )));
+    }
+
     match &pattern.data {
         PatternData::Drums(steps) => {
             // Collect which notes appear in the pattern.
@@ -329,6 +352,28 @@ pub fn render_library(f: &mut Frame, area: Rect, app: &App) {
     if let Some(p) = selected_pattern_in_col2 {
         let max_h = preview_height.saturating_sub(reserved);
         preview_lines.extend(build_preview_lines(p, preview_width, max_h));
+        // Family badge (Phase 3): if this pattern is enrolled in a performance
+        // family, show it just below the name so related material is browsable.
+        if let Some((fam, func)) = app
+            .library
+            .family_of(app.lib_role, selected_genre_name, &p.name)
+        {
+            let badge = truncate(
+                &format!("family: {} · {}", fam.label, func.label()),
+                preview_width.max(4),
+            )
+            .to_string();
+            let at = preview_lines.len().min(1);
+            preview_lines.insert(
+                at,
+                Line::from(Span::styled(
+                    badge,
+                    Style::default()
+                        .fg(theme::EMBER.warn)
+                        .add_modifier(Modifier::BOLD),
+                )),
+            );
+        }
     }
     if auditioning {
         preview_lines.push(Line::from(Span::styled(
@@ -436,6 +481,8 @@ mod tests {
         };
         drums.insert("techno".to_string(), vec![pat]);
         Library {
+            v2_index: Default::default(),
+            families: Vec::new(),
             drums,
             bass: GenreMap::new(),
             synth: GenreMap::new(),
@@ -477,6 +524,8 @@ mod tests {
         };
         synth.insert("techno".to_string(), vec![pat]);
         Library {
+            v2_index: Default::default(),
+            families: Vec::new(),
             drums: GenreMap::new(),
             bass: GenreMap::new(),
             synth,
@@ -683,6 +732,8 @@ mod tests {
         };
         drums.insert("techno".to_string(), vec![pat1, pat2]);
         let library = Library {
+            v2_index: Default::default(),
+            families: Vec::new(),
             drums,
             bass: GenreMap::new(),
             synth: GenreMap::new(),
@@ -748,6 +799,8 @@ mod tests {
         };
         drums.insert("techno".to_string(), vec![pat]);
         let library = Library {
+            v2_index: Default::default(),
+            families: Vec::new(),
             drums,
             bass: GenreMap::new(),
             synth: GenreMap::new(),

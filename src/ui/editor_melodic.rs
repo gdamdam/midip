@@ -344,6 +344,8 @@ mod tests {
 
     fn empty_library() -> Library {
         Library {
+            v2_index: Default::default(),
+            families: Vec::new(),
             drums: GenreMap::new(),
             bass: GenreMap::new(),
             synth: GenreMap::new(),

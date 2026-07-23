@@ -1,0 +1,108 @@
+{
+  "schema": "midip.pattern",
+  "version": 2,
+  "factory_id": "drums.afro-house.afro-fill",
+  "role": "drums",
+  "kind": "drums",
+  "genre": "afro-house",
+  "name": "Afro Fill",
+  "desc": "Tom cascade fill with a ratcheted lead-in and a crash on the one.",
+  "length": 16,
+  "steps": [
+    [
+      {
+        "note": 36,
+        "vel": 118
+      },
+      {
+        "note": 49,
+        "vel": 118
+      }
+    ],
+    [],
+    [],
+    [],
+    [
+      {
+        "note": 36,
+        "vel": 118
+      }
+    ],
+    [],
+    [],
+    [],
+    [
+      {
+        "note": 36,
+        "vel": 118
+      }
+    ],
+    [
+      {
+        "note": 47,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 50,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 47,
+        "vel": 102
+      }
+    ],
+    [],
+    [
+      {
+        "note": 50,
+        "vel": 102
+      }
+    ],
+    [],
+    [
+      {
+        "note": 50,
+        "vel": 102,
+        "ratchet": 3
+      }
+    ]
+  ],
+  "metadata": {
+    "bpm_min": 118,
+    "bpm_max": 125,
+    "feel": "straight",
+    "timing": "straight",
+    "energy": "high",
+    "density": "dense",
+    "tags": [
+      "afro-house",
+      "percussive"
+    ],
+    "harmonic": null,
+    "chord_poly": "none",
+    "subgenre": "afro-house",
+    "compatible_devices": [
+      "t8-drums",
+      "rd-8",
+      "drumbrute-impact",
+      "circuit-drums",
+      "generic-gm-drums"
+    ]
+  },
+  "provenance": {
+    "source": "factory",
+    "author": "midip factory",
+    "pack": "afro-house-amapiano",
+    "license": "original generic groove (no copyrighted material)",
+    "references": [
+      "Afro House production 101 (Native Instruments)",
+      "Afro House BPM & structure references (vibesdj)",
+      "Generic son-style bell timeline (public-domain rhythmic template)",
+      "Magenta Groove MIDI Dataset"
+    ]
+  }
+}

@@ -7,7 +7,7 @@
 use midip::app::{App, Overlay};
 use midip::devices::profiles;
 use midip::pattern::generate::{ArpChord, ArpShape, GenMode};
-use midip::pattern::library::{GenreMap, Library};
+use midip::pattern::library::{GenreMap, LibRole, Library};
 use midip::pattern::model::{CcLock, DrumHit, LaneKind, PatternData, TrigCond};
 use midip::pattern::refs::PatternRef;
 use midip::pattern::store::Favorites;
@@ -482,21 +482,33 @@ pub struct LibPatternDto {
     /// "drums" | "melodic"
     pub kind: String,
     pub favorite: bool,
+    /// Performance-family label this pattern belongs to (Phase 3), if any.
+    pub family: Option<String>,
+    /// Stable family id (for grouping/filtering in the UI), if any.
+    pub family_id: Option<String>,
+    /// Function within the family: "Core"/"Variation A"/…, if any.
+    pub function: Option<String>,
 }
 
 impl LibraryDto {
     pub fn build(lib: &Library, favs: &Favorites) -> LibraryDto {
         LibraryDto {
             roles: vec![
-                role_dto("drums", &lib.drums, favs),
-                role_dto("bass", &lib.bass, favs),
-                role_dto("synth", &lib.synth, favs),
+                role_dto(lib, "drums", LibRole::Drums, &lib.drums, favs),
+                role_dto(lib, "bass", LibRole::Bass, &lib.bass, favs),
+                role_dto(lib, "synth", LibRole::Synth, &lib.synth, favs),
             ],
         }
     }
 }
 
-fn role_dto(role: &str, genres: &GenreMap, favs: &Favorites) -> LibRoleDto {
+fn role_dto(
+    lib: &Library,
+    role: &str,
+    lib_role: LibRole,
+    genres: &GenreMap,
+    favs: &Favorites,
+) -> LibRoleDto {
     LibRoleDto {
         role: role.to_string(),
         genres: genres
@@ -511,11 +523,15 @@ fn role_dto(role: &str, genres: &GenreMap, favs: &Favorites) -> LibRoleDto {
                             genre: genre.clone(),
                             name: p.name.clone(),
                         };
+                        let fam = lib.family_of(lib_role, genre, &p.name);
                         LibPatternDto {
                             name: p.name.clone(),
                             length: p.length,
                             kind: kind_str(p.kind()),
                             favorite: favs.contains(&pref),
+                            family: fam.map(|(f, _)| f.label.clone()),
+                            family_id: fam.map(|(f, _)| f.id.clone()),
+                            function: fam.map(|(_, func)| func.label().to_string()),
                         }
                     })
                     .collect(),
@@ -710,5 +726,44 @@ fn build_inspector(app: &App) -> InspectorDto {
                 },
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn library_dto_carries_family_metadata_and_serializes() {
+        // Loads the real vendored library (patterns_dir resolves to the midip
+        // crate's assets at compile time).
+        let lib = Library::load(&midip::config::patterns_dir()).expect("load library");
+        let favs = Favorites::default();
+        let dto = LibraryDto::build(&lib, &favs);
+
+        // Find the drums/techno "Four on Floor" pattern DTO.
+        let drums = dto.roles.iter().find(|r| r.role == "drums").unwrap();
+        let techno = drums.genres.iter().find(|g| g.name == "techno").unwrap();
+        let four = techno
+            .patterns
+            .iter()
+            .find(|p| p.name == "Four on Floor")
+            .unwrap();
+        assert_eq!(four.family.as_deref(), Some("Warehouse Techno"));
+        assert_eq!(four.family_id.as_deref(), Some("techno-drive-drums"));
+        assert_eq!(four.function.as_deref(), Some("Core"));
+
+        // Non-member patterns leave the fields null (the family tags only the
+        // six enrolled members, not the whole genre).
+        assert!(
+            techno.patterns.iter().any(|p| p.family.is_none()),
+            "genre should contain patterns outside the family"
+        );
+
+        // JSON round-trip surfaces the camelCase-free snake keys used by the UI.
+        let json = serde_json::to_string(four).unwrap();
+        assert!(json.contains("\"family\":\"Warehouse Techno\""));
+        assert!(json.contains("\"family_id\":\"techno-drive-drums\""));
+        assert!(json.contains("\"function\":\"Core\""));
     }
 }

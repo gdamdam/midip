@@ -1,0 +1,164 @@
+{
+  "schema": "midip.pattern",
+  "version": 2,
+  "factory_id": "synth.disco.string-stabs",
+  "role": "synth",
+  "kind": "melodic",
+  "genre": "disco",
+  "name": "String Stabs",
+  "desc": "Lush major-seventh string stabs over a two-chord disco vamp.",
+  "length": 16,
+  "steps": [
+    [
+      {
+        "semi": 0,
+        "vel": 1.15,
+        "slide": false,
+        "len": 1.0
+      },
+      {
+        "semi": 4,
+        "vel": 1.15,
+        "slide": false,
+        "len": 1.0
+      },
+      {
+        "semi": 7,
+        "vel": 1.15,
+        "slide": false,
+        "len": 1.0
+      },
+      {
+        "semi": 11,
+        "vel": 1.15,
+        "slide": false,
+        "len": 1.0
+      }
+    ],
+    null,
+    null,
+    null,
+    [
+      {
+        "semi": 0,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.5
+      },
+      {
+        "semi": 4,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.5
+      },
+      {
+        "semi": 7,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.5
+      },
+      {
+        "semi": 11,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.5
+      }
+    ],
+    null,
+    null,
+    null,
+    [
+      {
+        "semi": -3,
+        "vel": 1.0,
+        "slide": false,
+        "len": 1.0
+      },
+      {
+        "semi": 0,
+        "vel": 1.0,
+        "slide": false,
+        "len": 1.0
+      },
+      {
+        "semi": 4,
+        "vel": 1.0,
+        "slide": false,
+        "len": 1.0
+      },
+      {
+        "semi": 7,
+        "vel": 1.0,
+        "slide": false,
+        "len": 1.0
+      }
+    ],
+    null,
+    null,
+    null,
+    [
+      {
+        "semi": -3,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.5
+      },
+      {
+        "semi": 0,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.5
+      },
+      {
+        "semi": 4,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.5
+      },
+      {
+        "semi": 7,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.5
+      }
+    ],
+    null,
+    null,
+    null
+  ],
+  "metadata": {
+    "bpm_min": 115,
+    "bpm_max": 125,
+    "feel": "straight",
+    "timing": "straight",
+    "energy": "mid",
+    "density": "core",
+    "tags": [
+      "disco",
+      "strings"
+    ],
+    "harmonic": "major7",
+    "chord_poly": "chord",
+    "subgenre": "disco",
+    "compatible_devices": [
+      "s1",
+      "j-6",
+      "monologue",
+      "microfreak",
+      "minilogue-xd",
+      "generic-poly"
+    ]
+  },
+  "provenance": {
+    "source": "factory",
+    "author": "midip factory",
+    "pack": "funk-disco",
+    "license": "original generic groove (no copyrighted material)",
+    "references": [
+      "DRUM! Magazine four-on-the-floor disco lesson",
+      "zZounds disco drums (kick every beat, open hat on the and)",
+      "Disco BPM reference (bpmcalc)",
+      "Magenta Groove MIDI Dataset"
+    ]
+  }
+}

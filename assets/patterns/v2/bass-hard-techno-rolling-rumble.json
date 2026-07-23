@@ -1,0 +1,141 @@
+{
+  "schema": "midip.pattern",
+  "version": 2,
+  "factory_id": "bass.hard-techno.rolling-rumble",
+  "role": "bass",
+  "kind": "melodic",
+  "genre": "hard-techno",
+  "name": "Rolling Rumble",
+  "desc": "Sixteenth-note single-note rumble locked under the kick.",
+  "length": 16,
+  "steps": [
+    {
+      "semi": 0,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.25
+    },
+    {
+      "semi": 0,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.25
+    },
+    {
+      "semi": 0,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.25
+    },
+    {
+      "semi": 0,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.25
+    },
+    {
+      "semi": 0,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.25
+    },
+    {
+      "semi": 0,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.25
+    },
+    {
+      "semi": 0,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.25
+    },
+    {
+      "semi": 0,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.25
+    },
+    {
+      "semi": 0,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.25
+    },
+    {
+      "semi": 0,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.25
+    },
+    {
+      "semi": 0,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.25
+    },
+    {
+      "semi": 0,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.25
+    },
+    {
+      "semi": 0,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.25
+    },
+    {
+      "semi": 0,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.25
+    },
+    {
+      "semi": 0,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.25
+    },
+    {
+      "semi": 0,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.25
+    }
+  ],
+  "metadata": {
+    "bpm_min": 140,
+    "bpm_max": 155,
+    "feel": "straight",
+    "timing": "straight",
+    "energy": "high",
+    "density": "dense",
+    "tags": [
+      "hard-techno",
+      "acid",
+      "bass"
+    ],
+    "harmonic": "phrygian",
+    "chord_poly": "mono",
+    "subgenre": "hard-techno",
+    "compatible_devices": [
+      "t8-bass",
+      "td-3",
+      "generic-mono"
+    ]
+  },
+  "provenance": {
+    "source": "factory",
+    "author": "midip factory",
+    "pack": "modern-club",
+    "license": "original generic groove (no copyrighted material)",
+    "references": [
+      "Techno BPM guide (ZIPDJ)",
+      "Hard-techno production references",
+      "Roland TR-909 heritage"
+    ]
+  }
+}

@@ -1,0 +1,194 @@
+{
+  "schema": "midip.pattern",
+  "version": 2,
+  "factory_id": "synth.funk.clav-ninth-stabs",
+  "role": "synth",
+  "kind": "melodic",
+  "genre": "funk",
+  "name": "Clav Ninth Stabs",
+  "desc": "Scratchy off-beat dominant-ninth clav stabs over a one-chord vamp.",
+  "length": 16,
+  "steps": [
+    null,
+    null,
+    [
+      {
+        "semi": 0,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.3
+      },
+      {
+        "semi": 4,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.3
+      },
+      {
+        "semi": 7,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.3
+      },
+      {
+        "semi": 10,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.3
+      },
+      {
+        "semi": 14,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.3
+      }
+    ],
+    null,
+    null,
+    null,
+    [
+      {
+        "semi": 0,
+        "vel": 1.15,
+        "slide": false,
+        "len": 0.3
+      },
+      {
+        "semi": 4,
+        "vel": 1.15,
+        "slide": false,
+        "len": 0.3
+      },
+      {
+        "semi": 7,
+        "vel": 1.15,
+        "slide": false,
+        "len": 0.3
+      },
+      {
+        "semi": 10,
+        "vel": 1.15,
+        "slide": false,
+        "len": 0.3
+      },
+      {
+        "semi": 14,
+        "vel": 1.15,
+        "slide": false,
+        "len": 0.3
+      }
+    ],
+    null,
+    null,
+    null,
+    null,
+    [
+      {
+        "semi": 0,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.25,
+        "micro": 80
+      },
+      {
+        "semi": 4,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.25,
+        "micro": 80
+      },
+      {
+        "semi": 7,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.25,
+        "micro": 80
+      },
+      {
+        "semi": 10,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.25,
+        "micro": 80
+      },
+      {
+        "semi": 14,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.25,
+        "micro": 80
+      }
+    ],
+    null,
+    null,
+    [
+      {
+        "semi": 0,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.3
+      },
+      {
+        "semi": 4,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.3
+      },
+      {
+        "semi": 7,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.3
+      },
+      {
+        "semi": 10,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.3
+      },
+      {
+        "semi": 14,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.3
+      }
+    ],
+    null
+  ],
+  "metadata": {
+    "bpm_min": 96,
+    "bpm_max": 112,
+    "feel": "swung-16 (light 54%)",
+    "timing": "light-swing",
+    "energy": "high",
+    "density": "core",
+    "tags": [
+      "funk",
+      "clav",
+      "stabs"
+    ],
+    "harmonic": "dominant9",
+    "chord_poly": "chord",
+    "subgenre": "funk",
+    "compatible_devices": [
+      "s1",
+      "j-6",
+      "monologue",
+      "microfreak",
+      "minilogue-xd",
+      "generic-poly"
+    ]
+  },
+  "provenance": {
+    "source": "factory",
+    "author": "midip factory",
+    "pack": "funk-disco",
+    "license": "original generic groove (no copyrighted material)",
+    "references": [
+      "Senn et al., microtiming & groove in funk (Frontiers in Psychology 2016)",
+      "ZGMTH 'Microtiming in Early Funk' (14-groove analysis)",
+      "'On the One' downbeat emphasis (Wikipedia/MasterClass)",
+      "Magenta Groove MIDI Dataset"
+    ]
+  }
+}

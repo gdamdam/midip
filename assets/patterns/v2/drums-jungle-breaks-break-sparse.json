@@ -1,0 +1,102 @@
+{
+  "schema": "midip.pattern",
+  "version": 2,
+  "factory_id": "drums.jungle-breaks.break-sparse",
+  "role": "drums",
+  "kind": "drums",
+  "genre": "jungle-breaks",
+  "name": "Break Sparse",
+  "desc": "Sparser break skeleton with pushed offbeat hats.",
+  "length": 16,
+  "steps": [
+    [
+      {
+        "note": 36,
+        "vel": 118
+      },
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [],
+    [],
+    [],
+    [
+      {
+        "note": 38,
+        "vel": 118
+      },
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [],
+    [],
+    [],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [],
+    [
+      {
+        "note": 36,
+        "vel": 102,
+        "micro": -60
+      }
+    ],
+    [],
+    [
+      {
+        "note": 38,
+        "vel": 118
+      },
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [],
+    [],
+    []
+  ],
+  "metadata": {
+    "bpm_min": 160,
+    "bpm_max": 174,
+    "feel": "pushed (early offbeats)",
+    "timing": "pushed",
+    "energy": "mid",
+    "density": "sparse",
+    "tags": [
+      "jungle",
+      "breaks",
+      "amen",
+      "pushed"
+    ],
+    "harmonic": null,
+    "chord_poly": "none",
+    "subgenre": "jungle-breaks",
+    "compatible_devices": [
+      "t8-drums",
+      "rd-8",
+      "drumbrute-impact",
+      "circuit-drums",
+      "generic-gm-drums"
+    ]
+  },
+  "provenance": {
+    "source": "factory",
+    "author": "midip factory",
+    "pack": "timing",
+    "license": "original generic groove (no copyrighted material)",
+    "references": [
+      "Magenta Groove MIDI Dataset (microtiming/groove methodology)",
+      "MPC/Akai swing workflow references",
+      "documented genre groove references"
+    ]
+  }
+}

@@ -1,0 +1,99 @@
+{
+  "schema": "midip.pattern",
+  "version": 2,
+  "factory_id": "bass.funk.syncopated-pocket",
+  "role": "bass",
+  "kind": "melodic",
+  "genre": "funk",
+  "name": "Syncopated Pocket",
+  "desc": "Staccato syncopated sixteenth bass locked to the kick, emphasising the one; Dorian colour.",
+  "length": 16,
+  "steps": [
+    {
+      "semi": 0,
+      "vel": 1.15,
+      "slide": false,
+      "len": 0.5
+    },
+    null,
+    null,
+    {
+      "semi": 0,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.25,
+      "micro": 80
+    },
+    null,
+    null,
+    {
+      "semi": 3,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.4
+    },
+    null,
+    {
+      "semi": 0,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.5
+    },
+    null,
+    {
+      "semi": -2,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.25
+    },
+    {
+      "semi": 0,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.4,
+      "micro": 80
+    },
+    null,
+    null,
+    {
+      "semi": 5,
+      "vel": 0.82,
+      "slide": false,
+      "len": 0.4
+    },
+    null
+  ],
+  "metadata": {
+    "bpm_min": 96,
+    "bpm_max": 112,
+    "feel": "swung-16 (light 54%)",
+    "timing": "light-swing",
+    "energy": "high",
+    "density": "core",
+    "tags": [
+      "funk",
+      "bass",
+      "syncopated"
+    ],
+    "harmonic": "dorian",
+    "chord_poly": "mono",
+    "subgenre": "funk",
+    "compatible_devices": [
+      "t8-bass",
+      "td-3",
+      "generic-mono"
+    ]
+  },
+  "provenance": {
+    "source": "factory",
+    "author": "midip factory",
+    "pack": "funk-disco",
+    "license": "original generic groove (no copyrighted material)",
+    "references": [
+      "Senn et al., microtiming & groove in funk (Frontiers in Psychology 2016)",
+      "ZGMTH 'Microtiming in Early Funk' (14-groove analysis)",
+      "'On the One' downbeat emphasis (Wikipedia/MasterClass)",
+      "Magenta Groove MIDI Dataset"
+    ]
+  }
+}

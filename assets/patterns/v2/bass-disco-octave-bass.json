@@ -1,0 +1,102 @@
+{
+  "schema": "midip.pattern",
+  "version": 2,
+  "factory_id": "bass.disco.octave-bass",
+  "role": "bass",
+  "kind": "melodic",
+  "genre": "disco",
+  "name": "Octave Bass",
+  "desc": "The disco octave-bass engine: root on the beat, octave up on every 'and'.",
+  "length": 16,
+  "steps": [
+    {
+      "semi": 0,
+      "vel": 1.15,
+      "slide": false,
+      "len": 0.5
+    },
+    null,
+    {
+      "semi": 12,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.5
+    },
+    null,
+    {
+      "semi": 0,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.5
+    },
+    null,
+    {
+      "semi": 12,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.5
+    },
+    null,
+    {
+      "semi": 0,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.5
+    },
+    null,
+    {
+      "semi": 12,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.5
+    },
+    null,
+    {
+      "semi": 0,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.5
+    },
+    null,
+    {
+      "semi": 12,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.5
+    },
+    null
+  ],
+  "metadata": {
+    "bpm_min": 115,
+    "bpm_max": 125,
+    "feel": "straight",
+    "timing": "straight",
+    "energy": "high",
+    "density": "core",
+    "tags": [
+      "disco",
+      "octave",
+      "bass"
+    ],
+    "harmonic": "minor",
+    "chord_poly": "mono",
+    "subgenre": "disco",
+    "compatible_devices": [
+      "t8-bass",
+      "td-3",
+      "generic-mono"
+    ]
+  },
+  "provenance": {
+    "source": "factory",
+    "author": "midip factory",
+    "pack": "funk-disco",
+    "license": "original generic groove (no copyrighted material)",
+    "references": [
+      "DRUM! Magazine four-on-the-floor disco lesson",
+      "zZounds disco drums (kick every beat, open hat on the and)",
+      "Disco BPM reference (bpmcalc)",
+      "Magenta Groove MIDI Dataset"
+    ]
+  }
+}

@@ -589,7 +589,7 @@ pub enum Action {
     /// Zero undo entries added.
     GenCancel,
     // ── M8 Task 8: per-step CC/micro/cond + per-lane swing/div ───────────────
-    /// Nudge microtiming of cursor cell by d ticks, clamped to −128..=127. Snapshot + dirty.
+    /// Nudge microtiming of cursor cell by d permille-of-step, clamped to −500..=500. Snapshot + dirty.
     AdjustMicro(i8),
     /// Cycle trig condition of cursor cell through preset sequence. Snapshot + dirty.
     CycleCond,
@@ -4683,12 +4683,12 @@ impl App {
                     .get_mut(col)
                     .and_then(|s| s.iter_mut().find(|h| h.note == note))
                 {
-                    hit.micro = (hit.micro + d as i16).clamp(-128, 127);
+                    hit.micro = (hit.micro + d as i16).clamp(-500, 500);
                 }
             }
             PatternData::Melodic(steps) => {
                 if let Some(n) = steps.get_mut(col).and_then(|s| s.first_mut()) {
-                    n.micro = (n.micro + d as i16).clamp(-128, 127);
+                    n.micro = (n.micro + d as i16).clamp(-500, 500);
                 }
             }
         }
@@ -5370,7 +5370,13 @@ mod tests {
             }],
         );
 
-        Library { drums, bass, synth }
+        Library {
+            v2_index: Default::default(),
+            families: Vec::new(),
+            drums,
+            bass,
+            synth,
+        }
     }
 
     fn new_app() -> App {
@@ -6665,6 +6671,8 @@ mod tests {
             ],
         );
         let library = Library {
+            v2_index: Default::default(),
+            families: Vec::new(),
             drums,
             bass: crate::pattern::library::GenreMap::new(),
             synth: crate::pattern::library::GenreMap::new(),
@@ -6826,6 +6834,8 @@ mod tests {
         };
         drums.insert("techno".into(), vec![pat_a, pat_b]);
         let library = Library {
+            v2_index: Default::default(),
+            families: Vec::new(),
             drums,
             bass: crate::pattern::library::GenreMap::new(),
             synth: crate::pattern::library::GenreMap::new(),
@@ -8782,6 +8792,8 @@ mod tests {
         drums.insert("User".to_string(), vec![user_pat]);
 
         let lib = Library {
+            v2_index: Default::default(),
+            families: Vec::new(),
             drums,
             bass: GenreMap::new(),
             synth: GenreMap::new(),
@@ -8915,6 +8927,8 @@ mod tests {
         let mut drums = GenreMap::new();
         drums.insert("techno".to_string(), vec![mk("A"), mk("B"), mk("C")]);
         let lib = Library {
+            v2_index: Default::default(),
+            families: Vec::new(),
             drums,
             bass: GenreMap::new(),
             synth: GenreMap::new(),
@@ -9206,6 +9220,8 @@ mod tests {
         };
         drums.insert("techno".to_string(), vec![pat]);
         let lib = Library {
+            v2_index: Default::default(),
+            families: Vec::new(),
             drums,
             bass: GenreMap::new(),
             synth: GenreMap::new(),
@@ -9258,6 +9274,8 @@ mod tests {
         };
         bass.insert("techno".to_string(), vec![pat]);
         let lib = Library {
+            v2_index: Default::default(),
+            families: Vec::new(),
             drums: GenreMap::new(),
             bass,
             synth: GenreMap::new(),
@@ -9310,6 +9328,8 @@ mod tests {
         };
         synth.insert("techno".to_string(), vec![pat]);
         let lib = Library {
+            v2_index: Default::default(),
+            families: Vec::new(),
             drums: GenreMap::new(),
             bass: GenreMap::new(),
             synth,
@@ -9361,6 +9381,8 @@ mod tests {
         };
         drums.insert("techno".to_string(), vec![pat]);
         let lib = Library {
+            v2_index: Default::default(),
+            families: Vec::new(),
             drums,
             bass: GenreMap::new(),
             synth: GenreMap::new(),

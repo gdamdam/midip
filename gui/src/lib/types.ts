@@ -194,6 +194,12 @@ export interface LibPattern {
   length: number;
   kind: "drums" | "melodic";
   favorite: boolean;
+  /** Performance-family label (Phase 3), null when the pattern is unenrolled. */
+  family: string | null;
+  /** Stable family id, for grouping/filtering. */
+  family_id: string | null;
+  /** Function within the family: "Core" / "Variation A" / … */
+  function: string | null;
 }
 export interface LibGenre {
   name: string;

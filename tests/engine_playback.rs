@@ -557,6 +557,8 @@ fn status_string_appears_in_transport() {
             drums: GenreMap::new(),
             bass: GenreMap::new(),
             synth: GenreMap::new(),
+            families: Vec::new(),
+            v2_index: Default::default(),
         }
     }
 

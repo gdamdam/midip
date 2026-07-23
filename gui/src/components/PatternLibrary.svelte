@@ -94,6 +94,9 @@
                 title="Load / queue into the {role} lane"
               >
                 <span class="pn">{p.name}</span>
+                {#if p.function}
+                  <span class="fam" title="Family: {p.family}">{p.function}</span>
+                {/if}
                 <span class="meta mono">{p.length}</span>
               </button>
               <button
@@ -266,8 +269,18 @@
     padding: 4px 4px;
   }
   .pn {
+    flex: 1;
     overflow: hidden;
     text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .fam {
+    color: var(--ember);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 0 4px;
+    align-self: center;
     white-space: nowrap;
   }
   .meta {

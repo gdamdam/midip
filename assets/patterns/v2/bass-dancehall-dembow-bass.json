@@ -1,0 +1,82 @@
+{
+  "schema": "midip.pattern",
+  "version": 2,
+  "factory_id": "bass.dancehall.dembow-bass",
+  "role": "bass",
+  "kind": "melodic",
+  "genre": "dancehall",
+  "name": "Dembow Bass",
+  "desc": "Punchy dembow bass tracking the kick with a short melodic tail.",
+  "length": 16,
+  "steps": [
+    {
+      "semi": 0,
+      "vel": 1.15,
+      "slide": false,
+      "len": 0.75
+    },
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    {
+      "semi": 0,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.5
+    },
+    null,
+    null,
+    {
+      "semi": -2,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.5,
+      "micro": 80
+    },
+    null,
+    null,
+    {
+      "semi": -4,
+      "vel": 0.82,
+      "slide": false,
+      "len": 0.5
+    },
+    null
+  ],
+  "metadata": {
+    "bpm_min": 88,
+    "bpm_max": 105,
+    "feel": "swung-16 (light 54%)",
+    "timing": "light-swing",
+    "energy": "mid",
+    "density": "core",
+    "tags": [
+      "dancehall",
+      "bass",
+      "dembow"
+    ],
+    "harmonic": "minor",
+    "chord_poly": "mono",
+    "subgenre": "dancehall",
+    "compatible_devices": [
+      "t8-bass",
+      "td-3",
+      "generic-mono"
+    ]
+  },
+  "provenance": {
+    "source": "factory",
+    "author": "midip factory",
+    "pack": "reggae-dancehall",
+    "license": "original generic groove (no copyrighted material)",
+    "references": [
+      "'Dembow: A Loop History' (Red Bull Music Academy)",
+      "Dancehall dembow riddim lineage",
+      "Magenta Groove MIDI Dataset"
+    ]
+  }
+}

@@ -1,0 +1,104 @@
+{
+  "schema": "midip.pattern",
+  "version": 2,
+  "factory_id": "synth.melodic-techno.minor-arp",
+  "role": "synth",
+  "kind": "melodic",
+  "genre": "melodic-techno",
+  "name": "Minor Arp",
+  "desc": "Hypnotic eighth-note minor arpeggio outlining the chord over the bar.",
+  "length": 16,
+  "steps": [
+    {
+      "semi": 0,
+      "vel": 1.15,
+      "slide": false,
+      "len": 0.5
+    },
+    null,
+    {
+      "semi": 7,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.5
+    },
+    null,
+    {
+      "semi": 12,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.5
+    },
+    null,
+    {
+      "semi": 7,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.5
+    },
+    null,
+    {
+      "semi": 10,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.5
+    },
+    null,
+    {
+      "semi": 7,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.5
+    },
+    null,
+    {
+      "semi": 3,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.5
+    },
+    null,
+    {
+      "semi": 7,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.5
+    },
+    null
+  ],
+  "metadata": {
+    "bpm_min": 120,
+    "bpm_max": 126,
+    "feel": "straight",
+    "timing": "straight",
+    "energy": "mid",
+    "density": "core",
+    "tags": [
+      "melodic-techno",
+      "arp",
+      "hypnotic"
+    ],
+    "harmonic": "minor",
+    "chord_poly": "mono",
+    "subgenre": "melodic-techno",
+    "compatible_devices": [
+      "s1",
+      "j-6",
+      "monologue",
+      "microfreak",
+      "minilogue-xd",
+      "generic-poly"
+    ]
+  },
+  "provenance": {
+    "source": "factory",
+    "author": "midip factory",
+    "pack": "modern-club",
+    "license": "original generic groove (no copyrighted material)",
+    "references": [
+      "House vs Techno reference (Splice)",
+      "Melodic-techno production references",
+      "Roland TR-909 heritage"
+    ]
+  }
+}

@@ -1,0 +1,102 @@
+{
+  "schema": "midip.pattern",
+  "version": 2,
+  "factory_id": "bass.disco.walk-up",
+  "role": "bass",
+  "kind": "melodic",
+  "genre": "disco",
+  "name": "Walk-Up",
+  "desc": "Octave bass with a bar-end walk-up into the next chord.",
+  "length": 16,
+  "steps": [
+    {
+      "semi": 0,
+      "vel": 1.15,
+      "slide": false,
+      "len": 0.5
+    },
+    null,
+    {
+      "semi": 12,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.5
+    },
+    null,
+    {
+      "semi": 0,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.5
+    },
+    null,
+    {
+      "semi": 12,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.5
+    },
+    null,
+    {
+      "semi": 0,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.5
+    },
+    null,
+    {
+      "semi": 12,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.5
+    },
+    null,
+    {
+      "semi": 3,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.5
+    },
+    null,
+    {
+      "semi": 5,
+      "vel": 0.82,
+      "slide": false,
+      "len": 0.5
+    },
+    null
+  ],
+  "metadata": {
+    "bpm_min": 115,
+    "bpm_max": 125,
+    "feel": "straight",
+    "timing": "straight",
+    "energy": "high",
+    "density": "dense",
+    "tags": [
+      "disco",
+      "octave",
+      "bass"
+    ],
+    "harmonic": "minor",
+    "chord_poly": "mono",
+    "subgenre": "disco",
+    "compatible_devices": [
+      "t8-bass",
+      "td-3",
+      "generic-mono"
+    ]
+  },
+  "provenance": {
+    "source": "factory",
+    "author": "midip factory",
+    "pack": "funk-disco",
+    "license": "original generic groove (no copyrighted material)",
+    "references": [
+      "DRUM! Magazine four-on-the-floor disco lesson",
+      "zZounds disco drums (kick every beat, open hat on the and)",
+      "Disco BPM reference (bpmcalc)",
+      "Magenta Groove MIDI Dataset"
+    ]
+  }
+}

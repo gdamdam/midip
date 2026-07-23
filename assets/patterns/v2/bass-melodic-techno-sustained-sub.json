@@ -1,0 +1,92 @@
+{
+  "schema": "midip.pattern",
+  "version": 2,
+  "factory_id": "bass.melodic-techno.sustained-sub",
+  "role": "bass",
+  "kind": "melodic",
+  "genre": "melodic-techno",
+  "name": "Sustained Sub",
+  "desc": "Two sustained sub roots with a slow glide and a filter build.",
+  "length": 16,
+  "steps": [
+    {
+      "semi": 0,
+      "vel": 1.15,
+      "slide": false,
+      "len": 4.0
+    },
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    {
+      "semi": -2,
+      "vel": 1.0,
+      "slide": true,
+      "len": 4.0
+    },
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+  ],
+  "cc": [
+    [
+      {
+        "cc": 74,
+        "val": 40
+      }
+    ],
+    [],
+    [],
+    [],
+    [],
+    [],
+    [],
+    [],
+    [
+      {
+        "cc": 74,
+        "val": 90
+      }
+    ]
+  ],
+  "metadata": {
+    "bpm_min": 120,
+    "bpm_max": 126,
+    "feel": "straight",
+    "timing": "straight",
+    "energy": "mid",
+    "density": "core",
+    "tags": [
+      "melodic-techno",
+      "sub",
+      "bass"
+    ],
+    "harmonic": "minor",
+    "chord_poly": "mono",
+    "subgenre": "melodic-techno",
+    "compatible_devices": [
+      "t8-bass",
+      "td-3",
+      "generic-mono"
+    ]
+  },
+  "provenance": {
+    "source": "factory",
+    "author": "midip factory",
+    "pack": "modern-club",
+    "license": "original generic groove (no copyrighted material)",
+    "references": [
+      "House vs Techno reference (Splice)",
+      "Melodic-techno production references",
+      "Roland TR-909 heritage"
+    ]
+  }
+}

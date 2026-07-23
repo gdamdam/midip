@@ -1,0 +1,83 @@
+{
+  "schema": "midip.pattern",
+  "version": 2,
+  "factory_id": "bass.2step.2-step-sub",
+  "role": "bass",
+  "kind": "melodic",
+  "genre": "2step",
+  "name": "2-Step Sub",
+  "desc": "Skippy sub bass under the 2-step, swung with the hats.",
+  "length": 16,
+  "steps": [
+    {
+      "semi": 0,
+      "vel": 1.15,
+      "slide": false,
+      "len": 0.5
+    },
+    null,
+    null,
+    null,
+    null,
+    null,
+    {
+      "semi": 0,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.4
+    },
+    null,
+    null,
+    null,
+    null,
+    {
+      "semi": -2,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.5,
+      "micro": 160
+    },
+    null,
+    null,
+    {
+      "semi": 3,
+      "vel": 0.82,
+      "slide": false,
+      "len": 0.4
+    },
+    null
+  ],
+  "metadata": {
+    "bpm_min": 130,
+    "bpm_max": 138,
+    "feel": "swung-16 (mpc 58%)",
+    "timing": "mpc-swing",
+    "energy": "mid",
+    "density": "core",
+    "tags": [
+      "garage",
+      "2-step",
+      "uk-garage",
+      "swing"
+    ],
+    "harmonic": "minor",
+    "chord_poly": "mono",
+    "subgenre": "2step",
+    "compatible_devices": [
+      "t8-bass",
+      "td-3",
+      "generic-mono"
+    ]
+  },
+  "provenance": {
+    "source": "factory",
+    "author": "midip factory",
+    "pack": "timing",
+    "license": "original generic groove (no copyrighted material)",
+    "references": [
+      "Magenta Groove MIDI Dataset (microtiming/groove methodology)",
+      "MPC/Akai swing workflow references",
+      "documented genre groove references"
+    ]
+  }
+}

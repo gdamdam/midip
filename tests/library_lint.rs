@@ -44,13 +44,24 @@ const BANNED_CLAIMS: &[&str] = &[
     "drone",
     "whole note",
     "pedal tone",
-    // timing — the grid is straight 16ths
+    // timing — the legacy grid is straight 16ths with no per-note microtiming
+    // (micro is forced to 0 by the loader). Pattern-authored feel lives only in
+    // v2 patterns via timing templates (Phase 7); legacy descriptions may not
+    // claim a groove they cannot encode.
     "swing",
     "swung",
     "shuffle",
     "microtim",
     "behind the beat",
     "ahead of the beat",
+    "laid-back",
+    "laid back",
+    "layback",
+    "off-grid",
+    "off grid",
+    "mpc groove",
+    "mpc energy",
+    "lazy timing",
     // subdivision — no triplets/polyrhythm
     "triplet",
     "polyrhythm",
@@ -389,6 +400,109 @@ fn banned_claim_terms_detect_unrepresentable_features() {
             "'{term}' should be a banned unrepresentable-feature term"
         );
     }
+}
+
+/// Phase 3: the performance-family registry must be internally consistent.
+/// Hard failures (assert): every member resolves to a real pattern, family ids
+/// are globally unique, each family declares exactly one pattern per function,
+/// each family has a Core, and no pattern is enrolled in more than one family.
+/// Soft (reported, not failed): families missing some functions — allowed, since
+/// not every genre has a natural Fill/Breakdown/Peak.
+#[test]
+fn family_registry_lint() {
+    use midip::pattern::library::{Library, PatternFunction};
+
+    let lib = Library::load(&assets_dir()).expect("load library");
+    let families = lib.families();
+    assert!(!families.is_empty(), "catalog should ship families");
+
+    let mut errors: Vec<String> = Vec::new();
+    let mut ids: HashSet<&str> = HashSet::new();
+    // (role, genre, name) -> family id, to detect a pattern in >1 family.
+    let mut enrolled: HashMap<(LibRole, &str, &str), &str> = HashMap::new();
+
+    const ALL_FUNCS: [PatternFunction; 6] = [
+        PatternFunction::Core,
+        PatternFunction::VariationA,
+        PatternFunction::VariationB,
+        PatternFunction::Fill,
+        PatternFunction::Breakdown,
+        PatternFunction::Peak,
+    ];
+
+    for fam in families {
+        if !ids.insert(fam.id.as_str()) {
+            errors.push(format!("duplicate family id: {}", fam.id));
+        }
+        let role = match fam.role {
+            LibRole::Drums => "drums",
+            LibRole::Bass => "bass",
+            LibRole::Synth => "synth",
+        };
+
+        // Function uniqueness within the family.
+        let mut seen_funcs: HashSet<PatternFunction> = HashSet::new();
+        for m in &fam.members {
+            if !seen_funcs.insert(m.function) {
+                errors.push(format!(
+                    "family {} declares {:?} more than once",
+                    fam.id, m.function
+                ));
+            }
+            // Member resolves to a real pattern by role+genre+name.
+            if lib.find(role, &fam.genre, &m.name).is_none() {
+                errors.push(format!(
+                    "family {} member {:?} does not resolve in {}/{}",
+                    fam.id, m.name, role, fam.genre
+                ));
+            }
+            // A pattern belongs to at most one family.
+            if let Some(other) = enrolled.insert((fam.role, &fam.genre, &m.name), &fam.id) {
+                if other != fam.id {
+                    errors.push(format!(
+                        "pattern {}/{}/{} is in two families: {} and {}",
+                        role, fam.genre, m.name, other, fam.id
+                    ));
+                }
+            }
+        }
+
+        // Every family must have a Core anchor.
+        if !seen_funcs.contains(&PatternFunction::Core) {
+            errors.push(format!("family {} has no Core member", fam.id));
+        }
+    }
+
+    assert!(
+        errors.is_empty(),
+        "family registry errors:\n{}",
+        errors.join("\n")
+    );
+
+    // Soft report: which functions each family is missing (informational).
+    let mut incomplete = 0usize;
+    for fam in families {
+        let present: HashSet<PatternFunction> = fam.members.iter().map(|m| m.function).collect();
+        let missing: Vec<&str> = ALL_FUNCS
+            .iter()
+            .filter(|f| !present.contains(f))
+            .map(|f| f.label())
+            .collect();
+        if !missing.is_empty() {
+            incomplete += 1;
+            eprintln!(
+                "family {} incomplete — missing: {}",
+                fam.id,
+                missing.join(", ")
+            );
+        }
+    }
+    eprintln!(
+        "family registry: {} families, {} complete, {} incomplete",
+        families.len(),
+        families.len() - incomplete,
+        incomplete
+    );
 }
 
 #[test]

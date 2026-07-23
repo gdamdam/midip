@@ -44,7 +44,8 @@ pub struct DrumHit {
     pub prob: f32, // 0..1 trigger probability, default 1.0
     #[serde(default = "default_ratchet")]
     pub ratchet: u8, // 1..8 intra-step retriggers, default 1
-    /// Microtiming offset in ticks (-128..=127); positive = later, negative = earlier.
+    /// Microtiming offset in permille of a step (-500..=500); positive = later,
+    /// negative = earlier. BPM-scaled at playback (offset = micro * step_dur / 1000).
     #[serde(default)]
     pub micro: i16,
     /// Trigger condition for this hit.
@@ -65,7 +66,8 @@ pub struct MelodicNote {
     pub prob: f32, // 0..1 trigger probability, default 1.0
     #[serde(default = "default_ratchet")]
     pub ratchet: u8, // 1..8 intra-step retriggers, default 1
-    /// Microtiming offset in ticks (-128..=127); positive = later, negative = earlier.
+    /// Microtiming offset in permille of a step (-500..=500); positive = later,
+    /// negative = earlier. BPM-scaled at playback (offset = micro * step_dur / 1000).
     #[serde(default)]
     pub micro: i16,
     /// Trigger condition for this note.

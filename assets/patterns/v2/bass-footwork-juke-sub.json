@@ -1,0 +1,86 @@
+{
+  "schema": "midip.pattern",
+  "version": 2,
+  "factory_id": "bass.footwork.juke-sub",
+  "role": "bass",
+  "kind": "melodic",
+  "genre": "footwork",
+  "name": "Juke Sub",
+  "desc": "Syncopated 808-style sub tracking the footwork kick with one glide.",
+  "length": 16,
+  "steps": [
+    {
+      "semi": 0,
+      "vel": 1.15,
+      "slide": false,
+      "len": 1.0,
+      "micro": 5
+    },
+    null,
+    null,
+    null,
+    null,
+    null,
+    {
+      "semi": 0,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.5,
+      "micro": 29
+    },
+    null,
+    {
+      "semi": -5,
+      "vel": 1.0,
+      "slide": true,
+      "len": 1.0,
+      "micro": -26
+    },
+    null,
+    null,
+    null,
+    null,
+    {
+      "semi": 0,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.5,
+      "micro": 10
+    },
+    null,
+    null
+  ],
+  "metadata": {
+    "bpm_min": 158,
+    "bpm_max": 162,
+    "feel": "humanized microtiming",
+    "timing": "humanized",
+    "energy": "high",
+    "density": "core",
+    "tags": [
+      "footwork",
+      "juke",
+      "sub",
+      "bass"
+    ],
+    "harmonic": "minor",
+    "chord_poly": "mono",
+    "subgenre": "footwork",
+    "compatible_devices": [
+      "t8-bass",
+      "td-3",
+      "generic-mono"
+    ]
+  },
+  "provenance": {
+    "source": "factory",
+    "author": "midip factory",
+    "pack": "modern-club",
+    "license": "original generic groove (no copyrighted material)",
+    "references": [
+      "Footwork/Teklife references (Wikipedia, soundwitches)",
+      "Magenta Groove MIDI Dataset",
+      "Roland TR-808/909 heritage"
+    ]
+  }
+}

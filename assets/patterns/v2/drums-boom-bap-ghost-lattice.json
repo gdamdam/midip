@@ -1,0 +1,212 @@
+{
+  "schema": "midip.pattern",
+  "version": 2,
+  "factory_id": "drums.boom-bap.ghost-lattice",
+  "role": "drums",
+  "kind": "drums",
+  "genre": "boom-bap",
+  "name": "Ghost Lattice",
+  "desc": "Dense sixteenth-note hats with a busy probabilistic ghost-snare lattice around the backbeat.",
+  "length": 16,
+  "steps": [
+    [
+      {
+        "note": 36,
+        "vel": 118
+      },
+      {
+        "note": 42,
+        "vel": 118
+      }
+    ],
+    [
+      {
+        "note": 38,
+        "vel": 48,
+        "prob": 0.6,
+        "micro": 160
+      },
+      {
+        "note": 42,
+        "vel": 102,
+        "micro": 160
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 38,
+        "vel": 48,
+        "prob": 0.7,
+        "micro": 160
+      },
+      {
+        "note": 42,
+        "vel": 102,
+        "micro": 160
+      }
+    ],
+    [
+      {
+        "note": 38,
+        "vel": 118
+      },
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102,
+        "micro": 160
+      }
+    ],
+    [
+      {
+        "note": 36,
+        "vel": 102
+      },
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 38,
+        "vel": 48,
+        "prob": 0.6,
+        "micro": 160
+      },
+      {
+        "note": 42,
+        "vel": 102,
+        "micro": 160
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 118
+      }
+    ],
+    [
+      {
+        "note": 38,
+        "vel": 48,
+        "prob": 0.6,
+        "micro": 160
+      },
+      {
+        "note": 42,
+        "vel": 102,
+        "micro": 160
+      }
+    ],
+    [
+      {
+        "note": 36,
+        "vel": 102
+      },
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 38,
+        "vel": 48,
+        "prob": 0.7,
+        "micro": 160
+      },
+      {
+        "note": 42,
+        "vel": 102,
+        "micro": 160
+      }
+    ],
+    [
+      {
+        "note": 38,
+        "vel": 118
+      },
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 36,
+        "vel": 102,
+        "micro": 160
+      },
+      {
+        "note": 42,
+        "vel": 102,
+        "micro": 160
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 38,
+        "vel": 48,
+        "prob": 0.7,
+        "micro": 160
+      },
+      {
+        "note": 42,
+        "vel": 102,
+        "micro": 160
+      }
+    ]
+  ],
+  "metadata": {
+    "bpm_min": 82,
+    "bpm_max": 98,
+    "feel": "swung-16 (mpc 58%)",
+    "timing": "mpc-swing",
+    "energy": "high",
+    "density": "dense",
+    "tags": [
+      "hip-hop",
+      "boom-bap"
+    ],
+    "harmonic": null,
+    "chord_poly": "none",
+    "subgenre": "boom-bap",
+    "compatible_devices": [
+      "t8-drums",
+      "rd-8",
+      "drumbrute-impact",
+      "circuit-drums",
+      "generic-gm-drums"
+    ]
+  },
+  "provenance": {
+    "source": "factory",
+    "author": "midip factory",
+    "pack": "hip-hop",
+    "license": "original generic groove (no copyrighted material)",
+    "references": [
+      "Magenta Groove MIDI Dataset (groove/microtiming methodology)",
+      "Gillick et al. 2019 'Learning to Groove' arXiv:1905.06118",
+      "MPC classic boom-bap swing workflow references",
+      "Roland TR-909 kick heritage (Wikipedia)"
+    ]
+  }
+}

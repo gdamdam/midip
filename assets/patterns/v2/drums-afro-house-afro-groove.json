@@ -1,0 +1,218 @@
+{
+  "schema": "midip.pattern",
+  "version": 2,
+  "factory_id": "drums.afro-house.afro-groove",
+  "role": "drums",
+  "kind": "drums",
+  "genre": "afro-house",
+  "name": "Afro Groove",
+  "desc": "Four-on-the-floor with offbeat open hats, a son-style cowbell timeline and a syncopated rim layer standing in for congas.",
+  "length": 16,
+  "steps": [
+    [
+      {
+        "note": 36,
+        "vel": 118
+      },
+      {
+        "note": 42,
+        "vel": 102
+      },
+      {
+        "note": 56,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102,
+        "prob": 0.7
+      }
+    ],
+    [
+      {
+        "note": 46,
+        "vel": 102
+      },
+      {
+        "note": 42,
+        "vel": 102
+      },
+      {
+        "note": 37,
+        "vel": 102,
+        "prob": 0.6
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102,
+        "prob": 0.7
+      },
+      {
+        "note": 56,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 36,
+        "vel": 118
+      },
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102,
+        "prob": 0.7
+      }
+    ],
+    [
+      {
+        "note": 46,
+        "vel": 102
+      },
+      {
+        "note": 42,
+        "vel": 102
+      },
+      {
+        "note": 56,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102,
+        "prob": 0.7
+      }
+    ],
+    [
+      {
+        "note": 36,
+        "vel": 118
+      },
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102,
+        "prob": 0.7
+      },
+      {
+        "note": 37,
+        "vel": 102,
+        "prob": 0.6
+      }
+    ],
+    [
+      {
+        "note": 46,
+        "vel": 102
+      },
+      {
+        "note": 42,
+        "vel": 102
+      },
+      {
+        "note": 56,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102,
+        "prob": 0.7
+      }
+    ],
+    [
+      {
+        "note": 36,
+        "vel": 118
+      },
+      {
+        "note": 42,
+        "vel": 102
+      },
+      {
+        "note": 56,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102,
+        "prob": 0.7
+      },
+      {
+        "note": 37,
+        "vel": 102,
+        "prob": 0.6
+      }
+    ],
+    [
+      {
+        "note": 46,
+        "vel": 102
+      },
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102,
+        "prob": 0.7
+      }
+    ]
+  ],
+  "metadata": {
+    "bpm_min": 118,
+    "bpm_max": 125,
+    "feel": "straight",
+    "timing": "straight",
+    "energy": "mid",
+    "density": "core",
+    "tags": [
+      "afro-house",
+      "percussive"
+    ],
+    "harmonic": null,
+    "chord_poly": "none",
+    "subgenre": "afro-house",
+    "compatible_devices": [
+      "t8-drums",
+      "rd-8",
+      "drumbrute-impact",
+      "circuit-drums",
+      "generic-gm-drums"
+    ]
+  },
+  "provenance": {
+    "source": "factory",
+    "author": "midip factory",
+    "pack": "afro-house-amapiano",
+    "license": "original generic groove (no copyrighted material)",
+    "references": [
+      "Afro House production 101 (Native Instruments)",
+      "Afro House BPM & structure references (vibesdj)",
+      "Generic son-style bell timeline (public-domain rhythmic template)",
+      "Magenta Groove MIDI Dataset"
+    ]
+  }
+}

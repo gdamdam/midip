@@ -1,0 +1,72 @@
+{
+  "schema": "midip.pattern",
+  "version": 2,
+  "factory_id": "bass.trap.minimal-sub",
+  "role": "bass",
+  "kind": "melodic",
+  "genre": "trap",
+  "name": "Minimal Sub",
+  "desc": "Two long sub notes with a slow glide \u2014 maximum space.",
+  "length": 16,
+  "steps": [
+    {
+      "semi": 0,
+      "vel": 1.15,
+      "slide": false,
+      "len": 4.0
+    },
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    {
+      "semi": -2,
+      "vel": 1.0,
+      "slide": true,
+      "len": 4.0
+    },
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+  ],
+  "metadata": {
+    "bpm_min": 130,
+    "bpm_max": 150,
+    "feel": "half-time",
+    "timing": "straight",
+    "energy": "low",
+    "density": "sparse",
+    "tags": [
+      "trap",
+      "808",
+      "bass"
+    ],
+    "harmonic": "minor",
+    "chord_poly": "mono",
+    "subgenre": "trap",
+    "compatible_devices": [
+      "t8-bass",
+      "td-3",
+      "generic-mono"
+    ]
+  },
+  "provenance": {
+    "source": "factory",
+    "author": "midip factory",
+    "pack": "hip-hop",
+    "license": "original generic groove (no copyrighted material)",
+    "references": [
+      "Magenta Groove MIDI Dataset",
+      "Roland T-8 AIRA Compact voice/engine (Perfect Circuit)",
+      "Roland TR-808 heritage (Wikipedia)",
+      "hi-hat roll / trap programming references"
+    ]
+  }
+}
