@@ -9,7 +9,7 @@ use crate::engine::scheduler::{LaunchState, Quant};
 use crate::engine::{EngineEvent, UiCommand};
 use crate::music::scale::{fold_to_scale, step_by_degree, Scale};
 use crate::pattern::euclid;
-use crate::pattern::generate::{generate, next_rng, GenMode, GenParams};
+use crate::pattern::generate::{generate, next_rng, ArpChord, ArpShape, GenMode, GenParams};
 use crate::pattern::library::{LibRole, Library};
 use crate::pattern::model::{
     DrumHit, DrumStep, Lane, LaneKind, LaneRoute, MelodicNote, MelodicStep, Pattern, PatternData,
@@ -572,6 +572,8 @@ pub enum Action {
     OpenGenerative,
     /// Switch the generation mode (Generate ↔ Vary); regenerate preview.
     GenSetMode(GenMode),
+    /// Cycle the generation mode by a signed step across [Generate, Vary, Arp].
+    GenCycleMode(i8),
     /// Adjust a `GenParams` field by `delta`; clamp to 0..=100 (or 0..=127 for range).
     /// Regenerates the preview in place — no snapshot.
     GenAdjust {
@@ -646,6 +648,11 @@ pub enum GenField {
     Density,
     Range,
     Mutate,
+    Chord,
+    Octaves,
+    Shape,
+    Gate,
+    VelVar,
 }
 
 /// Number of steps visible in the editor at once. Steps beyond this are reached via scrolling.
@@ -3705,6 +3712,33 @@ impl App {
                     });
                 }
             }
+            Action::GenCycleMode(delta) => {
+                if let Some(tt) = &self.temp_transform {
+                    let lane = tt.lane;
+                    // Arp is melodic-only (§Integration/§UI): exclude it from the cycle
+                    // on drum lanes so a drum lane can never land on `mode == Arp`.
+                    let order: &[GenMode] =
+                        if self.set.lanes[lane].pattern.kind() == LaneKind::Melodic {
+                            &[GenMode::Generate, GenMode::Vary, GenMode::Arp]
+                        } else {
+                            &[GenMode::Generate, GenMode::Vary]
+                        };
+                    let cur = order
+                        .iter()
+                        .position(|&m| m == self.gen_params.mode)
+                        .unwrap_or(0);
+                    let n = order.len() as i32;
+                    let next = (((cur as i32 + delta as i32) % n) + n) % n;
+                    self.gen_params.mode = order[next as usize];
+                    let original = tt.original.clone();
+                    let candidate = generate(&self.gen_params, &original, &self.set.lanes[lane]);
+                    self.set.lanes[lane].pattern = candidate;
+                    cmds.push(UiCommand::LoadPattern {
+                        lane,
+                        pattern: self.set.lanes[lane].pattern.clone(),
+                    });
+                }
+            }
             Action::GenAdjust { field, delta } => {
                 if let Some(tt) = &self.temp_transform {
                     match field {
@@ -3719,6 +3753,49 @@ impl App {
                         GenField::Mutate => {
                             self.gen_params.mutate =
                                 (self.gen_params.mutate as i32 + delta).clamp(0, 100) as u8;
+                        }
+                        GenField::Chord => {
+                            let order = [
+                                ArpChord::Power,
+                                ArpChord::Triad,
+                                ArpChord::Seventh,
+                                ArpChord::Octaves,
+                            ];
+                            let cur = order
+                                .iter()
+                                .position(|&c| c == self.gen_params.arp_chord)
+                                .unwrap_or(0);
+                            let n = order.len() as i32;
+                            let next = (((cur as i32 + delta) % n) + n) % n;
+                            self.gen_params.arp_chord = order[next as usize];
+                        }
+                        GenField::Octaves => {
+                            self.gen_params.arp_octaves =
+                                (self.gen_params.arp_octaves as i32 + delta).clamp(1, 4) as u8;
+                        }
+                        GenField::Shape => {
+                            let order = [
+                                ArpShape::Up,
+                                ArpShape::Down,
+                                ArpShape::UpDown,
+                                ArpShape::Random,
+                            ];
+                            let cur = order
+                                .iter()
+                                .position(|&s| s == self.gen_params.arp_shape)
+                                .unwrap_or(0);
+                            let n = order.len() as i32;
+                            let next = (((cur as i32 + delta) % n) + n) % n;
+                            self.gen_params.arp_shape = order[next as usize];
+                        }
+                        GenField::Gate => {
+                            // delta is in hundredths of a step; clamp 0.05..=1.0.
+                            let g = (self.gen_params.arp_gate * 100.0).round() as i32 + delta;
+                            self.gen_params.arp_gate = (g.clamp(5, 100) as f32) / 100.0;
+                        }
+                        GenField::VelVar => {
+                            self.gen_params.arp_vel_var =
+                                (self.gen_params.arp_vel_var as i32 + delta).clamp(0, 100) as u8;
                         }
                     }
                     let lane = tt.lane;
@@ -12202,6 +12279,87 @@ mod tests {
             before_undo,
             "GenSetMode must NOT add an undo entry"
         );
+    }
+
+    /// Shared setup for Arp UI-wiring tests: open the generative overlay so
+    /// `temp_transform` is populated and `gen_params` starts at defaults.
+    fn app_with_generative_preview() -> App {
+        let mut app = new_app();
+        app.apply(Action::OpenGenerative);
+        app
+    }
+
+    #[test]
+    fn gen_cycle_mode_advances_generate_vary_arp() {
+        use crate::pattern::generate::GenMode;
+        // Arp is melodic-only: focus the bass (melodic) lane so the cycle can reach it.
+        let mut app = new_app();
+        app.apply(Action::FocusLane(1)); // bass = melodic
+        app.apply(Action::OpenGenerative);
+        assert_eq!(app.gen_params.mode, GenMode::Generate);
+        app.apply(Action::GenCycleMode(1));
+        assert_eq!(app.gen_params.mode, GenMode::Vary);
+        app.apply(Action::GenCycleMode(1));
+        assert_eq!(app.gen_params.mode, GenMode::Arp);
+        app.apply(Action::GenCycleMode(1));
+        assert_eq!(app.gen_params.mode, GenMode::Generate, "wraps around");
+        app.apply(Action::GenCycleMode(-1));
+        assert_eq!(app.gen_params.mode, GenMode::Arp, "reverse wraps");
+    }
+
+    /// On a drum lane, Arp is excluded from the cycle entirely (melodic-only per spec):
+    /// GenCycleMode must only ever toggle Generate <-> Vary, never landing on Arp.
+    #[test]
+    fn gen_cycle_mode_skips_arp_on_drum_lane() {
+        use crate::pattern::generate::GenMode;
+        // new_app()'s focused lane (0) is drums.
+        let mut app = app_with_generative_preview();
+        assert_eq!(app.gen_params.mode, GenMode::Generate);
+        app.apply(Action::GenCycleMode(1));
+        assert_eq!(app.gen_params.mode, GenMode::Vary);
+        app.apply(Action::GenCycleMode(1));
+        assert_eq!(
+            app.gen_params.mode,
+            GenMode::Generate,
+            "wraps without ever hitting Arp"
+        );
+        app.apply(Action::GenCycleMode(-1));
+        assert_eq!(
+            app.gen_params.mode,
+            GenMode::Vary,
+            "reverse wraps without ever hitting Arp"
+        );
+        app.apply(Action::GenCycleMode(-1));
+        assert_eq!(app.gen_params.mode, GenMode::Generate);
+    }
+
+    #[test]
+    fn gen_adjust_octaves_clamps_1_to_4() {
+        let mut app = app_with_generative_preview();
+        app.gen_params.arp_octaves = 4;
+        app.apply(Action::GenAdjust {
+            field: GenField::Octaves,
+            delta: 1,
+        });
+        assert_eq!(app.gen_params.arp_octaves, 4, "octaves clamps at 4");
+        app.gen_params.arp_octaves = 1;
+        app.apply(Action::GenAdjust {
+            field: GenField::Octaves,
+            delta: -1,
+        });
+        assert_eq!(app.gen_params.arp_octaves, 1, "octaves clamps at 1");
+    }
+
+    #[test]
+    fn gen_adjust_chord_cycles() {
+        use crate::pattern::generate::ArpChord;
+        let mut app = app_with_generative_preview();
+        app.gen_params.arp_chord = ArpChord::Power;
+        app.apply(Action::GenAdjust {
+            field: GenField::Chord,
+            delta: 1,
+        });
+        assert_eq!(app.gen_params.arp_chord, ArpChord::Triad);
     }
 
     // --- M10 T5: clock-in selector -------------------------------------------
