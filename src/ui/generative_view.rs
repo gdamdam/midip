@@ -19,6 +19,7 @@ pub fn render_generative_panel(f: &mut Frame, area: Rect, app: &App) {
     let mode_label = match p.mode {
         GenMode::Generate => "Generate",
         GenMode::Vary => "Vary",
+        GenMode::Arp => "Arp",
     };
     let title = format!(" GENERATE  [{mode_label}] ");
     let outer = Block::default().borders(Borders::ALL).title(Span::styled(
@@ -66,6 +67,7 @@ pub fn render_generative_panel(f: &mut Frame, area: Rect, app: &App) {
             match p.mode {
                 GenMode::Generate => "(generate from scratch)",
                 GenMode::Vary => "(vary existing pattern)",
+                GenMode::Arp => "(arpeggiate scale degrees)",
             },
             dim_style,
         ),

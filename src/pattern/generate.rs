@@ -11,6 +11,26 @@ pub enum GenMode {
     Generate,
     /// Vary the source pattern by mutating existing steps.
     Vary,
+    /// Offline arpeggio/sequence writer (melodic lanes only).
+    Arp,
+}
+
+/// Chord/degree preset the arp cycles through, resolved against the lane scale.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ArpChord {
+    Power,   // 1,5
+    Triad,   // 1,3,5
+    Seventh, // 1,3,5,7
+    Octaves, // root only; octave stacking via arp_octaves
+}
+
+/// Order in which the degree pool is walked.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ArpShape {
+    Up,
+    Down,
+    UpDown,
+    Random,
 }
 
 /// Parameters controlling pattern generation.
@@ -25,6 +45,16 @@ pub struct GenParams {
     pub mutate: u8,
     /// Seed for the deterministic RNG.
     pub seed: u64,
+    /// Arp: chord/degree preset.
+    pub arp_chord: ArpChord,
+    /// Arp: number of octave registers to stack (1..=4).
+    pub arp_octaves: u8,
+    /// Arp: walk direction / order.
+    pub arp_shape: ArpShape,
+    /// Arp: note length in steps (0.05..=1.0); short = staccato.
+    pub arp_gate: f32,
+    /// Arp: seeded velocity variation amount, 0..=100.
+    pub arp_vel_var: u8,
 }
 
 impl Default for GenParams {
@@ -35,6 +65,11 @@ impl Default for GenParams {
             range: 12,
             mutate: 25,
             seed: 1,
+            arp_chord: ArpChord::Octaves,
+            arp_octaves: 2,
+            arp_shape: ArpShape::UpDown,
+            arp_gate: 0.5,
+            arp_vel_var: 20,
         }
     }
 }
@@ -325,7 +360,14 @@ pub fn generate(params: &GenParams, source: &Pattern, lane: &Lane) -> Pattern {
         (GenMode::Generate, LaneKind::Melodic) => generate_melodic(params, source, lane),
         (GenMode::Vary, LaneKind::Drums) => vary_drums(params, source),
         (GenMode::Vary, LaneKind::Melodic) => vary_melodic(params, source, lane),
+        (GenMode::Arp, LaneKind::Melodic) => generate_arp(params, source, lane),
+        (GenMode::Arp, LaneKind::Drums) => source.clone(),
     }
+}
+
+/// Offline arp generator. Stubbed in Task 1; implemented in Task 4.
+fn generate_arp(_params: &GenParams, source: &Pattern, _lane: &Lane) -> Pattern {
+    source.clone()
 }
 
 #[cfg(test)]
@@ -1056,5 +1098,27 @@ mod gen_core_tests {
             }
             _ => panic!("expected melodic"),
         }
+    }
+
+    // ── Task 1: GenMode::Arp scaffolding ─────────────────────────────────────
+
+    #[test]
+    fn arp_on_drum_lane_is_noop() {
+        // Arp is melodic-only; on a drum source it must return the source unchanged.
+        let (mut params, source, lane) = fixture(); // drum fixture at line ~339
+        params.mode = GenMode::Arp;
+        let out = generate(&params, &source, &lane);
+        assert_eq!(out.data, source.data, "Arp on a drum lane must be a no-op");
+    }
+
+    #[test]
+    fn genparams_default_has_arp_fields() {
+        let p = GenParams::default();
+        // Sensible arp defaults (only used when mode == Arp).
+        assert_eq!(p.arp_octaves, 2);
+        assert_eq!(p.arp_chord, ArpChord::Octaves);
+        assert_eq!(p.arp_shape, ArpShape::UpDown);
+        assert!((p.arp_gate - 0.5).abs() < f32::EPSILON);
+        assert_eq!(p.arp_vel_var, 20);
     }
 }
