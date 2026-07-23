@@ -372,6 +372,8 @@ fn generate_arp(_params: &GenParams, source: &Pattern, _lane: &Lane) -> Pattern 
 
 impl ArpChord {
     /// Indices into `Scale::degrees()` for non-chromatic scales.
+    #[allow(dead_code)]
+    // Wired into generate_arp in Task 4; remove this allow then.
     fn degree_indices(self) -> &'static [usize] {
         match self {
             ArpChord::Power => &[0, 4],
@@ -383,6 +385,8 @@ impl ArpChord {
 
     /// Fixed semitone intervals used when the lane scale is Chromatic
     /// (where degree indexing would not yield a real chord).
+    #[allow(dead_code)]
+    // Wired into generate_arp in Task 4; remove this allow then.
     fn chromatic_intervals(self) -> &'static [i32] {
         match self {
             ArpChord::Power => &[0, 7],
@@ -397,6 +401,8 @@ impl ArpChord {
 /// the lane scale (fixed intervals for Chromatic), then stack across `octaves`
 /// registers (+12 each). No preset includes the octave, so endpoints never
 /// duplicate across registers. A final `fold_to_scale` guards edge cases.
+#[allow(dead_code)]
+// Wired into generate_arp in Task 4; remove this allow then.
 fn arp_pool(chord: ArpChord, octaves: u8, scale: Scale) -> Vec<i32> {
     let base: Vec<i32> = if scale == Scale::Chromatic {
         chord.chromatic_intervals().to_vec()
@@ -409,7 +415,7 @@ fn arp_pool(chord: ArpChord, octaves: u8, scale: Scale) -> Vec<i32> {
             .collect()
     };
 
-    let octaves = octaves.max(1) as i32;
+    let octaves = octaves.max(1) as i32; // floor at 1 register; 0 would produce an empty pool
     let mut pool = Vec::with_capacity(base.len() * octaves as usize);
     for r in 0..octaves {
         for &interval in &base {
