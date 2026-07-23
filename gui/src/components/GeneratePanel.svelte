@@ -1,5 +1,6 @@
 <script lang="ts">
   import { app, send } from "../lib/store.svelte";
+  import { draggable } from "../lib/draggable";
 
   // Rendered at the top level (before the snapshot loads), so stay null-safe.
   const gen = $derived(app.snap?.gen ?? null);
@@ -16,11 +17,10 @@
 </script>
 
 {#if gen?.active}
-  <div class="scrim" role="presentation" onclick={() => send({ type: "genCancel" })}></div>
-  <div class="panel" role="dialog" aria-label="Pattern generator">
+  <div class="panel" role="dialog" aria-label="Pattern generator" use:draggable={{ handle: ".head" }}>
     <div class="head">
-      <h2>Generate</h2>
-      <span class="hint muted">live preview — plays as you tweak</span>
+      <h2>⠿ Generate</h2>
+      <span class="hint muted">drag me · live preview</span>
     </div>
 
     <div class="modes">
@@ -103,17 +103,13 @@
 {/if}
 
 <style>
-  .scrim {
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.45);
-    z-index: 60;
-  }
+  /* Floating, draggable, NON-modal: no scrim so the previewed pattern stays
+     visible + interactive underneath. Starts near the top; drag by the header. */
   .panel {
     position: fixed;
-    top: 50%;
+    top: 72px;
     left: 50%;
-    transform: translate(-50%, -50%);
+    transform: translateX(-50%);
     width: 340px;
     max-width: 90vw;
     background: var(--panel);
@@ -130,6 +126,8 @@
     display: flex;
     align-items: baseline;
     gap: 10px;
+    cursor: move;
+    user-select: none;
   }
   h2 {
     margin: 0;
