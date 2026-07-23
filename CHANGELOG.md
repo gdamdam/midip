@@ -7,6 +7,33 @@ feature milestone is a minor bump).
 
 ## [Unreleased]
 
+## [1.8.1] — 2026-07-23 — Pattern-catalog audit & lint
+
+### Fixed
+- **Corrected misleading factory-pattern descriptions.** 94 catalog descriptions
+  claimed features the vendored data cannot encode — chords/harmony (the melodic
+  format is monophonic), swing/shuffle/microtiming (the grid is straight 16ths),
+  triplets/polyrhythm, probability/randomness, stutter/ratchet/flam, and CC/LFO
+  automation. Rewrote them to describe the actual notes/rhythm/velocity without
+  inventing features. De-branded descriptions that named a real club/label/artist.
+
+### Added
+- **`tests/library_lint.rs`** — a deterministic lint over the vendored catalog:
+  catalog↔data genre/count alignment, unique names within role+genre, no empty
+  descriptions, no descriptions claiming unrepresentable features (with a small
+  justified allowlist for arpeggios and chord-tone basslines), exact-duplicate
+  content confined to a documented allowlist, a duplicate-description allowlist,
+  note/velocity/semitone ranges, and 16-step length consistency.
+- **Provenance metadata** in `catalog.json` (`provenance` key, ignored by the
+  parser): records the mpump source and the vendoring commits, and explicitly does
+  not assert an upstream commit/version/license the repository does not record.
+
+### Notes
+- No musical behaviour changed: pattern note data is untouched — only descriptions
+  and metadata were edited. Exact-duplicate patterns are retained (identity is
+  role+genre+name, so removing them would break saved references) and documented as
+  intentional aliases for a later migration phase.
+
 ## [1.8.0] — 2026-07-23 — Desktop GUI (midip-gui)
 
 ### Added
