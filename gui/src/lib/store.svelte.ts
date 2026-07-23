@@ -4,6 +4,13 @@
 import {
   addChainEntry as bridgeAddChainEntry,
   auditionPattern,
+  crateAdd as bridgeCrateAdd,
+  crateCreate as bridgeCrateCreate,
+  crateDelete as bridgeCrateDelete,
+  crateLaunch as bridgeCrateLaunch,
+  crateMoveEntry as bridgeCrateMoveEntry,
+  crateRemoveEntry as bridgeCrateRemoveEntry,
+  crateRename as bridgeCrateRename,
   dispatch as bridgeDispatch,
   getAppVersion,
   getLibrary,
@@ -152,6 +159,23 @@ export async function addChainEntry(chain: number, scene: number): Promise<void>
     app.error = String(e);
   }
 }
+
+async function applySnap(p: Promise<Snapshot>): Promise<void> {
+  try {
+    app.snap = await p;
+  } catch (e) {
+    app.error = String(e);
+  }
+}
+export const crateCreate = (name: string) => applySnap(bridgeCrateCreate(name));
+export const crateRename = (i: number, name: string) => applySnap(bridgeCrateRename(i, name));
+export const crateDelete = (i: number) => applySnap(bridgeCrateDelete(i));
+export const crateAdd = (c: number, role: string, genre: string, name: string) =>
+  applySnap(bridgeCrateAdd(c, role, genre, name));
+export const crateRemoveEntry = (c: number, e: number) => applySnap(bridgeCrateRemoveEntry(c, e));
+export const crateMoveEntry = (c: number, from: number, to: number) =>
+  applySnap(bridgeCrateMoveEntry(c, from, to));
+export const crateLaunch = (c: number, e: number) => applySnap(bridgeCrateLaunch(c, e));
 
 export async function refreshSets(): Promise<void> {
   try {

@@ -164,6 +164,15 @@ export interface Gen {
   melodic: boolean;
 }
 
+export interface CrateEntryItem {
+  label: string;
+}
+export interface CrateItem {
+  index: number;
+  name: string;
+  entries: CrateEntryItem[];
+}
+
 export interface Snapshot {
   transport: Transport;
   lanes: Lane[];
@@ -173,6 +182,7 @@ export interface Snapshot {
   inspector: Inspector;
   song: Song;
   gen: Gen;
+  crates: CrateItem[];
   status: string;
 }
 

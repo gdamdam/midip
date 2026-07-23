@@ -51,6 +51,26 @@ export const toggleFavorite = (
 export const addChainEntry = (chain: number, scene: number): Promise<Snapshot> =>
   invoke("gui_add_chain_entry", { chain, scene });
 
+// Crates. Keys are snake_case to match the Rust command params exactly.
+export const crateCreate = (name: string): Promise<Snapshot> =>
+  invoke("gui_crate_create", { name });
+export const crateRename = (index: number, name: string): Promise<Snapshot> =>
+  invoke("gui_crate_rename", { index, name });
+export const crateDelete = (index: number): Promise<Snapshot> =>
+  invoke("gui_crate_delete", { index });
+export const crateAdd = (
+  crateIdx: number,
+  role: string,
+  genre: string,
+  name: string,
+): Promise<Snapshot> => invoke("gui_crate_add", { crate_idx: crateIdx, role, genre, name });
+export const crateRemoveEntry = (crateIdx: number, entry: number): Promise<Snapshot> =>
+  invoke("gui_crate_remove_entry", { crate_idx: crateIdx, entry });
+export const crateMoveEntry = (crateIdx: number, from: number, to: number): Promise<Snapshot> =>
+  invoke("gui_crate_move_entry", { crate_idx: crateIdx, from, to });
+export const crateLaunch = (crateIdx: number, entry: number): Promise<Snapshot> =>
+  invoke("gui_crate_launch", { crate_idx: crateIdx, entry });
+
 export const getSetList = (): Promise<SetEntry[]> => invoke("gui_set_list");
 
 export const getOutputPorts = (): Promise<string[]> => invoke("gui_output_ports");

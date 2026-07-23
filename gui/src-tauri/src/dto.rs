@@ -23,7 +23,41 @@ pub struct Snapshot {
     pub inspector: InspectorDto,
     pub song: SongDto,
     pub gen: GenDto,
+    pub crates: Vec<CrateDto>,
     pub status: String,
+}
+
+// --- Crates (pattern collections) --------------------------------------
+
+#[derive(Serialize, Clone)]
+pub struct CrateDto {
+    pub index: usize,
+    pub name: String,
+    pub entries: Vec<CrateEntryDto>,
+}
+
+#[derive(Serialize, Clone)]
+pub struct CrateEntryDto {
+    pub label: String,
+}
+
+fn build_crates(app: &App) -> Vec<CrateDto> {
+    app.crates
+        .crates
+        .iter()
+        .enumerate()
+        .map(|(i, c)| CrateDto {
+            index: i,
+            name: c.name.clone(),
+            entries: c
+                .entries
+                .iter()
+                .map(|e| CrateEntryDto {
+                    label: e.label.clone().unwrap_or_else(|| e.pattern.display_name()),
+                })
+                .collect(),
+        })
+        .collect()
 }
 
 // --- Generative tool ----------------------------------------------------
@@ -342,6 +376,7 @@ impl Snapshot {
         let inspector = build_inspector(app);
         let song = build_song(app);
         let gen = build_gen(app);
+        let crates = build_crates(app);
 
         Snapshot {
             transport,
@@ -352,6 +387,7 @@ impl Snapshot {
             inspector,
             song,
             gen,
+            crates,
             status: app.status.clone(),
         }
     }

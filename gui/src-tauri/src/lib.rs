@@ -221,6 +221,61 @@ impl Core {
         }
     }
 
+    fn save_crates(&self) {
+        let _ = midip::pattern::store::save_crates(&self.data_dir, &self.app.crates);
+    }
+
+    pub fn crate_create(&mut self, name: String) {
+        self.app.crates.add_crate(name);
+        self.save_crates();
+    }
+    pub fn crate_rename(&mut self, index: usize, name: String) {
+        self.app.crates.rename_crate(index, name);
+        self.save_crates();
+    }
+    pub fn crate_delete(&mut self, index: usize) {
+        self.app.crates.remove_crate(index);
+        self.save_crates();
+    }
+    pub fn crate_add(&mut self, crate_idx: usize, role: String, genre: String, name: String) {
+        let pref = PatternRef::Vendored {
+            role,
+            genre,
+            name: name.clone(),
+        };
+        self.app.crates.add_entry(
+            crate_idx,
+            midip::pattern::store::CrateEntry {
+                pattern: pref,
+                label: Some(name),
+            },
+        );
+        self.save_crates();
+    }
+    pub fn crate_remove_entry(&mut self, crate_idx: usize, entry: usize) {
+        self.app.crates.remove_entry(crate_idx, entry);
+        self.save_crates();
+    }
+    pub fn crate_move_entry(&mut self, crate_idx: usize, from: usize, to: usize) {
+        self.app.crates.reorder_entry(crate_idx, from, to);
+        self.save_crates();
+    }
+    /// Load (or queue) a crate entry's pattern, resolving its `PatternRef`.
+    pub fn crate_launch(&mut self, crate_idx: usize, entry: usize) {
+        let Some(pref) = self
+            .app
+            .crates
+            .crates
+            .get(crate_idx)
+            .and_then(|c| c.entries.get(entry))
+            .map(|e| e.pattern.clone())
+        else {
+            return;
+        };
+        let cmds = self.app.launch_ref(&pref);
+        self.forward(cmds);
+    }
+
     /// Toggle a library pattern's favorite flag and persist the favorites file.
     pub fn toggle_favorite(&mut self, role: String, genre: String, name: String) {
         let pref = PatternRef::Vendored { role, genre, name };
@@ -332,6 +387,70 @@ fn gui_place_note(lane: usize, col: usize, pitch: u8, state: tauri::State<GuiSta
 fn gui_add_chain_entry(chain: usize, scene: usize, state: tauri::State<GuiState>) -> Snapshot {
     let mut core = state.core.lock().unwrap();
     core.add_chain_entry(chain, scene);
+    core.snapshot()
+}
+
+#[tauri::command]
+fn gui_crate_create(name: String, state: tauri::State<GuiState>) -> Snapshot {
+    let mut core = state.core.lock().unwrap();
+    core.crate_create(name);
+    core.snapshot()
+}
+
+#[tauri::command]
+fn gui_crate_rename(index: usize, name: String, state: tauri::State<GuiState>) -> Snapshot {
+    let mut core = state.core.lock().unwrap();
+    core.crate_rename(index, name);
+    core.snapshot()
+}
+
+#[tauri::command]
+fn gui_crate_delete(index: usize, state: tauri::State<GuiState>) -> Snapshot {
+    let mut core = state.core.lock().unwrap();
+    core.crate_delete(index);
+    core.snapshot()
+}
+
+#[tauri::command]
+fn gui_crate_add(
+    crate_idx: usize,
+    role: String,
+    genre: String,
+    name: String,
+    state: tauri::State<GuiState>,
+) -> Snapshot {
+    let mut core = state.core.lock().unwrap();
+    core.crate_add(crate_idx, role, genre, name);
+    core.snapshot()
+}
+
+#[tauri::command]
+fn gui_crate_remove_entry(
+    crate_idx: usize,
+    entry: usize,
+    state: tauri::State<GuiState>,
+) -> Snapshot {
+    let mut core = state.core.lock().unwrap();
+    core.crate_remove_entry(crate_idx, entry);
+    core.snapshot()
+}
+
+#[tauri::command]
+fn gui_crate_move_entry(
+    crate_idx: usize,
+    from: usize,
+    to: usize,
+    state: tauri::State<GuiState>,
+) -> Snapshot {
+    let mut core = state.core.lock().unwrap();
+    core.crate_move_entry(crate_idx, from, to);
+    core.snapshot()
+}
+
+#[tauri::command]
+fn gui_crate_launch(crate_idx: usize, entry: usize, state: tauri::State<GuiState>) -> Snapshot {
+    let mut core = state.core.lock().unwrap();
+    core.crate_launch(crate_idx, entry);
     core.snapshot()
 }
 
@@ -517,6 +636,13 @@ pub fn run() {
             gui_audition,
             gui_place_note,
             gui_add_chain_entry,
+            gui_crate_create,
+            gui_crate_rename,
+            gui_crate_delete,
+            gui_crate_add,
+            gui_crate_remove_entry,
+            gui_crate_move_entry,
+            gui_crate_launch,
             gui_stop_audition,
             gui_toggle_favorite,
             gui_set_list,

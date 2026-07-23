@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { app, loadPattern, audition, endAudition, favorite, send, userPatternCmd } from "../lib/store.svelte";
+  import { app, loadPattern, audition, endAudition, favorite, send, userPatternCmd, crateAdd } from "../lib/store.svelte";
+  import CratesPanel from "./CratesPanel.svelte";
 
   let role = $state("drums");
   let query = $state("");
@@ -7,6 +8,8 @@
   let auditioning = $state<string | null>(null);
   let confirmDelete = $state<string | null>(null);
   let showUser = $state(false);
+  let crateTarget = $state<number | null>(null);
+  const crates = $derived(app.snap?.crates ?? []);
 
   const roleData = $derived(app.library?.roles.find((r) => r.role === role) ?? null);
 
@@ -48,6 +51,17 @@
         ★
       </button>
     </div>
+    {#if crates.length > 0}
+      <div class="crate-target">
+        <span class="muted small">＋ to crate:</span>
+        <select bind:value={crateTarget}>
+          <option value={null}>— off —</option>
+          {#each crates as c (c.index)}
+            <option value={c.index}>{c.name}</option>
+          {/each}
+        </select>
+      </div>
+    {/if}
   </div>
 
   {#if auditioning}
@@ -88,6 +102,9 @@
                 title="Audition (preview without committing)"
                 aria-label="Audition {p.name}"
               >♪</button>
+              {#if crateTarget !== null}
+                <button class="aud" onclick={() => crateAdd(crateTarget!, role, genre.name, p.name)} title="Add to selected crate">＋</button>
+              {/if}
             </div>
           {/each}
         </div>
@@ -120,6 +137,8 @@
       </div>
     {/if}
   </div>
+
+  <CratesPanel />
 
   <p class="hint muted">Load queues at the next bar while playing · ♪ auditions on a muted/stopped lane.</p>
 </section>
@@ -166,6 +185,21 @@
   .fav-filter.on {
     color: var(--warn);
     border-color: var(--warn);
+  }
+  .crate-target {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .crate-target select {
+    flex: 1;
+    background: var(--bg);
+    color: var(--fg);
+    border: var(--border);
+    border-radius: var(--radius);
+    font-family: inherit;
+    font-size: 11px;
+    padding: 2px 4px;
   }
   .audition-bar {
     display: flex;
