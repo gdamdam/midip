@@ -136,9 +136,119 @@ jobs:
             ${{ steps.vars.outputs.archive_name }}.${{ matrix.archive_ext }}.sha256
           if-no-files-found: error
 
+  build-gui:
+    name: Build GUI ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            bundles: dmg
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            bundles: dmg
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            bundles: nsis,msi
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            bundles: deb,appimage
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: gui/src-tauri
+          key: gui-release-${{ matrix.target }}
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Linux GUI dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev patchelf \
+            libayatana-appindicator3-dev libasound2-dev
+
+      - name: Install frontend dependencies
+        working-directory: gui
+        run: npm ci
+
+      - name: Stamp release version into tauri.conf.json
+        shell: bash
+        run: |
+          TAG="${{ inputs.tag || github.ref_name }}"
+          # Accept v1.2.3 / 1.2.3 (+ optional -rc.1 etc.); strip a leading "v".
+          VER="${TAG#v}"
+          if [[ ! "$VER" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.+].*)?$ ]]; then
+            echo "Ref '$TAG' is not a semver tag — leaving tauri.conf.json version unchanged."
+            exit 0
+          fi
+          CONF="gui/src-tauri/tauri.conf.json"
+          jq --arg v "$VER" '.version = $v' "$CONF" > "$CONF.tmp"
+          mv "$CONF.tmp" "$CONF"
+          echo "Stamped GUI version -> $VER"
+          jq -r '.version' "$CONF"
+
+      - name: Build Tauri bundles
+        working-directory: gui
+        # `beforeBuildCommand` (svelte-check + vite build) runs automatically.
+        run: npx tauri build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+
+      - name: Collect + rename bundles
+        id: gui
+        shell: bash
+        run: |
+          TAG="${{ inputs.tag || github.ref_name }}"
+          OUT="gui-dist"
+          mkdir -p "$OUT"
+          BUNDLE="gui/src-tauri/target/${{ matrix.target }}/release/bundle"
+          shopt -s nullglob
+          found=0
+          for f in \
+            "$BUNDLE"/dmg/*.dmg \
+            "$BUNDLE"/nsis/*-setup.exe \
+            "$BUNDLE"/msi/*.msi \
+            "$BUNDLE"/deb/*.deb \
+            "$BUNDLE"/appimage/*.AppImage; do
+            base="$(basename "$f")"
+            dest="$OUT/midip-gui-${TAG}-${{ matrix.target }}-${base}"
+            cp "$f" "$dest"
+            sha256sum "$dest" > "${dest}.sha256"
+            found=$((found+1))
+          done
+          if [ "$found" -eq 0 ]; then
+            echo "No GUI bundles were produced for ${{ matrix.target }}" >&2
+            ls -R "$BUNDLE" || true
+            exit 1
+          fi
+          ls -la "$OUT"
+
+      - name: Upload GUI artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: gui-release-${{ matrix.target }}
+          path: gui-dist/*
+          if-no-files-found: error
+
   publish:
     name: Publish GitHub Release
-    needs: build
+    needs: [build, build-gui]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -159,4 +269,9 @@ jobs:
           files: |
             artifacts/**/*.tar.gz
             artifacts/**/*.zip
+            artifacts/**/*.dmg
+            artifacts/**/*.exe
+            artifacts/**/*.msi
+            artifacts/**/*.deb
+            artifacts/**/*.AppImage
             artifacts/**/*.sha256
