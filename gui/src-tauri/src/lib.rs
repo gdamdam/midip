@@ -112,6 +112,14 @@ impl Core {
             self.app.clock_in_ports = midip::midi::ports::list_input_ports();
             self.app.clock_in_sel = idx;
         }
+        // Scene/chain rename+duplicate act on the selection cursor; prime it.
+        if let Some((is_chain, index)) = command::song_sel_prep(&cmd) {
+            if is_chain {
+                self.app.chain_sel = index;
+            } else {
+                self.app.scene_sel = index;
+            }
+        }
         if let Some((lane, row, col)) = target_cell(&cmd) {
             self.place_cursor(lane, row, col);
         }
@@ -222,6 +230,20 @@ impl Core {
             .set_status(if now { "Favorited" } else { "Unfavorited" });
     }
 
+    /// Append scene `scene_idx` to chain `chain_idx`. Resolves the scene's id
+    /// (which `Action::AddChainEntry` needs) from the current set.
+    pub fn add_chain_entry(&mut self, chain_idx: usize, scene_idx: usize) {
+        let Some(scene) = self.app.set.scenes.get(scene_idx) else {
+            return;
+        };
+        let scene_id = scene.id.clone();
+        let cmds = self.app.apply(Action::AddChainEntry {
+            chain: chain_idx,
+            scene_id,
+        });
+        self.forward(cmds);
+    }
+
     pub fn on_engine_event(&mut self, ev: EngineEvent) {
         let cmds = self.app.on_engine_event(ev);
         self.forward(cmds);
@@ -303,6 +325,13 @@ fn gui_audition(
 fn gui_place_note(lane: usize, col: usize, pitch: u8, state: tauri::State<GuiState>) -> Snapshot {
     let mut core = state.core.lock().unwrap();
     core.place_note(lane, col, pitch);
+    core.snapshot()
+}
+
+#[tauri::command]
+fn gui_add_chain_entry(chain: usize, scene: usize, state: tauri::State<GuiState>) -> Snapshot {
+    let mut core = state.core.lock().unwrap();
+    core.add_chain_entry(chain, scene);
     core.snapshot()
 }
 
@@ -487,6 +516,7 @@ pub fn run() {
             gui_load_pattern,
             gui_audition,
             gui_place_note,
+            gui_add_chain_entry,
             gui_stop_audition,
             gui_toggle_favorite,
             gui_set_list,

@@ -2,6 +2,7 @@
 // listings. All UI reads from `state`; all mutations go out through `send`.
 
 import {
+  addChainEntry as bridgeAddChainEntry,
   auditionPattern,
   dispatch as bridgeDispatch,
   getAppVersion,
@@ -139,6 +140,14 @@ export async function userPatternCmd(cmd: GuiCommand): Promise<void> {
     app.snap = await bridgeDispatch(cmd);
     app.library = await getLibrary();
     app.userPatterns = await getUserPatterns();
+  } catch (e) {
+    app.error = String(e);
+  }
+}
+
+export async function addChainEntry(chain: number, scene: number): Promise<void> {
+  try {
+    app.snap = await bridgeAddChainEntry(chain, scene);
   } catch (e) {
     app.error = String(e);
   }

@@ -202,6 +202,39 @@ pub enum GuiCommand {
     CaptureScene,
     PlayChain(usize),
     StopChain,
+    JumpChainEntry(usize),
+    RenameScene {
+        index: usize,
+        name: String,
+    },
+    DuplicateScene(usize),
+    DeleteScene(usize),
+    CreateChain,
+    RenameChain {
+        index: usize,
+        name: String,
+    },
+    DeleteChain(usize),
+    ToggleChainLoop(usize),
+    RemoveChainEntry {
+        chain: usize,
+        entry: usize,
+    },
+    MoveChainEntry {
+        chain: usize,
+        entry: usize,
+        up: bool,
+    },
+    SetChainEntryRepeats {
+        chain: usize,
+        entry: usize,
+        value: u32,
+    },
+    SetChainEntryBars {
+        chain: usize,
+        entry: usize,
+        value: u32,
+    },
 
     // --- generative tool (operates on the focused lane; live preview) ---
     OpenGenerative,
@@ -295,6 +328,17 @@ pub fn command_lane(cmd: &GuiCommand) -> Option<usize> {
     }
 }
 
+/// Scene/chain rename+duplicate act on `App::scene_sel` / `chain_sel`; the
+/// dispatcher primes the right selector first. Returns `(is_chain, index)`.
+pub fn song_sel_prep(cmd: &GuiCommand) -> Option<(bool, usize)> {
+    use GuiCommand::*;
+    match *cmd {
+        RenameScene { index, .. } | DuplicateScene(index) => Some((false, index)),
+        RenameChain { index, .. } => Some((true, index)),
+        _ => None,
+    }
+}
+
 /// Clock-in selection reads `App::clock_in_sel` (against a refreshed
 /// `clock_in_ports`); the dispatcher primes both before applying `ClockInConfirm`.
 /// Returns the target selection index (0 = clear, 1..=n = port).
@@ -344,6 +388,41 @@ pub fn gui_to_actions(cmd: &GuiCommand) -> Vec<Action> {
         G::CaptureScene => vec![Action::CaptureScene],
         G::PlayChain(i) => vec![Action::PlayChain(i)],
         G::StopChain => vec![Action::StopChain],
+        G::JumpChainEntry(i) => vec![Action::JumpChainEntry(i)],
+        // scene_sel / chain_sel primed by the dispatcher for the *_sel-based actions.
+        G::RenameScene { ref name, .. } => vec![Action::DoRenameScene(name.clone())],
+        G::DuplicateScene(_) => vec![Action::DuplicateScene],
+        G::DeleteScene(i) => vec![Action::DoDeleteScene(i)],
+        G::CreateChain => vec![Action::CreateChain],
+        G::RenameChain { ref name, .. } => vec![Action::DoRenameChain(name.clone())],
+        G::DeleteChain(i) => vec![Action::DoDeleteChain(i)],
+        G::ToggleChainLoop(i) => vec![Action::ToggleChainLoop(i)],
+        G::RemoveChainEntry { chain, entry } => vec![Action::RemoveChainEntry { chain, entry }],
+        G::MoveChainEntry { chain, entry, up } => {
+            vec![Action::MoveChainEntry { chain, entry, up }]
+        }
+        G::SetChainEntryRepeats {
+            chain,
+            entry,
+            value,
+        } => {
+            vec![Action::SetChainEntryRepeats {
+                chain,
+                entry,
+                value,
+            }]
+        }
+        G::SetChainEntryBars {
+            chain,
+            entry,
+            value,
+        } => {
+            vec![Action::SetChainEntryBars {
+                chain,
+                entry,
+                value,
+            }]
+        }
 
         // generative — all no-ops unless the preview is active (App guards on
         // temp_transform); unknown mode/field strings translate to nothing.

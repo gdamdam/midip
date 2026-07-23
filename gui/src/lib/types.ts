@@ -269,6 +269,18 @@ export type GuiCommand =
   | { type: "captureScene" }
   | { type: "playChain"; args: number }
   | { type: "stopChain" }
+  | { type: "jumpChainEntry"; args: number }
+  | { type: "renameScene"; args: { index: number; name: string } }
+  | { type: "duplicateScene"; args: number }
+  | { type: "deleteScene"; args: number }
+  | { type: "createChain" }
+  | { type: "renameChain"; args: { index: number; name: string } }
+  | { type: "deleteChain"; args: number }
+  | { type: "toggleChainLoop"; args: number }
+  | { type: "removeChainEntry"; args: { chain: number; entry: number } }
+  | { type: "moveChainEntry"; args: { chain: number; entry: number; up: boolean } }
+  | { type: "setChainEntryRepeats"; args: { chain: number; entry: number; value: number } }
+  | { type: "setChainEntryBars"; args: { chain: number; entry: number; value: number } }
   | { type: "openGenerative" }
   | { type: "genSetMode"; args: string }
   | { type: "genAdjust"; args: { field: string; delta: number } }

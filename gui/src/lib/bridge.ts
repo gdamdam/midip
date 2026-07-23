@@ -48,6 +48,9 @@ export const toggleFavorite = (
   name: string,
 ): Promise<LibraryData> => invoke("gui_toggle_favorite", { role, genre, name });
 
+export const addChainEntry = (chain: number, scene: number): Promise<Snapshot> =>
+  invoke("gui_add_chain_entry", { chain, scene });
+
 export const getSetList = (): Promise<SetEntry[]> => invoke("gui_set_list");
 
 export const getOutputPorts = (): Promise<string[]> => invoke("gui_output_ports");
