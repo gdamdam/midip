@@ -1,0 +1,216 @@
+{
+  "schema": "midip.pattern",
+  "version": 2,
+  "factory_id": "drums.disco.chorus",
+  "role": "drums",
+  "kind": "drums",
+  "genre": "disco",
+  "name": "Chorus",
+  "desc": "Full chorus with sixteenth hats and a Latin-disco cowbell riding the eighths.",
+  "length": 16,
+  "steps": [
+    [
+      {
+        "note": 36,
+        "vel": 118
+      },
+      {
+        "note": 42,
+        "vel": 102
+      },
+      {
+        "note": 56,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      },
+      {
+        "note": 46,
+        "vel": 102
+      },
+      {
+        "note": 56,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 36,
+        "vel": 118
+      },
+      {
+        "note": 38,
+        "vel": 118
+      },
+      {
+        "note": 42,
+        "vel": 102
+      },
+      {
+        "note": 56,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      },
+      {
+        "note": 46,
+        "vel": 102
+      },
+      {
+        "note": 56,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 36,
+        "vel": 118
+      },
+      {
+        "note": 42,
+        "vel": 102
+      },
+      {
+        "note": 56,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      },
+      {
+        "note": 46,
+        "vel": 102
+      },
+      {
+        "note": 56,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 36,
+        "vel": 118
+      },
+      {
+        "note": 38,
+        "vel": 118
+      },
+      {
+        "note": 42,
+        "vel": 102
+      },
+      {
+        "note": 56,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      },
+      {
+        "note": 46,
+        "vel": 102
+      },
+      {
+        "note": 56,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ]
+  ],
+  "metadata": {
+    "bpm_min": 115,
+    "bpm_max": 125,
+    "feel": "straight",
+    "timing": "straight",
+    "energy": "high",
+    "density": "dense",
+    "tags": [
+      "disco",
+      "four-on-floor"
+    ],
+    "harmonic": null,
+    "chord_poly": "none",
+    "subgenre": "disco",
+    "compatible_devices": [
+      "t8-drums",
+      "rd-8",
+      "drumbrute-impact",
+      "circuit-drums",
+      "generic-gm-drums"
+    ],
+    "function": "variation_b"
+  },
+  "provenance": {
+    "source": "factory",
+    "author": "midip factory",
+    "pack": "funk-disco",
+    "license": "original generic groove (no copyrighted material)",
+    "references": [
+      "DRUM! Magazine four-on-the-floor disco lesson",
+      "zZounds disco drums (kick every beat, open hat on the and)",
+      "Disco BPM reference (bpmcalc)",
+      "Magenta Groove MIDI Dataset"
+    ]
+  }
+}

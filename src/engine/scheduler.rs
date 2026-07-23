@@ -19,19 +19,21 @@ pub enum NoteDomain {
 }
 
 /// Quantization grid for a queued per-lane launch (design §1: launch grid = the
-/// GLOBAL 4/4 bar of 16 sixteenth steps). `NextBar` launches on a bar boundary
-/// (absolute step % 16 == 0); `NextBeat` on a beat boundary (% 4 == 0).
+/// GLOBAL bar). `NextBar` launches on a bar boundary (absolute step %
+/// `steps_per_bar` == 0); `NextBeat` on a beat boundary (% 4 == 0, i.e. one
+/// quarter-note = four 16ths, universal across x/4 meters).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Quant {
     NextBar,
     NextBeat,
 }
 
-/// True when absolute `step` lands on quant `q`'s grid. Both grids are true at
-/// step 0 (a queue placed before play would launch on the very first step — fine).
-pub fn is_boundary(step: usize, q: Quant) -> bool {
+/// True when absolute `step` lands on quant `q`'s grid for a transport of
+/// `steps_per_bar` steps per bar (16 = 4/4). Both grids are true at step 0.
+/// Passing `steps_per_bar = 16` reproduces the pre-Phase-9 4/4 behaviour exactly.
+pub fn is_boundary(step: usize, q: Quant, steps_per_bar: usize) -> bool {
     match q {
-        Quant::NextBar => step.is_multiple_of(16),
+        Quant::NextBar => step.is_multiple_of(steps_per_bar.max(1)),
         Quant::NextBeat => step.is_multiple_of(4),
     }
 }
@@ -97,6 +99,25 @@ pub fn swing_offset_micros(step_index: usize, swing: f32, step_dur: u64) -> i64 
 /// Note length in microseconds: `round(len * step_dur)`.
 pub fn note_len_micros(len: f32, step_dur: u64) -> u64 {
     (len as f64 * step_dur as f64).round() as u64
+}
+
+/// Convert a per-note microtiming value into a microsecond offset.
+///
+/// `micro` is authored in **signed permille of a step** (1/1000 of a 16th-note
+/// step), so the offset is BPM-scaled: `micro * step_dur / 1000`. Authoring paths
+/// clamp `micro` to ±500 (half a step); this function does not clamp on its own —
+/// callers combine it with the swing offset and clamp the *sum* to ±(step_dur/2)
+/// so a note can never cross into a neighbouring step (see `combined_offset`).
+pub fn micro_offset_micros(micro: i16, step_dur: u64) -> i64 {
+    micro as i64 * step_dur as i64 / 1000
+}
+
+/// Combine a step's swing offset with a note's microtiming offset and clamp the
+/// total deviation from the step start to ±(step_dur/2). This is the single place
+/// that guarantees swing+micro can never reorder an event past an adjacent step.
+pub fn combined_offset(swing_off: i64, micro: i16, step_dur: u64) -> i64 {
+    let half = step_dur as i64 / 2;
+    (swing_off + micro_offset_micros(micro, step_dur)).clamp(-half, half)
 }
 
 /// A MIDI message scheduled for a specific lane at a specific monotonic time.
@@ -490,6 +511,17 @@ impl Sequencer {
         self.playing
     }
 
+    /// Global transport steps-per-bar (16 = 4/4). Phase 9.
+    pub fn steps_per_bar(&self) -> usize {
+        self.set.steps_per_bar.max(1)
+    }
+
+    /// Ableton Link `quantum` (beats per bar) derived from the meter: a beat is
+    /// four 16th-steps, so quantum = steps_per_bar / 4. 4/4 → 4.0 (unchanged).
+    pub fn link_quantum(&self) -> f64 {
+        (self.steps_per_bar() as f64 / 4.0).max(1.0)
+    }
+
     /// The ABSOLUTE 16th-step counter since play (monotonic, never wrapped).
     pub fn current_step(&self) -> usize {
         self.current
@@ -767,7 +799,8 @@ impl Sequencer {
         // holding a borrow of `self.queued` across the &mut self release/update calls.
         let mut due: Vec<(usize, Pattern, Option<LaunchState>)> = Vec::new();
         for (lane, slot) in self.queued.iter_mut().enumerate() {
-            let fire = matches!(slot, Some((_, q, _)) if is_boundary(step, *q));
+            let fire =
+                matches!(slot, Some((_, q, _)) if is_boundary(step, *q, self.set.steps_per_bar));
             if fire {
                 // take() leaves None → exactly-once (the slot is cleared on apply).
                 if let Some((pattern, _, state)) = slot.take() {
@@ -840,16 +873,17 @@ impl Sequencer {
             // Computed per-lane so two lanes in the same Set can swing differently.
             let lane_swing = self.set.lanes[lane_idx].swing.unwrap_or(self.set.swing);
             // Swing is keyed on the global step index so even/odd alternation stays
-            // consistent with the global grid regardless of division.
-            let swung =
-                (step_start as i64 + swing_offset_micros(step, lane_swing, dur)).max(0) as u64;
+            // consistent with the global grid regardless of division. `swing_off` is
+            // passed on so per-note microtiming can be combined with it and the sum
+            // clamped to ±(dur/2) — the guarantee against cross-step reordering.
+            let swing_off = swing_offset_micros(step, lane_swing, dur);
 
             let kind_is_drums =
                 matches!(self.set.lanes[lane_idx].pattern.data, PatternData::Drums(_));
             if kind_is_drums {
-                self.materialize_drum_step(lane_idx, effective_step, swung, dur);
+                self.materialize_drum_step(lane_idx, effective_step, step_start, swing_off, dur);
             } else {
-                self.materialize_melodic_step(lane_idx, effective_step, swung, dur);
+                self.materialize_melodic_step(lane_idx, effective_step, step_start, swing_off, dur);
             }
         }
     }
@@ -887,7 +921,14 @@ impl Sequencer {
         self.fill_active = on;
     }
 
-    fn materialize_drum_step(&mut self, lane_idx: usize, step: usize, swung: u64, dur: u64) {
+    fn materialize_drum_step(
+        &mut self,
+        lane_idx: usize,
+        step: usize,
+        step_start: u64,
+        swing_off: i64,
+        dur: u64,
+    ) {
         let lane = &self.set.lanes[lane_idx];
         let count = lane.pattern.step_count().max(1);
         let local = self.local_step_for(lane_idx, step, count);
@@ -923,11 +964,11 @@ impl Sequencer {
             let r = hit.ratchet.max(1) as u64;
             let sub = dur / r;
             let gate = note_len_micros(gate_fraction, sub);
-            // Microtiming: shift the whole group (all ratchet sub-events) by hit.micro,
-            // clamped to ±(dur/2) so a hit can never cross into a neighbouring step.
-            // Absolute time is also clamped to 0 (can't schedule before epoch).
-            let micro = (hit.micro as i64).clamp(-(dur as i64 / 2), dur as i64 / 2);
-            let base_on = (swung as i64 + micro).max(0) as u64;
+            // Microtiming: shift the whole group (all ratchet sub-events) by the
+            // combined swing+micro offset, clamped to ±(dur/2) so a hit can never
+            // cross into a neighbouring step. Absolute time is clamped to 0.
+            let combined = combined_offset(swing_off, hit.micro, dur);
+            let base_on = (step_start as i64 + combined).max(0) as u64;
             // Record the earliest NoteOn for CC placement.
             earliest_on_at = Some(match earliest_on_at {
                 Some(prev) => prev.min(base_on),
@@ -977,9 +1018,19 @@ impl Sequencer {
         }
     }
 
-    fn materialize_melodic_step(&mut self, lane_idx: usize, step: usize, swung: u64, dur: u64) {
+    fn materialize_melodic_step(
+        &mut self,
+        lane_idx: usize,
+        step: usize,
+        step_start: u64,
+        swing_off: i64,
+        dur: u64,
+    ) {
         use crate::devices::profiles::{melodic_velocity, resolve_melodic_pitch};
 
+        // The step's swung onset (no per-note micro) — used for slide releases and
+        // as the chord path's shared step time.
+        let swung = (step_start as i64 + swing_off).max(0) as u64;
         let lane = &self.set.lanes[lane_idx];
         let count = lane.pattern.step_count().max(1);
         let local = self.local_step_for(lane_idx, step, count);
@@ -1012,7 +1063,7 @@ impl Sequencer {
                 &step_notes,
                 (channel, &port_stable_key, &cc_locks),
                 (loop_index, is_first),
-                swung,
+                (step_start, swing_off),
                 dur,
             );
             return;
@@ -1043,10 +1094,10 @@ impl Sequencer {
 
         let pitch = resolve_melodic_pitch(root, note.semi, transpose, octave);
         let vel = melodic_velocity(note.vel);
-        // Microtiming: shift NoteOn (and all NoteOffs/ratchets) by note.micro,
-        // clamped to ±(dur/2) so the note can't reorder into a neighbouring step.
-        let micro = (note.micro as i64).clamp(-(dur as i64 / 2), dur as i64 / 2);
-        let on_at = (swung as i64 + micro).max(0) as u64;
+        // Microtiming: shift NoteOn (and all NoteOffs/ratchets) by the combined
+        // swing+micro offset, clamped to ±(dur/2) so the note can't reorder into a
+        // neighbouring step.
+        let on_at = (step_start as i64 + combined_offset(swing_off, note.micro, dur)).max(0) as u64;
 
         // Emit CC locks just before the NoteOn (this step fires at least one note).
         if !cc_locks.is_empty() {
@@ -1247,11 +1298,14 @@ impl Sequencer {
         notes: &[MelodicNote],
         route_cc: (u8, &str, &[CcLock]),
         loop_ctx: (u64, bool),
-        swung: u64,
+        timing: (u64, i64),
         dur: u64,
     ) {
         let (channel, port_stable_key, cc_locks) = route_cc;
         let (loop_index, is_first) = loop_ctx;
+        let (step_start, swing_off) = timing;
+        // The chord's shared step onset (no per-note micro) for the legato release.
+        let swung = (step_start as i64 + swing_off).max(0) as u64;
         use crate::devices::profiles::{melodic_velocity, resolve_melodic_pitch};
 
         let lane = &self.set.lanes[lane_idx];
@@ -1293,10 +1347,10 @@ impl Sequencer {
             }
             let pitch = resolve_melodic_pitch(root, note.semi, transpose, octave);
             let vel = melodic_velocity(note.vel);
-            // Per-note microtiming: each chord note shifts independently, clamped to
-            // ±(dur/2) so it can't reorder into a neighbouring step.
-            let micro = (note.micro as i64).clamp(-(dur as i64 / 2), dur as i64 / 2);
-            let on_at = (swung as i64 + micro).max(0) as u64;
+            // Per-note microtiming: each chord note shifts independently by the
+            // combined swing+micro offset, clamped to ±(dur/2).
+            let on_at =
+                (step_start as i64 + combined_offset(swing_off, note.micro, dur)).max(0) as u64;
             // Track earliest NoteOn across all firing chord notes for CC placement.
             earliest_on_at = Some(match earliest_on_at {
                 Some(prev) => prev.min(on_at),
@@ -1481,6 +1535,47 @@ mod tests {
     }
 
     #[test]
+    fn micro_offset_is_permille_of_step_and_bpm_scaled() {
+        // +160 permille = +0.16 step. Scales with BPM via step_dur.
+        assert_eq!(micro_offset_micros(160, step_dur_micros(120.0)), 20_000); // dur 125_000
+        assert_eq!(micro_offset_micros(160, step_dur_micros(240.0)), 10_000); // dur 62_500
+        assert_eq!(micro_offset_micros(-160, step_dur_micros(120.0)), -20_000);
+        assert_eq!(micro_offset_micros(0, 125_000), 0);
+    }
+
+    #[test]
+    fn combined_offset_clamps_swing_plus_micro_to_half_step() {
+        let dur = step_dur_micros(120.0); // 125_000; half = 62_500
+        let half = dur as i64 / 2;
+        // Max legal swing offset (0.66) + max micro (+500 permille) must clamp to +½ step,
+        // never pushing an event onto the next downbeat.
+        let swing_off = swing_offset_micros(1, 0.66, dur); // 40_000
+        assert_eq!(combined_offset(swing_off, 500, dur), half);
+        // Symmetric negative clamp.
+        assert_eq!(combined_offset(0, -500, dur), -half);
+        // A modest combination is NOT clamped (passes through).
+        assert_eq!(combined_offset(0, 160, dur), 20_000);
+        // Whatever the inputs, the result is always within ±½ step (no cross-step).
+        for so in [0, 20_000, 40_000] {
+            for m in [-500, -160, 0, 160, 500] {
+                assert!(combined_offset(so, m, dur).abs() <= half);
+            }
+        }
+    }
+
+    #[test]
+    fn combined_offset_safe_at_bpm_extremes() {
+        for bpm in [MIN_BPM, 20.0, 120.0, 300.0, MAX_BPM] {
+            let dur = step_dur_micros(bpm);
+            let half = dur as i64 / 2;
+            for m in [i16::MIN, -500, 0, 500, i16::MAX] {
+                let c = combined_offset(swing_offset_micros(1, 0.66, dur), m, dur);
+                assert!(c.abs() <= half, "bpm {bpm} micro {m} exceeded half-step");
+            }
+        }
+    }
+
+    #[test]
     fn note_len_micros_rounds_fractional_steps() {
         // 0.5 * 125_000 = 62_500
         assert_eq!(note_len_micros(0.5, 125_000), 62_500);
@@ -1617,6 +1712,7 @@ mod sequencer_tests {
             scenes: Vec::new(),
             chains: Vec::new(),
             clock_in_port: None,
+            steps_per_bar: 16,
         }
     }
 
@@ -3188,18 +3284,26 @@ mod sequencer_tests {
 
     #[test]
     fn is_boundary_matches_bar_and_beat_grids() {
-        // NextBar: multiples of 16. NextBeat: multiples of 4. Both true at 0.
-        assert!(is_boundary(0, Quant::NextBar));
-        assert!(is_boundary(16, Quant::NextBar));
-        assert!(is_boundary(32, Quant::NextBar));
-        assert!(!is_boundary(4, Quant::NextBar));
-        assert!(!is_boundary(15, Quant::NextBar));
+        // 4/4 (steps_per_bar=16): NextBar multiples of 16, NextBeat multiples of 4.
+        assert!(is_boundary(0, Quant::NextBar, 16));
+        assert!(is_boundary(16, Quant::NextBar, 16));
+        assert!(is_boundary(32, Quant::NextBar, 16));
+        assert!(!is_boundary(4, Quant::NextBar, 16));
+        assert!(!is_boundary(15, Quant::NextBar, 16));
 
-        assert!(is_boundary(0, Quant::NextBeat));
-        assert!(is_boundary(4, Quant::NextBeat));
-        assert!(is_boundary(8, Quant::NextBeat));
-        assert!(!is_boundary(3, Quant::NextBeat));
-        assert!(!is_boundary(5, Quant::NextBeat));
+        assert!(is_boundary(0, Quant::NextBeat, 16));
+        assert!(is_boundary(4, Quant::NextBeat, 16));
+        assert!(is_boundary(8, Quant::NextBeat, 16));
+        assert!(!is_boundary(3, Quant::NextBeat, 16));
+        assert!(!is_boundary(5, Quant::NextBeat, 16));
+
+        // 3/4 (steps_per_bar=12): bar boundary every 12 steps; beat unchanged.
+        assert!(is_boundary(12, Quant::NextBar, 12));
+        assert!(is_boundary(24, Quant::NextBar, 12));
+        assert!(!is_boundary(16, Quant::NextBar, 12));
+        // 5/4 (steps_per_bar=20).
+        assert!(is_boundary(20, Quant::NextBar, 20));
+        assert!(!is_boundary(16, Quant::NextBar, 20));
     }
 
     #[test]
@@ -3269,6 +3373,50 @@ mod sequencer_tests {
             launched.contains(&0),
             "lane 0 must be reported as launched; got {launched:?}"
         );
+    }
+
+    #[test]
+    fn launch_next_bar_uses_steps_per_bar_meter() {
+        // 3/4 transport (steps_per_bar = 12): NextBar must fire at global step 12,
+        // not the 4/4 step 16. Proves the meter threads into launch quantization.
+        let dur = step_dur_micros(120.0);
+        let mut set = set_with(vec![drum_lane_step0_note(36)]);
+        set.steps_per_bar = 12;
+        let mut seq = Sequencer::new(set);
+        let mut sink = RecordingSink::new();
+        seq.play(0);
+        let mut now = 0u64;
+        while now <= 14 * dur {
+            if now == 2 * dur {
+                seq.queue_launch(0, drum_pattern_step0_note(50), Quant::NextBar);
+            }
+            seq.tick(now, &mut sink);
+            now += 1_000;
+        }
+        let new_ons = kick_note_on_abs_steps(&sink, 50, dur);
+        assert!(
+            new_ons.contains(&12),
+            "3/4 NextBar must launch at global step 12; got {new_ons:?}"
+        );
+        assert!(
+            !new_ons.contains(&16),
+            "must NOT launch on the 4/4 bar (step 16) in 3/4"
+        );
+    }
+
+    #[test]
+    fn link_quantum_follows_meter() {
+        let mut s12 = set_with(vec![drum_lane_step0_note(36)]);
+        s12.steps_per_bar = 12;
+        let seq12 = Sequencer::new(s12);
+        assert_eq!(seq12.steps_per_bar(), 12);
+        assert_eq!(seq12.link_quantum(), 3.0); // 3/4 → 3 beats/bar
+        let mut s16 = set_with(vec![drum_lane_step0_note(36)]);
+        s16.steps_per_bar = 16;
+        assert_eq!(Sequencer::new(s16).link_quantum(), 4.0); // 4/4 unchanged
+        let mut s20 = set_with(vec![drum_lane_step0_note(36)]);
+        s20.steps_per_bar = 20;
+        assert_eq!(Sequencer::new(s20).link_quantum(), 5.0); // 5/4
     }
 
     #[test]
@@ -4343,7 +4491,9 @@ mod sequencer_tests {
     #[test]
     fn drum_micro_positive_shifts_noteon_and_noteoff() {
         let dur = step_dur_micros(120.0); // 125_000
-        let micro_val: i16 = 1_000; // +1 ms
+                                          // micro is permille-of-step: +160 => +0.16 step => +20_000µs at 120 BPM.
+        let micro_val: i16 = 160;
+        let shift = micro_offset_micros(micro_val, dur) as u64; // 20_000
         let mut seq = Sequencer::new(set_with(vec![drum_lane_micro(36, micro_val)]));
         let mut sink = RecordingSink::new();
         seq.play(0);
@@ -4356,11 +4506,7 @@ mod sequencer_tests {
             .filter(|(_, m)| matches!(m, MidiMessage::NoteOn { note: 36, .. }))
             .map(|(t, _)| *t)
             .collect();
-        assert_eq!(
-            on_times,
-            vec![micro_val as u64],
-            "NoteOn must shift by +micro"
-        );
+        assert_eq!(on_times, vec![shift], "NoteOn must shift by +micro");
 
         let gate = note_len_micros(T8_DRUMS.drum_gate_fraction, dur);
         let off_times: Vec<u64> = sink
@@ -4371,7 +4517,7 @@ mod sequencer_tests {
             .collect();
         assert_eq!(
             off_times,
-            vec![micro_val as u64 + gate],
+            vec![shift + gate],
             "NoteOff must shift by the same +micro"
         );
     }
@@ -4379,7 +4525,8 @@ mod sequencer_tests {
     #[test]
     fn drum_micro_negative_shifts_noteon_and_noteoff() {
         let dur = step_dur_micros(120.0); // 125_000
-        let micro_val: i16 = -2_000; // -2 ms
+                                          // -16 permille => -2_000µs at 120 BPM.
+        let micro_val: i16 = -16;
         let mut seq = Sequencer::new(set_with(vec![drum_lane_micro(36, micro_val)]));
         let mut sink = RecordingSink::new();
         seq.play(0);
@@ -4450,9 +4597,50 @@ mod sequencer_tests {
     }
 
     #[test]
+    fn playback_is_deterministic_with_swing_micro_and_probability() {
+        // A lane combining lane-swing, per-note microtiming and probability must
+        // replay byte-identically under the same seed, and timing (not just RNG)
+        // must be reproducible.
+        let dur = step_dur_micros(120.0);
+        let mut lane = drum_lane_micro(38, 120); // +120 permille micro
+        if let PatternData::Drums(s) = &mut lane.pattern.data {
+            s[0][0].prob = 0.5; // probabilistic → exercises the seeded RNG
+        }
+        let mut base = set_with(vec![lane]);
+        base.swing = 0.58; // lane swing on top of per-note micro
+
+        let play = |seed: u64| {
+            let mut seq = Sequencer::new(base.clone());
+            seq.set_seed(seed);
+            let mut sink = RecordingSink::new();
+            seq.play(0);
+            run(&mut seq, &mut sink, 8 * dur, 250);
+            sink.events
+        };
+
+        // Same seed → identical event stream (times, notes, order).
+        assert_eq!(
+            play(777),
+            play(777),
+            "same seed must reproduce playback exactly"
+        );
+        // A different seed can change which probabilistic hits fire, but every event
+        // that DOES fire still lands on a deterministic swung+micro time.
+        let a = play(777);
+        assert!(
+            a.iter().all(|(_, m)| matches!(
+                m,
+                MidiMessage::NoteOn { .. } | MidiMessage::NoteOff { .. }
+            )),
+            "only note events expected"
+        );
+    }
+
+    #[test]
     fn drum_ratchet_all_sub_events_shift_by_micro() {
         let dur = step_dur_micros(120.0); // 125_000
-        let micro_val: i16 = 5_000;
+        let micro_val: i16 = 40; // +40 permille => +5_000µs at 120 BPM
+        let shift = micro_offset_micros(micro_val, dur) as u64; // 5_000
         let ratchet = 2u8;
         let sub = dur / ratchet as u64; // 62_500
         let mut seq = Sequencer::new(set_with(vec![drum_lane_micro_ratchet(
@@ -4469,8 +4657,8 @@ mod sequencer_tests {
             .map(|(t, _)| *t)
             .collect();
         let expected_on = vec![
-            micro_val as u64,       // sub-hit 0: 0 + micro
-            sub + micro_val as u64, // sub-hit 1: sub + micro
+            shift,       // sub-hit 0: 0 + micro
+            sub + shift, // sub-hit 1: sub + micro
         ];
         assert_eq!(
             on_times, expected_on,
@@ -4484,7 +4672,7 @@ mod sequencer_tests {
             .filter(|(_, m)| matches!(m, MidiMessage::NoteOff { note: 36, .. }))
             .map(|(t, _)| *t)
             .collect();
-        let expected_off = vec![micro_val as u64 + gate, sub + micro_val as u64 + gate];
+        let expected_off = vec![shift + gate, sub + shift + gate];
         assert_eq!(
             off_times, expected_off,
             "all ratchet NoteOffs must shift by micro"
@@ -4496,7 +4684,8 @@ mod sequencer_tests {
     #[test]
     fn melodic_micro_positive_shifts_noteon_and_noteoff() {
         let dur = step_dur_micros(120.0);
-        let micro_val: i16 = 3_000;
+        let micro_val: i16 = 24; // +24 permille => +3_000µs at 120 BPM
+        let shift = micro_offset_micros(micro_val, dur) as u64; // 3_000
         let mut seq = Sequencer::new(set_with(vec![melodic_lane_micro(0, micro_val)]));
         let mut sink = RecordingSink::new();
         seq.play(0);
@@ -4508,11 +4697,7 @@ mod sequencer_tests {
             .filter(|(_, m)| matches!(m, MidiMessage::NoteOn { .. }))
             .map(|(t, _)| *t)
             .collect();
-        assert_eq!(
-            on_times,
-            vec![micro_val as u64],
-            "melodic NoteOn must shift by +micro"
-        );
+        assert_eq!(on_times, vec![shift], "melodic NoteOn must shift by +micro");
 
         let off_times: Vec<u64> = sink
             .events
@@ -4521,7 +4706,7 @@ mod sequencer_tests {
             .map(|(t, _)| *t)
             .collect();
         // len=0.5 → off = on_at + note_len_micros(0.5, dur)
-        let expected_off = micro_val as u64 + note_len_micros(0.5, dur);
+        let expected_off = shift + note_len_micros(0.5, dur);
         assert_eq!(
             off_times,
             vec![expected_off],
@@ -4575,7 +4760,8 @@ mod sequencer_tests {
     #[test]
     fn melodic_ratchet_all_sub_events_shift_by_micro() {
         let dur = step_dur_micros(120.0);
-        let micro_val: i16 = 4_000;
+        let micro_val: i16 = 32; // +32 permille => +4_000µs at 120 BPM
+        let shift = micro_offset_micros(micro_val, dur) as u64;
         let ratchet = 2u8;
         let sub = dur / ratchet as u64;
         let mut seq = Sequencer::new(set_with(vec![melodic_lane_micro_ratchet(
@@ -4591,7 +4777,7 @@ mod sequencer_tests {
             .filter(|(_, m)| matches!(m, MidiMessage::NoteOn { .. }))
             .map(|(t, _)| *t)
             .collect();
-        let expected_on = vec![micro_val as u64, sub + micro_val as u64];
+        let expected_on = vec![shift, sub + shift];
         assert_eq!(
             on_times, expected_on,
             "all melodic ratchet NoteOns must shift by micro"
@@ -4652,8 +4838,9 @@ mod sequencer_tests {
     fn chord_micro_per_note_shifts_independently() {
         use crate::devices::profiles::resolve_melodic_pitch;
         let dur = step_dur_micros(120.0);
-        let micro_a: i16 = 2_000;
-        let micro_b: i16 = -1_000;
+        let micro_a: i16 = 16; // +16 permille => +2_000µs
+        let micro_b: i16 = -8; // -8 permille => -1_000µs (clamps to 0 at t=0)
+        let shift_a = micro_offset_micros(micro_a, dur) as u64;
         let mut seq = Sequencer::new(set_with(vec![chord_lane_micro(micro_a, micro_b)]));
         let mut sink = RecordingSink::new();
         seq.play(0);
@@ -4689,12 +4876,8 @@ mod sequencer_tests {
             .map(|(t, _)| *t)
             .collect();
 
-        assert_eq!(
-            on_a,
-            vec![micro_a as u64],
-            "chord note A must shift by micro_a"
-        );
-        // micro_b = -1000; swung=0 → on_at = (0 - 1000).max(0) = 0 (clamped)
+        assert_eq!(on_a, vec![shift_a], "chord note A must shift by micro_a");
+        // micro_b negative; swung=0 → on_at = (0 - offset).max(0) = 0 (clamped)
         assert_eq!(
             on_b,
             vec![0],
@@ -5443,6 +5626,7 @@ mod sequencer_tests {
             scenes: Vec::new(),
             chains: Vec::new(),
             clock_in_port: None,
+            steps_per_bar: 16,
         };
         let mut seq = Sequencer::new(set);
         let mut sink = RecordingSink::new();

@@ -1,0 +1,105 @@
+{
+  "schema": "midip.pattern",
+  "version": 2,
+  "factory_id": "drums.tech-house.tech-fill",
+  "role": "drums",
+  "kind": "drums",
+  "genre": "tech-house",
+  "name": "Tech Fill",
+  "desc": "Rim-shot ratchet roll across the last beat into a crash on the one.",
+  "length": 16,
+  "steps": [
+    [
+      {
+        "note": 36,
+        "vel": 118
+      },
+      {
+        "note": 49,
+        "vel": 118
+      }
+    ],
+    [],
+    [],
+    [],
+    [
+      {
+        "note": 36,
+        "vel": 118
+      }
+    ],
+    [],
+    [],
+    [],
+    [
+      {
+        "note": 36,
+        "vel": 118
+      }
+    ],
+    [],
+    [],
+    [],
+    [
+      {
+        "note": 37,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 37,
+        "vel": 102,
+        "ratchet": 2
+      }
+    ],
+    [
+      {
+        "note": 37,
+        "vel": 102,
+        "ratchet": 3
+      }
+    ],
+    [
+      {
+        "note": 37,
+        "vel": 102,
+        "ratchet": 4
+      }
+    ]
+  ],
+  "metadata": {
+    "bpm_min": 124,
+    "bpm_max": 128,
+    "feel": "straight",
+    "timing": "straight",
+    "energy": "high",
+    "density": "dense",
+    "tags": [
+      "tech-house",
+      "rolling"
+    ],
+    "harmonic": null,
+    "chord_poly": "none",
+    "subgenre": "tech-house",
+    "compatible_devices": [
+      "t8-drums",
+      "rd-8",
+      "drumbrute-impact",
+      "circuit-drums",
+      "generic-gm-drums"
+    ],
+    "function": "fill"
+  },
+  "provenance": {
+    "source": "factory",
+    "author": "midip factory",
+    "pack": "modern-club",
+    "license": "original generic groove (no copyrighted material)",
+    "references": [
+      "Tech-house production guides (Beatportal, Samplesound)",
+      "Roland TR-909 four-on-floor heritage",
+      "Magenta Groove MIDI Dataset"
+    ]
+  }
+}

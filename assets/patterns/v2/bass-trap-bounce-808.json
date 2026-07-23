@@ -1,0 +1,88 @@
+{
+  "schema": "midip.pattern",
+  "version": 2,
+  "factory_id": "bass.trap.bounce-808",
+  "role": "bass",
+  "kind": "melodic",
+  "genre": "trap",
+  "name": "Bounce 808",
+  "desc": "Bouncier 808 with more note movement and a mid-bar glide.",
+  "length": 16,
+  "steps": [
+    {
+      "semi": 0,
+      "vel": 1.15,
+      "slide": false,
+      "len": 1.5
+    },
+    null,
+    null,
+    null,
+    {
+      "semi": 0,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.5
+    },
+    null,
+    {
+      "semi": 3,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.5
+    },
+    null,
+    null,
+    null,
+    {
+      "semi": -2,
+      "vel": 1.0,
+      "slide": true,
+      "len": 1.0
+    },
+    null,
+    null,
+    {
+      "semi": 0,
+      "vel": 1.0,
+      "slide": false,
+      "len": 1.0
+    },
+    null,
+    null
+  ],
+  "metadata": {
+    "bpm_min": 130,
+    "bpm_max": 150,
+    "feel": "half-time",
+    "timing": "straight",
+    "energy": "mid",
+    "density": "dense",
+    "tags": [
+      "trap",
+      "808",
+      "bass"
+    ],
+    "harmonic": "minor",
+    "chord_poly": "mono",
+    "subgenre": "trap",
+    "compatible_devices": [
+      "t8-bass",
+      "td-3",
+      "generic-mono"
+    ],
+    "function": "variation_b"
+  },
+  "provenance": {
+    "source": "factory",
+    "author": "midip factory",
+    "pack": "hip-hop",
+    "license": "original generic groove (no copyrighted material)",
+    "references": [
+      "Magenta Groove MIDI Dataset",
+      "Roland T-8 AIRA Compact voice/engine (Perfect Circuit)",
+      "Roland TR-808 heritage (Wikipedia)",
+      "hi-hat roll / trap programming references"
+    ]
+  }
+}

@@ -1,0 +1,216 @@
+{
+  "schema": "midip.pattern",
+  "version": 2,
+  "factory_id": "synth.deep-house.four-bar-pads",
+  "role": "synth",
+  "kind": "melodic",
+  "genre": "deep-house",
+  "name": "Four-Bar Pads",
+  "desc": "Four-bar deep-house pad progression (Imaj7-vi-ii-V feel).",
+  "length": 64,
+  "steps": [
+    [
+      {
+        "semi": 0,
+        "vel": 1.0,
+        "slide": false,
+        "len": 8.0
+      },
+      {
+        "semi": 4,
+        "vel": 1.0,
+        "slide": false,
+        "len": 8.0
+      },
+      {
+        "semi": 7,
+        "vel": 1.0,
+        "slide": false,
+        "len": 8.0
+      },
+      {
+        "semi": 11,
+        "vel": 1.0,
+        "slide": false,
+        "len": 8.0
+      }
+    ],
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    [
+      {
+        "semi": -3,
+        "vel": 1.0,
+        "slide": false,
+        "len": 8.0
+      },
+      {
+        "semi": 0,
+        "vel": 1.0,
+        "slide": false,
+        "len": 8.0
+      },
+      {
+        "semi": 4,
+        "vel": 1.0,
+        "slide": false,
+        "len": 8.0
+      },
+      {
+        "semi": 9,
+        "vel": 1.0,
+        "slide": false,
+        "len": 8.0
+      }
+    ],
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    [
+      {
+        "semi": -1,
+        "vel": 1.0,
+        "slide": false,
+        "len": 8.0
+      },
+      {
+        "semi": 2,
+        "vel": 1.0,
+        "slide": false,
+        "len": 8.0
+      },
+      {
+        "semi": 5,
+        "vel": 1.0,
+        "slide": false,
+        "len": 8.0
+      },
+      {
+        "semi": 9,
+        "vel": 1.0,
+        "slide": false,
+        "len": 8.0
+      }
+    ],
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    [
+      {
+        "semi": -3,
+        "vel": 1.15,
+        "slide": false,
+        "len": 8.0
+      },
+      {
+        "semi": 0,
+        "vel": 1.15,
+        "slide": false,
+        "len": 8.0
+      },
+      {
+        "semi": 4,
+        "vel": 1.15,
+        "slide": false,
+        "len": 8.0
+      },
+      {
+        "semi": 7,
+        "vel": 1.15,
+        "slide": false,
+        "len": 8.0
+      }
+    ],
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+  ],
+  "metadata": {
+    "bpm_min": 120,
+    "bpm_max": 125,
+    "feel": "",
+    "timing": "straight",
+    "energy": "mid",
+    "density": "core",
+    "tags": [
+      "deep-house",
+      "4-bar",
+      "4/4"
+    ],
+    "harmonic": "major7",
+    "chord_poly": "chord",
+    "subgenre": "deep-house",
+    "compatible_devices": [
+      "s1",
+      "j-6",
+      "monologue",
+      "microfreak",
+      "minilogue-xd",
+      "generic-poly"
+    ],
+    "meter": "4/4",
+    "steps_per_bar": 16,
+    "bars": 4,
+    "function": "variation_b"
+  },
+  "provenance": {
+    "source": "factory",
+    "author": "midip factory",
+    "pack": "multi-bar",
+    "license": "original generic groove (no copyrighted material)",
+    "references": [
+      "Magenta Groove MIDI Dataset",
+      "documented genre groove references",
+      "standard meter/subdivision theory (3/4, 6/8, 5/4)"
+    ]
+  }
+}

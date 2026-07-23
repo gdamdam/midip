@@ -1,0 +1,118 @@
+{
+  "schema": "midip.pattern",
+  "version": 2,
+  "factory_id": "drums.dancehall.dembow-riddim",
+  "role": "drums",
+  "kind": "drums",
+  "genre": "dancehall",
+  "name": "Dembow Riddim",
+  "desc": "The dancehall dembow riddim: sparse kick, the boom-ch-boom-chick snare figure, offbeat hat tick.",
+  "length": 16,
+  "steps": [
+    [
+      {
+        "note": 36,
+        "vel": 118
+      }
+    ],
+    [],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 38,
+        "vel": 102,
+        "micro": 80
+      }
+    ],
+    [],
+    [],
+    [
+      {
+        "note": 38,
+        "vel": 118
+      },
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [],
+    [
+      {
+        "note": 36,
+        "vel": 102
+      }
+    ],
+    [],
+    [
+      {
+        "note": 36,
+        "vel": 48,
+        "prob": 0.5
+      },
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 38,
+        "vel": 102,
+        "micro": 80
+      }
+    ],
+    [],
+    [],
+    [
+      {
+        "note": 38,
+        "vel": 118
+      },
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    []
+  ],
+  "metadata": {
+    "bpm_min": 88,
+    "bpm_max": 105,
+    "feel": "swung-16 (light 54%)",
+    "timing": "light-swing",
+    "energy": "mid",
+    "density": "core",
+    "tags": [
+      "dancehall",
+      "dembow"
+    ],
+    "harmonic": null,
+    "chord_poly": "none",
+    "subgenre": "dancehall",
+    "compatible_devices": [
+      "t8-drums",
+      "rd-8",
+      "drumbrute-impact",
+      "circuit-drums",
+      "generic-gm-drums"
+    ],
+    "function": "core"
+  },
+  "provenance": {
+    "source": "factory",
+    "author": "midip factory",
+    "pack": "reggae-dancehall",
+    "license": "original generic groove (no copyrighted material)",
+    "references": [
+      "'Dembow: A Loop History' (Red Bull Music Academy)",
+      "Dancehall dembow riddim lineage",
+      "Magenta Groove MIDI Dataset"
+    ]
+  }
+}

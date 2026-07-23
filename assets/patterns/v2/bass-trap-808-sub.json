@@ -1,0 +1,78 @@
+{
+  "schema": "midip.pattern",
+  "version": 2,
+  "factory_id": "bass.trap.808-sub",
+  "role": "bass",
+  "kind": "melodic",
+  "genre": "trap",
+  "name": "808 Sub",
+  "desc": "808-style sub locked to the kick, with one pitch-glide up to the flat-third.",
+  "length": 16,
+  "steps": [
+    {
+      "semi": 0,
+      "vel": 1.15,
+      "slide": false,
+      "len": 3.0
+    },
+    null,
+    null,
+    null,
+    null,
+    null,
+    {
+      "semi": 0,
+      "vel": 1.0,
+      "slide": false,
+      "len": 1.0
+    },
+    null,
+    null,
+    null,
+    {
+      "semi": 3,
+      "vel": 1.0,
+      "slide": true,
+      "len": 2.5
+    },
+    null,
+    null,
+    null,
+    null,
+    null
+  ],
+  "metadata": {
+    "bpm_min": 130,
+    "bpm_max": 150,
+    "feel": "half-time",
+    "timing": "straight",
+    "energy": "mid",
+    "density": "core",
+    "tags": [
+      "trap",
+      "808",
+      "bass"
+    ],
+    "harmonic": "minor",
+    "chord_poly": "mono",
+    "subgenre": "trap",
+    "compatible_devices": [
+      "t8-bass",
+      "td-3",
+      "generic-mono"
+    ],
+    "function": "core"
+  },
+  "provenance": {
+    "source": "factory",
+    "author": "midip factory",
+    "pack": "hip-hop",
+    "license": "original generic groove (no copyrighted material)",
+    "references": [
+      "Magenta Groove MIDI Dataset",
+      "Roland T-8 AIRA Compact voice/engine (Perfect Circuit)",
+      "Roland TR-808 heritage (Wikipedia)",
+      "hi-hat roll / trap programming references"
+    ]
+  }
+}

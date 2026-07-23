@@ -1,0 +1,96 @@
+{
+  "schema": "midip.pattern",
+  "version": 2,
+  "factory_id": "synth.trap.phrygian-motif",
+  "role": "synth",
+  "kind": "melodic",
+  "genre": "trap",
+  "name": "Phrygian Motif",
+  "desc": "Single-line Phrygian motif leaning on the flat-second for menace.",
+  "length": 16,
+  "steps": [
+    {
+      "semi": 0,
+      "vel": 1.15,
+      "slide": false,
+      "len": 0.5
+    },
+    null,
+    {
+      "semi": 1,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.5
+    },
+    null,
+    {
+      "semi": 3,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.5
+    },
+    null,
+    {
+      "semi": 0,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.5
+    },
+    null,
+    {
+      "semi": -2,
+      "vel": 1.0,
+      "slide": false,
+      "len": 1.0
+    },
+    null,
+    null,
+    null,
+    {
+      "semi": 1,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.5
+    },
+    null,
+    null,
+    null
+  ],
+  "metadata": {
+    "bpm_min": 130,
+    "bpm_max": 150,
+    "feel": "half-time",
+    "timing": "straight",
+    "energy": "mid",
+    "density": "core",
+    "tags": [
+      "trap",
+      "dark",
+      "keys"
+    ],
+    "harmonic": "minor",
+    "chord_poly": "mono",
+    "subgenre": "trap",
+    "compatible_devices": [
+      "s1",
+      "j-6",
+      "monologue",
+      "microfreak",
+      "minilogue-xd",
+      "generic-poly"
+    ],
+    "function": "variation_b"
+  },
+  "provenance": {
+    "source": "factory",
+    "author": "midip factory",
+    "pack": "hip-hop",
+    "license": "original generic groove (no copyrighted material)",
+    "references": [
+      "Magenta Groove MIDI Dataset",
+      "Roland T-8 AIRA Compact voice/engine (Perfect Circuit)",
+      "Roland TR-808 heritage (Wikipedia)",
+      "hi-hat roll / trap programming references"
+    ]
+  }
+}

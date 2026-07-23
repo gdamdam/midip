@@ -1,0 +1,128 @@
+{
+  "schema": "midip.pattern",
+  "version": 2,
+  "factory_id": "synth.amapiano.two-chord-vamp",
+  "role": "synth",
+  "kind": "melodic",
+  "genre": "amapiano",
+  "name": "Two-Chord Vamp",
+  "desc": "Relaxed two-chord jazzy vamp for hooks and intros.",
+  "length": 16,
+  "steps": [
+    [
+      {
+        "semi": 0,
+        "vel": 1.0,
+        "slide": false,
+        "len": 3.5
+      },
+      {
+        "semi": 3,
+        "vel": 1.0,
+        "slide": false,
+        "len": 3.5
+      },
+      {
+        "semi": 7,
+        "vel": 1.0,
+        "slide": false,
+        "len": 3.5
+      },
+      {
+        "semi": 10,
+        "vel": 1.0,
+        "slide": false,
+        "len": 3.5
+      },
+      {
+        "semi": 14,
+        "vel": 1.0,
+        "slide": false,
+        "len": 3.5
+      }
+    ],
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    [
+      {
+        "semi": -4,
+        "vel": 1.0,
+        "slide": false,
+        "len": 3.5
+      },
+      {
+        "semi": 0,
+        "vel": 1.0,
+        "slide": false,
+        "len": 3.5
+      },
+      {
+        "semi": 3,
+        "vel": 1.0,
+        "slide": false,
+        "len": 3.5
+      },
+      {
+        "semi": 7,
+        "vel": 1.0,
+        "slide": false,
+        "len": 3.5
+      },
+      {
+        "semi": 10,
+        "vel": 1.0,
+        "slide": false,
+        "len": 3.5
+      }
+    ],
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+  ],
+  "metadata": {
+    "bpm_min": 108,
+    "bpm_max": 118,
+    "feel": "swung-16 (mpc 58%)",
+    "timing": "mpc-swing",
+    "energy": "low",
+    "density": "sparse",
+    "tags": [
+      "amapiano",
+      "jazz",
+      "keys"
+    ],
+    "harmonic": "minor9",
+    "chord_poly": "chord",
+    "subgenre": "amapiano",
+    "compatible_devices": [
+      "s1",
+      "j-6",
+      "monologue",
+      "microfreak",
+      "minilogue-xd",
+      "generic-poly"
+    ],
+    "function": "variation_a"
+  },
+  "provenance": {
+    "source": "factory",
+    "author": "midip factory",
+    "pack": "afro-house-amapiano",
+    "license": "original generic groove (no copyrighted material)",
+    "references": [
+      "'Amapiano' (Wikipedia): Gauteng township origins, kwaito/deep-house/jazz lineage, log drum",
+      "Amapiano's Second Wave \u2014 South African history (Mixmag)",
+      "Amapiano log-drum production (InspiredByBeatz)",
+      "Amapiano BPM ~108-118 (vibesdj)"
+    ]
+  }
+}

@@ -1,0 +1,176 @@
+{
+  "schema": "midip.pattern",
+  "version": 2,
+  "factory_id": "drums.amapiano.log-drum-bed",
+  "role": "drums",
+  "kind": "drums",
+  "genre": "amapiano",
+  "name": "Log Drum Bed",
+  "desc": "Sparse bed for the log drum: four-on-floor with rolling sixteenth hats and a light offbeat open hat.",
+  "length": 16,
+  "steps": [
+    [
+      {
+        "note": 36,
+        "vel": 118
+      },
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102,
+        "micro": 160
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102,
+        "micro": 160
+      }
+    ],
+    [
+      {
+        "note": 36,
+        "vel": 118
+      },
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102,
+        "micro": 160
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      },
+      {
+        "note": 46,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102,
+        "micro": 160
+      }
+    ],
+    [
+      {
+        "note": 36,
+        "vel": 118
+      },
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102,
+        "micro": 160
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102,
+        "micro": 160
+      }
+    ],
+    [
+      {
+        "note": 36,
+        "vel": 118
+      },
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102,
+        "micro": 160
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      },
+      {
+        "note": 46,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102,
+        "micro": 160
+      }
+    ]
+  ],
+  "metadata": {
+    "bpm_min": 108,
+    "bpm_max": 118,
+    "feel": "swung-16 (mpc 58%)",
+    "timing": "mpc-swing",
+    "energy": "low",
+    "density": "sparse",
+    "tags": [
+      "amapiano",
+      "log-drum"
+    ],
+    "harmonic": null,
+    "chord_poly": "none",
+    "subgenre": "amapiano",
+    "compatible_devices": [
+      "t8-drums",
+      "rd-8",
+      "drumbrute-impact",
+      "circuit-drums",
+      "generic-gm-drums"
+    ],
+    "function": "variation_a"
+  },
+  "provenance": {
+    "source": "factory",
+    "author": "midip factory",
+    "pack": "afro-house-amapiano",
+    "license": "original generic groove (no copyrighted material)",
+    "references": [
+      "'Amapiano' (Wikipedia): Gauteng township origins, kwaito/deep-house/jazz lineage, log drum",
+      "Amapiano's Second Wave \u2014 South African history (Mixmag)",
+      "Amapiano log-drum production (InspiredByBeatz)",
+      "Amapiano BPM ~108-118 (vibesdj)"
+    ]
+  }
+}

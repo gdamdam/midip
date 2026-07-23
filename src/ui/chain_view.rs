@@ -49,9 +49,13 @@ pub fn render_chain_view(f: &mut Frame, area: Rect, app: &App) {
         };
 
         // Calculate bar progress within entry.
-        let dwell = entry_opt.map(|e| e.dwell_steps()).unwrap_or(1).max(1);
+        let spb = app.set.steps_per_bar.max(1) as u64;
+        let dwell = entry_opt
+            .map(|e| e.dwell_steps(app.set.steps_per_bar))
+            .unwrap_or(1)
+            .max(1);
         let elapsed = (app.playhead as u64).saturating_sub(pb.entry_start_step);
-        let bar_now = (elapsed / 16) + 1;
+        let bar_now = (elapsed / spb) + 1;
         let bar_total = dwell / 16;
 
         lines.push(Line::from(Span::styled(
@@ -227,6 +231,9 @@ mod tests {
 
     fn empty_library() -> Library {
         Library {
+            records: Vec::new(),
+            v2_index: Default::default(),
+            families: Vec::new(),
             drums: GenreMap::new(),
             bass: GenreMap::new(),
             synth: GenreMap::new(),

@@ -1,0 +1,142 @@
+{
+  "schema": "midip.pattern",
+  "version": 2,
+  "factory_id": "synth.reggae.offbeat-skank",
+  "role": "synth",
+  "kind": "melodic",
+  "genre": "reggae",
+  "name": "Offbeat Skank",
+  "desc": "The reggae identity: short minor-triad organ chops on every off-beat.",
+  "length": 16,
+  "steps": [
+    null,
+    null,
+    [
+      {
+        "semi": 0,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.4
+      },
+      {
+        "semi": 3,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.4
+      },
+      {
+        "semi": 7,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.4
+      }
+    ],
+    null,
+    null,
+    null,
+    [
+      {
+        "semi": 0,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.4
+      },
+      {
+        "semi": 3,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.4
+      },
+      {
+        "semi": 7,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.4
+      }
+    ],
+    null,
+    null,
+    null,
+    [
+      {
+        "semi": 0,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.4
+      },
+      {
+        "semi": 3,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.4
+      },
+      {
+        "semi": 7,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.4
+      }
+    ],
+    null,
+    null,
+    null,
+    [
+      {
+        "semi": 0,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.4
+      },
+      {
+        "semi": 3,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.4
+      },
+      {
+        "semi": 7,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.4
+      }
+    ],
+    null
+  ],
+  "metadata": {
+    "bpm_min": 70,
+    "bpm_max": 90,
+    "feel": "half-time",
+    "timing": "straight",
+    "energy": "mid",
+    "density": "core",
+    "tags": [
+      "reggae",
+      "skank",
+      "organ"
+    ],
+    "harmonic": "minor",
+    "chord_poly": "chord",
+    "subgenre": "reggae",
+    "compatible_devices": [
+      "s1",
+      "j-6",
+      "monologue",
+      "microfreak",
+      "minilogue-xd",
+      "generic-poly"
+    ],
+    "function": "core"
+  },
+  "provenance": {
+    "source": "factory",
+    "author": "midip factory",
+    "pack": "reggae-dancehall",
+    "license": "original generic groove (no copyrighted material)",
+    "references": [
+      "'One drop rhythm' (Wikipedia): empty beat 1, snare/kick on 3; steppers; rockers",
+      "Reggae drumming: cross-stick rimshot & timbale snare (Bax Music)",
+      "Foundational reggae drums (zZounds)",
+      "Reggae BPM range (bpmcalc)"
+    ]
+  }
+}

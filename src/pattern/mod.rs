@@ -1,8 +1,11 @@
 pub mod chain;
 pub mod euclid;
+pub mod format_v2;
 pub mod generate;
+pub mod index;
 pub mod library;
 pub mod model;
 pub mod refs;
 pub mod store;
+pub mod timing;
 pub mod trig;

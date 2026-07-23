@@ -137,6 +137,10 @@ struct SetDto {
     /// MIDI clock-in port (M10). Absent in old files (pre-v4) → serde default `None`.
     #[serde(default)]
     clock_in_port: Option<PortRef>,
+    /// Global steps-per-bar / meter (Phase 9). Absent in old files → 16 (4/4), so
+    /// every pre-Phase-9 set loads byte-identically.
+    #[serde(default = "crate::pattern::model::default_steps_per_bar")]
+    steps_per_bar: usize,
 }
 
 impl From<&Lane> for LaneDto {
@@ -170,6 +174,7 @@ impl From<&Set> for SetDto {
             scenes: set.scenes.clone(),
             chains: set.chains.clone(),
             clock_in_port: set.clock_in_port.clone(),
+            steps_per_bar: set.steps_per_bar,
         }
     }
 }
@@ -344,6 +349,7 @@ pub fn load_set_with_report(path: &Path) -> anyhow::Result<(Set, Vec<String>)> {
         scenes: dto.scenes,
         chains: dto.chains,
         clock_in_port: dto.clock_in_port,
+        steps_per_bar: dto.steps_per_bar,
     };
     let mut notes = profile_notes;
     notes.extend(validate_and_repair(&mut set));

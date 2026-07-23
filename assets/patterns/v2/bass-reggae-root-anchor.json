@@ -1,0 +1,73 @@
+{
+  "schema": "midip.pattern",
+  "version": 2,
+  "factory_id": "bass.reggae.root-anchor",
+  "role": "bass",
+  "kind": "melodic",
+  "genre": "reggae",
+  "name": "Root Anchor",
+  "desc": "Two round root notes anchoring the riddim.",
+  "length": 16,
+  "steps": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    {
+      "semi": 0,
+      "vel": 1.15,
+      "slide": false,
+      "len": 2.0
+    },
+    null,
+    null,
+    null,
+    null,
+    null,
+    {
+      "semi": -5,
+      "vel": 1.0,
+      "slide": false,
+      "len": 1.0
+    },
+    null
+  ],
+  "metadata": {
+    "bpm_min": 70,
+    "bpm_max": 90,
+    "feel": "half-time",
+    "timing": "straight",
+    "energy": "low",
+    "density": "sparse",
+    "tags": [
+      "reggae",
+      "bass",
+      "riddim"
+    ],
+    "harmonic": "minor",
+    "chord_poly": "mono",
+    "subgenre": "reggae",
+    "compatible_devices": [
+      "t8-bass",
+      "td-3",
+      "generic-mono"
+    ],
+    "function": "variation_a"
+  },
+  "provenance": {
+    "source": "factory",
+    "author": "midip factory",
+    "pack": "reggae-dancehall",
+    "license": "original generic groove (no copyrighted material)",
+    "references": [
+      "'One drop rhythm' (Wikipedia): empty beat 1, snare/kick on 3; steppers; rockers",
+      "Reggae drumming: cross-stick rimshot & timbale snare (Bax Music)",
+      "Foundational reggae drums (zZounds)",
+      "Reggae BPM range (bpmcalc)"
+    ]
+  }
+}

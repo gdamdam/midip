@@ -1,0 +1,178 @@
+{
+  "schema": "midip.pattern",
+  "version": 2,
+  "factory_id": "synth.melodic-techno.arp-builder",
+  "role": "synth",
+  "kind": "melodic",
+  "genre": "melodic-techno",
+  "name": "Arp Builder",
+  "desc": "Sixteenth-note arpeggio builder climbing the minor chord tones with a filter opening.",
+  "length": 16,
+  "steps": [
+    {
+      "semi": 0,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.25
+    },
+    {
+      "semi": 7,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.25
+    },
+    {
+      "semi": 12,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.25
+    },
+    {
+      "semi": 15,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.25
+    },
+    {
+      "semi": 19,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.25
+    },
+    {
+      "semi": 0,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.25
+    },
+    {
+      "semi": 7,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.25
+    },
+    {
+      "semi": 12,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.25
+    },
+    {
+      "semi": 15,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.25
+    },
+    {
+      "semi": 19,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.25
+    },
+    {
+      "semi": 0,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.25
+    },
+    {
+      "semi": 7,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.25
+    },
+    {
+      "semi": 12,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.25
+    },
+    {
+      "semi": 15,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.25
+    },
+    {
+      "semi": 19,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.25
+    },
+    {
+      "semi": 0,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.25
+    }
+  ],
+  "cc": [
+    [
+      {
+        "cc": 74,
+        "val": 30
+      }
+    ],
+    [],
+    [],
+    [],
+    [],
+    [],
+    [],
+    [],
+    [
+      {
+        "cc": 74,
+        "val": 80
+      }
+    ],
+    [],
+    [],
+    [],
+    [],
+    [],
+    [],
+    [
+      {
+        "cc": 74,
+        "val": 120
+      }
+    ]
+  ],
+  "metadata": {
+    "bpm_min": 120,
+    "bpm_max": 126,
+    "feel": "straight",
+    "timing": "straight",
+    "energy": "high",
+    "density": "dense",
+    "tags": [
+      "melodic-techno",
+      "arp",
+      "hypnotic"
+    ],
+    "harmonic": "minor",
+    "chord_poly": "mono",
+    "subgenre": "melodic-techno",
+    "compatible_devices": [
+      "s1",
+      "j-6",
+      "monologue",
+      "microfreak",
+      "minilogue-xd",
+      "generic-poly"
+    ],
+    "function": "variation_b"
+  },
+  "provenance": {
+    "source": "factory",
+    "author": "midip factory",
+    "pack": "modern-club",
+    "license": "original generic groove (no copyrighted material)",
+    "references": [
+      "House vs Techno reference (Splice)",
+      "Melodic-techno production references",
+      "Roland TR-909 heritage"
+    ]
+  }
+}

@@ -1,0 +1,99 @@
+{
+  "schema": "midip.pattern",
+  "version": 2,
+  "factory_id": "bass.boom-bap.fifth-walk",
+  "role": "bass",
+  "kind": "melodic",
+  "genre": "boom-bap",
+  "name": "Fifth Walk",
+  "desc": "Busier walking line adding the fifth and passing tones under the groove.",
+  "length": 16,
+  "steps": [
+    {
+      "semi": 0,
+      "vel": 1.15,
+      "slide": false,
+      "len": 0.5
+    },
+    null,
+    null,
+    {
+      "semi": 7,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.5,
+      "micro": 160
+    },
+    null,
+    null,
+    {
+      "semi": -2,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.5
+    },
+    null,
+    {
+      "semi": 0,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.5
+    },
+    null,
+    {
+      "semi": -4,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.5
+    },
+    null,
+    {
+      "semi": -5,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.5
+    },
+    null,
+    {
+      "semi": 7,
+      "vel": 0.82,
+      "slide": false,
+      "len": 0.5
+    },
+    null
+  ],
+  "metadata": {
+    "bpm_min": 82,
+    "bpm_max": 98,
+    "feel": "swung-16 (mpc 58%)",
+    "timing": "mpc-swing",
+    "energy": "mid",
+    "density": "dense",
+    "tags": [
+      "hip-hop",
+      "boom-bap",
+      "bass"
+    ],
+    "harmonic": "minor",
+    "chord_poly": "mono",
+    "subgenre": "boom-bap",
+    "compatible_devices": [
+      "t8-bass",
+      "td-3",
+      "generic-mono"
+    ],
+    "function": "variation_b"
+  },
+  "provenance": {
+    "source": "factory",
+    "author": "midip factory",
+    "pack": "hip-hop",
+    "license": "original generic groove (no copyrighted material)",
+    "references": [
+      "Magenta Groove MIDI Dataset (groove/microtiming methodology)",
+      "Gillick et al. 2019 'Learning to Groove' arXiv:1905.06118",
+      "MPC classic boom-bap swing workflow references",
+      "Roland TR-909 kick heritage (Wikipedia)"
+    ]
+  }
+}

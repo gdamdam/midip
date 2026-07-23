@@ -1,0 +1,122 @@
+{
+  "schema": "midip.pattern",
+  "version": 2,
+  "factory_id": "drums.reggaeton.dembow-core",
+  "role": "drums",
+  "kind": "drums",
+  "genre": "reggaeton",
+  "name": "Dembow Core",
+  "desc": "The reggaeton dembow: kick on the quarters with the canonical snare figure on the sixteenths (boom-ch-boom-chick).",
+  "length": 16,
+  "steps": [
+    [
+      {
+        "note": 36,
+        "vel": 118
+      }
+    ],
+    [],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 38,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 36,
+        "vel": 102
+      }
+    ],
+    [],
+    [
+      {
+        "note": 38,
+        "vel": 118
+      },
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [],
+    [
+      {
+        "note": 36,
+        "vel": 118
+      }
+    ],
+    [],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 38,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 36,
+        "vel": 102
+      }
+    ],
+    [],
+    [
+      {
+        "note": 38,
+        "vel": 118
+      },
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    []
+  ],
+  "metadata": {
+    "bpm_min": 88,
+    "bpm_max": 100,
+    "feel": "straight-16",
+    "timing": "straight",
+    "energy": "mid",
+    "density": "core",
+    "tags": [
+      "reggaeton",
+      "dembow"
+    ],
+    "harmonic": null,
+    "chord_poly": "none",
+    "subgenre": "reggaeton",
+    "compatible_devices": [
+      "t8-drums",
+      "rd-8",
+      "drumbrute-impact",
+      "circuit-drums",
+      "generic-gm-drums"
+    ],
+    "function": "core"
+  },
+  "provenance": {
+    "source": "factory",
+    "author": "midip factory",
+    "pack": "reggaeton-dembow-baile",
+    "license": "original generic groove (no copyrighted material)",
+    "references": [
+      "'Dembow beat' (Wikipedia): rhythm structure, dancehall->reggaeton lineage",
+      "'Dembow Explained' (Berklee)",
+      "3+3+2 / habanera shared rhythmic ancestor (Wayne Marshall commentary)",
+      "Reggaeton programming (Native Instruments / MusicRadar)"
+    ]
+  }
+}

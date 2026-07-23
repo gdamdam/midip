@@ -6,6 +6,8 @@ import { getVersion } from "@tauri-apps/api/app";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   GuiCommand,
+  LibQuery,
+  LibRecord,
   LibraryData,
   SetEntry,
   Snapshot,
@@ -41,6 +43,10 @@ export const auditionPattern = (
 ): Promise<Snapshot> => invoke("gui_audition", { role, genre, name });
 
 export const stopAudition = (): Promise<Snapshot> => invoke("gui_stop_audition");
+
+// Phase 8: shared library filter engine. Returns already-filtered, sorted records.
+export const libraryQuery = (query: LibQuery): Promise<LibRecord[]> =>
+  invoke("gui_library_query", { query });
 
 export const toggleFavorite = (
   role: string,

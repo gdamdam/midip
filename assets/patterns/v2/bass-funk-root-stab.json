@@ -1,0 +1,78 @@
+{
+  "schema": "midip.pattern",
+  "version": 2,
+  "factory_id": "bass.funk.root-stab",
+  "role": "bass",
+  "kind": "melodic",
+  "genre": "funk",
+  "name": "Root Stab",
+  "desc": "Spare root stabs anchoring the one and the pushes.",
+  "length": 16,
+  "steps": [
+    {
+      "semi": 0,
+      "vel": 1.15,
+      "slide": false,
+      "len": 0.8
+    },
+    null,
+    null,
+    null,
+    null,
+    null,
+    {
+      "semi": 0,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.4
+    },
+    null,
+    null,
+    null,
+    {
+      "semi": -2,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.6
+    },
+    null,
+    null,
+    null,
+    null,
+    null
+  ],
+  "metadata": {
+    "bpm_min": 96,
+    "bpm_max": 112,
+    "feel": "swung-16 (light 54%)",
+    "timing": "light-swing",
+    "energy": "mid",
+    "density": "sparse",
+    "tags": [
+      "funk",
+      "bass",
+      "syncopated"
+    ],
+    "harmonic": "dorian",
+    "chord_poly": "mono",
+    "subgenre": "funk",
+    "compatible_devices": [
+      "t8-bass",
+      "td-3",
+      "generic-mono"
+    ],
+    "function": "variation_a"
+  },
+  "provenance": {
+    "source": "factory",
+    "author": "midip factory",
+    "pack": "funk-disco",
+    "license": "original generic groove (no copyrighted material)",
+    "references": [
+      "Senn et al., microtiming & groove in funk (Frontiers in Psychology 2016)",
+      "ZGMTH 'Microtiming in Early Funk' (14-groove analysis)",
+      "'On the One' downbeat emphasis (Wikipedia/MasterClass)",
+      "Magenta Groove MIDI Dataset"
+    ]
+  }
+}

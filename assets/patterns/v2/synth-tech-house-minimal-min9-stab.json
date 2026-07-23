@@ -1,0 +1,126 @@
+{
+  "schema": "midip.pattern",
+  "version": 2,
+  "factory_id": "synth.tech-house.minimal-min9-stab",
+  "role": "synth",
+  "kind": "melodic",
+  "genre": "tech-house",
+  "name": "Minimal Min9 Stab",
+  "desc": "Two minimal minor-ninth organ stabs \u2014 the whole harmonic hook.",
+  "length": 16,
+  "steps": [
+    null,
+    null,
+    [
+      {
+        "semi": 0,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.3
+      },
+      {
+        "semi": 3,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.3
+      },
+      {
+        "semi": 7,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.3
+      },
+      {
+        "semi": 10,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.3
+      },
+      {
+        "semi": 14,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.3
+      }
+    ],
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    [
+      {
+        "semi": 0,
+        "vel": 1.15,
+        "slide": false,
+        "len": 0.3
+      },
+      {
+        "semi": 3,
+        "vel": 1.15,
+        "slide": false,
+        "len": 0.3
+      },
+      {
+        "semi": 7,
+        "vel": 1.15,
+        "slide": false,
+        "len": 0.3
+      },
+      {
+        "semi": 10,
+        "vel": 1.15,
+        "slide": false,
+        "len": 0.3
+      },
+      {
+        "semi": 14,
+        "vel": 1.15,
+        "slide": false,
+        "len": 0.3
+      }
+    ],
+    null,
+    null,
+    null,
+    null,
+    null
+  ],
+  "metadata": {
+    "bpm_min": 124,
+    "bpm_max": 128,
+    "feel": "straight",
+    "timing": "straight",
+    "energy": "mid",
+    "density": "core",
+    "tags": [
+      "tech-house",
+      "stab"
+    ],
+    "harmonic": "minor9",
+    "chord_poly": "chord",
+    "subgenre": "tech-house",
+    "compatible_devices": [
+      "s1",
+      "j-6",
+      "monologue",
+      "microfreak",
+      "minilogue-xd",
+      "generic-poly"
+    ],
+    "function": "core"
+  },
+  "provenance": {
+    "source": "factory",
+    "author": "midip factory",
+    "pack": "modern-club",
+    "license": "original generic groove (no copyrighted material)",
+    "references": [
+      "Tech-house production guides (Beatportal, Samplesound)",
+      "Roland TR-909 four-on-floor heritage",
+      "Magenta Groove MIDI Dataset"
+    ]
+  }
+}

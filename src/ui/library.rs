@@ -69,6 +69,29 @@ fn build_preview_lines(pattern: &Pattern, width: usize, max_height: usize) -> Ve
     // Length
     lines.push(Line::from(Span::raw(format!("len:{}", pattern.length))));
 
+    // Timing feel (Phase 7): does the pattern carry authored per-note microtiming?
+    // This is distinct from GLOBAL lane swing (shown in the transport bar) — the
+    // badge here means the *pattern itself* encodes push/pull/swing offsets.
+    let micro_hits = match &pattern.data {
+        PatternData::Drums(steps) => steps.iter().flatten().filter(|h| h.micro != 0).count(),
+        PatternData::Melodic(steps) => steps
+            .iter()
+            .flat_map(|s| s.iter())
+            .filter(|n| n.micro != 0)
+            .count(),
+    };
+    if micro_hits > 0 {
+        lines.push(Line::from(Span::styled(
+            format!("feel: microtiming ×{micro_hits}"),
+            Style::default().fg(theme::EMBER.warn),
+        )));
+    } else {
+        lines.push(Line::from(Span::styled(
+            "feel: straight",
+            Style::default().fg(theme::EMBER.dim),
+        )));
+    }
+
     match &pattern.data {
         PatternData::Drums(steps) => {
             // Collect which notes appear in the pattern.
@@ -89,7 +112,11 @@ fn build_preview_lines(pattern: &Pattern, width: usize, max_height: usize) -> Ve
                     .unwrap_or(usize::MAX)
             });
 
-            let strip_len = pattern.length.min(16);
+            // Show as many steps as the preview width allows (label takes 3 cols),
+            // not a hardcoded 16 — long/odd patterns (17–64, 12/20) preview fully or
+            // with a '›' overflow marker instead of silently truncating at 16.
+            let strip_len = pattern.length.min(w.saturating_sub(4)).max(1);
+            let overflow = pattern.length > strip_len;
             // Cap voice rows to available height (leave room for name/desc/len lines already added).
             let rows_remaining = max_height.saturating_sub(lines.len());
             for note in seen_notes.iter().take(rows_remaining) {
@@ -105,6 +132,9 @@ fn build_preview_lines(pattern: &Pattern, width: usize, max_height: usize) -> Ve
                         strip.push('·');
                     }
                 }
+                if overflow {
+                    strip.push('›');
+                }
                 lines.push(Line::from(Span::raw(format!(
                     "{:<3}{}",
                     truncate(&label, 3),
@@ -113,8 +143,9 @@ fn build_preview_lines(pattern: &Pattern, width: usize, max_height: usize) -> Ve
             }
         }
         PatternData::Melodic(steps) => {
-            // On/off+slide strip.
-            let strip_len = pattern.length.min(16);
+            // On/off+slide strip — width-aware (not a hardcoded 16) with a '›'
+            // overflow marker for patterns longer than the preview can show.
+            let strip_len = pattern.length.min(w).max(1);
             let mut strip = String::new();
             for i in 0..strip_len {
                 // Mono preview: read the step's primary note for the on/off+slide strip.
@@ -123,6 +154,9 @@ fn build_preview_lines(pattern: &Pattern, width: usize, max_height: usize) -> Ve
                     Some(_) => strip.push('●'),
                     _ => strip.push('·'),
                 }
+            }
+            if pattern.length > strip_len {
+                strip.push('›');
             }
             lines.push(Line::from(Span::raw(strip)));
 
@@ -265,6 +299,13 @@ pub fn render_library(f: &mut Frame, area: Rect, app: &App) {
         pattern_title,
         Style::default().add_modifier(Modifier::BOLD),
     )));
+    // Active-filter indicator (Phase 8): show the live text search + a hint to clear.
+    if !app.lib_search.trim().is_empty() {
+        pattern_lines.push(Line::from(Span::styled(
+            format!("search: {}", truncate(app.lib_search.trim(), 22)),
+            Style::default().fg(theme::EMBER.warn),
+        )));
+    }
     for (display_i, (orig_i, p)) in visible_patterns
         .iter()
         .enumerate()
@@ -329,6 +370,28 @@ pub fn render_library(f: &mut Frame, area: Rect, app: &App) {
     if let Some(p) = selected_pattern_in_col2 {
         let max_h = preview_height.saturating_sub(reserved);
         preview_lines.extend(build_preview_lines(p, preview_width, max_h));
+        // Family badge (Phase 3): if this pattern is enrolled in a performance
+        // family, show it just below the name so related material is browsable.
+        if let Some((fam, func)) = app
+            .library
+            .family_of(app.lib_role, selected_genre_name, &p.name)
+        {
+            let badge = truncate(
+                &format!("family: {} · {}", fam.label, func.label()),
+                preview_width.max(4),
+            )
+            .to_string();
+            let at = preview_lines.len().min(1);
+            preview_lines.insert(
+                at,
+                Line::from(Span::styled(
+                    badge,
+                    Style::default()
+                        .fg(theme::EMBER.warn)
+                        .add_modifier(Modifier::BOLD),
+                )),
+            );
+        }
     }
     if auditioning {
         preview_lines.push(Line::from(Span::styled(
@@ -436,6 +499,9 @@ mod tests {
         };
         drums.insert("techno".to_string(), vec![pat]);
         Library {
+            records: Vec::new(),
+            v2_index: Default::default(),
+            families: Vec::new(),
             drums,
             bass: GenreMap::new(),
             synth: GenreMap::new(),
@@ -477,6 +543,9 @@ mod tests {
         };
         synth.insert("techno".to_string(), vec![pat]);
         Library {
+            records: Vec::new(),
+            v2_index: Default::default(),
+            families: Vec::new(),
             drums: GenreMap::new(),
             bass: GenreMap::new(),
             synth,
@@ -683,6 +752,9 @@ mod tests {
         };
         drums.insert("techno".to_string(), vec![pat1, pat2]);
         let library = Library {
+            records: Vec::new(),
+            v2_index: Default::default(),
+            families: Vec::new(),
             drums,
             bass: GenreMap::new(),
             synth: GenreMap::new(),
@@ -748,6 +820,9 @@ mod tests {
         };
         drums.insert("techno".to_string(), vec![pat]);
         let library = Library {
+            records: Vec::new(),
+            v2_index: Default::default(),
+            families: Vec::new(),
             drums,
             bass: GenreMap::new(),
             synth: GenreMap::new(),

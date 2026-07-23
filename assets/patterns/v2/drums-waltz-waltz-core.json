@@ -1,0 +1,134 @@
+{
+  "schema": "midip.pattern",
+  "version": 2,
+  "factory_id": "drums.waltz.waltz-core",
+  "role": "drums",
+  "kind": "drums",
+  "genre": "waltz",
+  "name": "Waltz Core",
+  "desc": "3/4 waltz: kick on beat 1, snare on beats 2 & 3, steady eighth hats.",
+  "length": 12,
+  "steps": [
+    [
+      {
+        "note": 36,
+        "vel": 118
+      },
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 38,
+        "vel": 118
+      },
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 38,
+        "vel": 118
+      },
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ]
+  ],
+  "metadata": {
+    "bpm_min": 90,
+    "bpm_max": 140,
+    "feel": "",
+    "timing": "straight",
+    "energy": "mid",
+    "density": "core",
+    "tags": [
+      "waltz",
+      "3/4"
+    ],
+    "harmonic": null,
+    "chord_poly": "none",
+    "subgenre": "waltz",
+    "compatible_devices": [
+      "t8-drums",
+      "rd-8",
+      "drumbrute-impact",
+      "circuit-drums",
+      "generic-gm-drums"
+    ],
+    "meter": "3/4",
+    "steps_per_bar": 12,
+    "bars": 1,
+    "function": "core"
+  },
+  "provenance": {
+    "source": "factory",
+    "author": "midip factory",
+    "pack": "multi-bar",
+    "license": "original generic groove (no copyrighted material)",
+    "references": [
+      "Magenta Groove MIDI Dataset",
+      "documented genre groove references",
+      "standard meter/subdivision theory (3/4, 6/8, 5/4)"
+    ]
+  }
+}

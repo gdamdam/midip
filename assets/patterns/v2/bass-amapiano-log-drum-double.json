@@ -1,0 +1,100 @@
+{
+  "schema": "midip.pattern",
+  "version": 2,
+  "factory_id": "bass.amapiano.log-drum-double",
+  "role": "bass",
+  "kind": "melodic",
+  "genre": "amapiano",
+  "name": "Log Drum Double",
+  "desc": "Double-time log-drum phrasing with more glides and call-and-response with the kick.",
+  "length": 16,
+  "steps": [
+    null,
+    null,
+    null,
+    {
+      "semi": 0,
+      "vel": 1.15,
+      "slide": true,
+      "len": 0.5,
+      "micro": 160
+    },
+    {
+      "semi": 0,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.5
+    },
+    null,
+    {
+      "semi": 3,
+      "vel": 1.0,
+      "slide": true,
+      "len": 0.75
+    },
+    null,
+    {
+      "semi": -2,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.5
+    },
+    null,
+    {
+      "semi": -2,
+      "vel": 1.0,
+      "slide": true,
+      "len": 0.75
+    },
+    null,
+    null,
+    {
+      "semi": 0,
+      "vel": 1.15,
+      "slide": true,
+      "len": 0.5,
+      "micro": 160
+    },
+    {
+      "semi": 3,
+      "vel": 1.0,
+      "slide": true,
+      "len": 0.5
+    },
+    null
+  ],
+  "metadata": {
+    "bpm_min": 108,
+    "bpm_max": 118,
+    "feel": "swung-16 (mpc 58%)",
+    "timing": "mpc-swing",
+    "energy": "high",
+    "density": "dense",
+    "tags": [
+      "amapiano",
+      "log-drum",
+      "bass"
+    ],
+    "harmonic": "minor",
+    "chord_poly": "mono",
+    "subgenre": "amapiano",
+    "compatible_devices": [
+      "t8-bass",
+      "td-3",
+      "generic-mono"
+    ],
+    "function": "variation_b"
+  },
+  "provenance": {
+    "source": "factory",
+    "author": "midip factory",
+    "pack": "afro-house-amapiano",
+    "license": "original generic groove (no copyrighted material)",
+    "references": [
+      "'Amapiano' (Wikipedia): Gauteng township origins, kwaito/deep-house/jazz lineage, log drum",
+      "Amapiano's Second Wave \u2014 South African history (Mixmag)",
+      "Amapiano log-drum production (InspiredByBeatz)",
+      "Amapiano BPM ~108-118 (vibesdj)"
+    ]
+  }
+}

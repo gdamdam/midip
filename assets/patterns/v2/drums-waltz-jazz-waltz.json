@@ -1,0 +1,163 @@
+{
+  "schema": "midip.pattern",
+  "version": 2,
+  "factory_id": "drums.waltz.jazz-waltz",
+  "role": "drums",
+  "kind": "drums",
+  "genre": "waltz",
+  "name": "Jazz Waltz",
+  "desc": "Two-bar 3/4 jazz waltz with a ride pattern and a bar-2 turnaround.",
+  "length": 24,
+  "steps": [
+    [
+      {
+        "note": 36,
+        "vel": 118
+      },
+      {
+        "note": 51,
+        "vel": 102
+      }
+    ],
+    [],
+    [
+      {
+        "note": 51,
+        "vel": 102
+      }
+    ],
+    [],
+    [
+      {
+        "note": 37,
+        "vel": 102
+      },
+      {
+        "note": 51,
+        "vel": 102
+      }
+    ],
+    [],
+    [
+      {
+        "note": 51,
+        "vel": 102
+      }
+    ],
+    [],
+    [
+      {
+        "note": 37,
+        "vel": 102
+      },
+      {
+        "note": 51,
+        "vel": 102
+      }
+    ],
+    [],
+    [
+      {
+        "note": 51,
+        "vel": 102
+      }
+    ],
+    [],
+    [
+      {
+        "note": 36,
+        "vel": 118
+      },
+      {
+        "note": 51,
+        "vel": 102
+      }
+    ],
+    [],
+    [
+      {
+        "note": 51,
+        "vel": 102
+      }
+    ],
+    [],
+    [
+      {
+        "note": 36,
+        "vel": 102
+      },
+      {
+        "note": 37,
+        "vel": 102
+      },
+      {
+        "note": 51,
+        "vel": 102
+      }
+    ],
+    [],
+    [
+      {
+        "note": 51,
+        "vel": 102
+      }
+    ],
+    [],
+    [
+      {
+        "note": 37,
+        "vel": 102
+      },
+      {
+        "note": 51,
+        "vel": 102
+      }
+    ],
+    [],
+    [
+      {
+        "note": 51,
+        "vel": 102
+      }
+    ],
+    []
+  ],
+  "metadata": {
+    "bpm_min": 100,
+    "bpm_max": 160,
+    "feel": "",
+    "timing": "straight",
+    "energy": "mid",
+    "density": "core",
+    "tags": [
+      "waltz",
+      "jazz",
+      "3/4"
+    ],
+    "harmonic": null,
+    "chord_poly": "none",
+    "subgenre": "waltz",
+    "compatible_devices": [
+      "t8-drums",
+      "rd-8",
+      "drumbrute-impact",
+      "circuit-drums",
+      "generic-gm-drums"
+    ],
+    "meter": "3/4",
+    "steps_per_bar": 12,
+    "bars": 2,
+    "function": "variation_a"
+  },
+  "provenance": {
+    "source": "factory",
+    "author": "midip factory",
+    "pack": "multi-bar",
+    "license": "original generic groove (no copyrighted material)",
+    "references": [
+      "Magenta Groove MIDI Dataset",
+      "documented genre groove references",
+      "standard meter/subdivision theory (3/4, 6/8, 5/4)"
+    ]
+  }
+}

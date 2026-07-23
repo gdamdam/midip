@@ -1,10 +1,16 @@
 <script lang="ts">
   import { app, loadPattern, audition, endAudition, favorite, send, userPatternCmd, crateAdd } from "../lib/store.svelte";
+  import { libraryQuery } from "../lib/bridge";
+  import type { LibRecord, LibQuery } from "../lib/types";
   import CratesPanel from "./CratesPanel.svelte";
 
   let role = $state("drums");
   let query = $state("");
   let favOnly = $state(false);
+  // Phase 8 facet filters ("" = any).
+  let feel = $state("");
+  let func = $state("");
+  let poly = $state("");
   let auditioning = $state<string | null>(null);
   let confirmDelete = $state<string | null>(null);
   let showUser = $state(false);
@@ -13,20 +19,69 @@
 
   const roleData = $derived(app.library?.roles.find((r) => r.role === role) ?? null);
 
+  // Active whenever text or any facet narrows the browse — then we defer to the
+  // shared Rust engine (one source of truth for matching + ordering) instead of
+  // the local genre view.
+  const queryActive = $derived(
+    query.trim().length > 0 || favOnly || feel !== "" || func !== "" || poly !== "",
+  );
+
+  // Filtered records from the shared engine (only fetched while queryActive).
+  let results = $state<LibRecord[]>([]);
+  let reqToken = 0;
+  $effect(() => {
+    // track deps
+    const q: LibQuery = {
+      text: query,
+      role,
+      feel: feel || null,
+      function: func || null,
+      poly: poly || null,
+      favorites_only: favOnly,
+    };
+    if (!queryActive) {
+      results = [];
+      return;
+    }
+    const token = ++reqToken;
+    libraryQuery(q).then((rows) => {
+      if (token === reqToken) results = rows; // ignore stale responses
+    });
+  });
+
+  // Present both modes through one genre-grouped shape the template renders.
   const filtered = $derived.by(() => {
+    if (queryActive) {
+      const groups = new Map<string, LibRecord[]>();
+      for (const r of results) {
+        if (!groups.has(r.genre)) groups.set(r.genre, []);
+        groups.get(r.genre)!.push(r);
+      }
+      return [...groups.entries()].map(([name, patterns]) => ({ name, patterns }));
+    }
     if (!roleData) return [];
-    const q = query.trim().toLowerCase();
     return roleData.genres
-      .map((g) => ({
-        name: g.name,
-        patterns: g.patterns.filter(
-          (p) =>
-            (!favOnly || p.favorite) &&
-            (!q || p.name.toLowerCase().includes(q) || g.name.toLowerCase().includes(q)),
-        ),
-      }))
+      .map((g) => ({ name: g.name, patterns: g.patterns }))
       .filter((g) => g.patterns.length > 0);
   });
+
+  const activeChips = $derived(
+    [
+      query.trim() && `“${query.trim()}”`,
+      favOnly && "★ favorites",
+      feel && `feel:${feel}`,
+      func && `fn:${func}`,
+      poly && `${poly}`,
+    ].filter(Boolean) as string[],
+  );
+
+  function clearFilters() {
+    query = "";
+    favOnly = false;
+    feel = "";
+    func = "";
+    poly = "";
+  }
 
   async function doAudition(genre: string, name: string) {
     auditioning = `${genre}/${name}`;
@@ -46,11 +101,39 @@
       {/each}
     </div>
     <div class="filters">
-      <input class="search" placeholder="filter patterns…" bind:value={query} />
+      <input class="search" placeholder="search name, desc, tags…" bind:value={query} />
       <button class="fav-filter" class:on={favOnly} onclick={() => (favOnly = !favOnly)} title="Favorites only">
         ★
       </button>
     </div>
+    <div class="facets">
+      <select bind:value={feel} title="Feel">
+        <option value="">feel: any</option>
+        <option value="straight">straight</option>
+        <option value="swing">swing</option>
+        <option value="triplet">triplet</option>
+      </select>
+      <select bind:value={func} title="Function">
+        <option value="">function: any</option>
+        <option value="core">core</option>
+        <option value="variation_a">variation A</option>
+        <option value="variation_b">variation B</option>
+        <option value="fill">fill</option>
+        <option value="breakdown">breakdown</option>
+        <option value="peak">peak</option>
+      </select>
+      <select bind:value={poly} title="Chord / mono">
+        <option value="">voicing: any</option>
+        <option value="mono">mono</option>
+        <option value="poly">chord</option>
+      </select>
+    </div>
+    {#if activeChips.length > 0}
+      <div class="active-filters">
+        {#each activeChips as chip (chip)}<span class="chip">{chip}</span>{/each}
+        <button class="clear" onclick={clearFilters} title="Clear all filters">clear ✕</button>
+      </div>
+    {/if}
     {#if crates.length > 0}
       <div class="crate-target">
         <span class="muted small">＋ to crate:</span>
@@ -94,6 +177,9 @@
                 title="Load / queue into the {role} lane"
               >
                 <span class="pn">{p.name}</span>
+                {#if p.function}
+                  <span class="fam" title="Family: {p.family}">{p.function}</span>
+                {/if}
                 <span class="meta mono">{p.length}</span>
               </button>
               <button
@@ -174,6 +260,36 @@
   .filters {
     display: flex;
     gap: 6px;
+  }
+  .facets {
+    display: flex;
+    gap: 6px;
+    margin-top: 6px;
+  }
+  .facets select {
+    flex: 1;
+    font-size: 11px;
+  }
+  .active-filters {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+    margin-top: 6px;
+  }
+  .chip {
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 999px;
+    background: var(--panel-2);
+    color: var(--fg);
+  }
+  .clear {
+    font-size: 10px;
+    color: var(--dim);
+    background: transparent;
+    border: none;
+    cursor: pointer;
   }
   .search {
     flex: 1;
@@ -266,8 +382,18 @@
     padding: 4px 4px;
   }
   .pn {
+    flex: 1;
     overflow: hidden;
     text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .fam {
+    color: var(--ember);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 0 4px;
+    align-self: center;
     white-space: nowrap;
   }
   .meta {

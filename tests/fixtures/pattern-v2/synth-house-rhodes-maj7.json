@@ -1,0 +1,27 @@
+{
+  "schema": "midip.pattern",
+  "version": 2,
+  "factory_id": "synth.house.rhodes-maj7-v2",
+  "role": "synth",
+  "kind": "melodic",
+  "name": "Rhodes Maj7 V2",
+  "genre": "house",
+  "desc": "Representative v2 poly-synth fixture: chord step, ratchet, Ratio cond, CC lock, micro.",
+  "length": 4,
+  "steps": [
+    [
+      {"semi": 0, "vel": 1.0, "slide": false, "len": 2.0},
+      {"semi": 4, "vel": 1.0, "slide": false, "len": 2.0, "micro": -8},
+      {"semi": 7, "vel": 1.1, "slide": false, "len": 2.0, "ratchet": 2, "prob": 0.8, "cond": {"type": "Ratio", "x": 1, "y": 2}}
+    ],
+    null,
+    null,
+    {"semi": 0, "vel": 1.0, "slide": true, "len": 1.0}
+  ],
+  "cc": [
+    [ {"cc": 74, "val": 90} ],
+    [], [], []
+  ],
+  "metadata": { "voicing": "maj7" },
+  "provenance": { "source": "factory", "author": "midip", "midip_version": "1.8.x" }
+}

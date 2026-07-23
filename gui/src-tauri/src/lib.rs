@@ -328,6 +328,10 @@ impl Core {
     pub fn library(&self) -> LibraryDto {
         LibraryDto::build(&self.app.library, &self.app.favorites)
     }
+
+    pub fn library_query(&self, q: &dto::QueryDto) -> Vec<dto::RecordDto> {
+        dto::library_query(&self.app.library, &self.app.favorites, q)
+    }
 }
 
 pub struct GuiState {
@@ -379,6 +383,16 @@ fn gui_dispatch(cmd: GuiCommand, state: tauri::State<GuiState>) -> Snapshot {
 #[tauri::command]
 fn gui_library(state: tauri::State<GuiState>) -> LibraryDto {
     state.core.lock().unwrap().library()
+}
+
+/// Phase 8: run a filter query through the shared engine, returning matches only.
+/// Keeps the boundary small at scale and reuses the same engine the TUI uses.
+#[tauri::command]
+fn gui_library_query(
+    query: dto::QueryDto,
+    state: tauri::State<GuiState>,
+) -> Vec<dto::RecordDto> {
+    state.core.lock().unwrap().library_query(&query)
 }
 
 #[tauri::command]
@@ -664,6 +678,7 @@ pub fn run() {
             gui_snapshot,
             gui_dispatch,
             gui_library,
+            gui_library_query,
             gui_load_pattern,
             gui_audition,
             gui_place_note,

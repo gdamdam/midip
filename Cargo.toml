@@ -1,6 +1,6 @@
 [package]
 name = "midip"
-version = "1.8.2"
+version = "1.9.0"
 edition = "2021"
 description = "Terminal MIDI sequencer & live groovebox with a device library — AIRA Compact T-8/S-1 and any class-compliant USB-MIDI gear"
 license = "AGPL-3.0-or-later"

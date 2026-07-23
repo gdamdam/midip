@@ -1,0 +1,206 @@
+{
+  "schema": "midip.pattern",
+  "version": 2,
+  "factory_id": "drums.funk.the-one",
+  "role": "drums",
+  "kind": "drums",
+  "genre": "funk",
+  "name": "The One",
+  "desc": "Heavy accent on the one, backbeat on 2 & 4, and a probabilistic sixteenth ghost-snare lattice under driving hats.",
+  "length": 16,
+  "steps": [
+    [
+      {
+        "note": 36,
+        "vel": 127
+      },
+      {
+        "note": 42,
+        "vel": 118
+      }
+    ],
+    [
+      {
+        "note": 38,
+        "vel": 48,
+        "prob": 0.6,
+        "micro": 80
+      },
+      {
+        "note": 42,
+        "vel": 102,
+        "micro": 80
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 38,
+        "vel": 48,
+        "prob": 0.6,
+        "micro": 80
+      },
+      {
+        "note": 42,
+        "vel": 102,
+        "micro": 80
+      }
+    ],
+    [
+      {
+        "note": 38,
+        "vel": 118
+      },
+      {
+        "note": 42,
+        "vel": 118
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102,
+        "micro": 80
+      }
+    ],
+    [
+      {
+        "note": 36,
+        "vel": 102
+      },
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 38,
+        "vel": 48,
+        "prob": 0.55,
+        "micro": 80
+      },
+      {
+        "note": 42,
+        "vel": 102,
+        "micro": 80
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 118
+      }
+    ],
+    [
+      {
+        "note": 38,
+        "vel": 48,
+        "prob": 0.6,
+        "micro": 80
+      },
+      {
+        "note": 42,
+        "vel": 102,
+        "micro": 80
+      }
+    ],
+    [
+      {
+        "note": 36,
+        "vel": 102
+      },
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102,
+        "micro": 80
+      }
+    ],
+    [
+      {
+        "note": 38,
+        "vel": 118
+      },
+      {
+        "note": 42,
+        "vel": 118
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102,
+        "micro": 80
+      }
+    ],
+    [
+      {
+        "note": 38,
+        "vel": 48,
+        "prob": 0.5
+      },
+      {
+        "note": 42,
+        "vel": 102
+      },
+      {
+        "note": 46,
+        "vel": 102,
+        "prob": 0.5
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102,
+        "micro": 80
+      }
+    ]
+  ],
+  "metadata": {
+    "bpm_min": 96,
+    "bpm_max": 112,
+    "feel": "swung-16 (light 54%)",
+    "timing": "light-swing",
+    "energy": "high",
+    "density": "core",
+    "tags": [
+      "funk",
+      "ghost-notes"
+    ],
+    "harmonic": null,
+    "chord_poly": "none",
+    "subgenre": "funk",
+    "compatible_devices": [
+      "t8-drums",
+      "rd-8",
+      "drumbrute-impact",
+      "circuit-drums",
+      "generic-gm-drums"
+    ],
+    "function": "core"
+  },
+  "provenance": {
+    "source": "factory",
+    "author": "midip factory",
+    "pack": "funk-disco",
+    "license": "original generic groove (no copyrighted material)",
+    "references": [
+      "Senn et al., microtiming & groove in funk (Frontiers in Psychology 2016)",
+      "ZGMTH 'Microtiming in Early Funk' (14-groove analysis)",
+      "'On the One' downbeat emphasis (Wikipedia/MasterClass)",
+      "Magenta Groove MIDI Dataset"
+    ]
+  }
+}

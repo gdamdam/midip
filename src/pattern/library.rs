@@ -11,17 +11,118 @@ use crate::pattern::model::{DrumHit, MelodicNote, MelodicStep, Pattern, PatternD
 /// genre name -> patterns, preserving the file's genre order.
 pub type GenreMap = IndexMap<String, Vec<Pattern>>;
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum LibRole {
     Drums,
     Bass,
     Synth,
 }
 
+/// The performance function a pattern serves within its family (Phase 3).
+/// Metadata only — it never affects `PatternRef` resolution (role+genre+name).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PatternFunction {
+    Core,
+    VariationA,
+    VariationB,
+    Fill,
+    Breakdown,
+    Peak,
+}
+
+impl PatternFunction {
+    pub fn label(&self) -> &'static str {
+        match self {
+            PatternFunction::Core => "Core",
+            PatternFunction::VariationA => "Variation A",
+            PatternFunction::VariationB => "Variation B",
+            PatternFunction::Fill => "Fill",
+            PatternFunction::Breakdown => "Breakdown",
+            PatternFunction::Peak => "Peak",
+        }
+    }
+}
+
+/// One member of a performance family: an existing pattern (by name, within the
+/// family's role+genre) tagged with the function it serves.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FamilyMember {
+    pub function: PatternFunction,
+    pub name: String,
+}
+
+/// A performance family: a coherent set of related patterns in one role+genre,
+/// grouped by function (Core / Variation A/B / Fill / Breakdown / Peak). Family
+/// identity is the stable `id`, never the display names.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Family {
+    pub id: String,
+    pub label: String,
+    pub role: LibRole,
+    pub genre: String,
+    pub members: Vec<FamilyMember>,
+}
+
 pub struct Library {
     pub drums: GenreMap,
     pub bass: GenreMap,
     pub synth: GenreMap,
+    /// Performance families (Phase 3). Additive metadata over the patterns above;
+    /// does not affect loading or `PatternRef` resolution.
+    pub families: Vec<Family>,
+    /// Stable factory-id and alias registry from v2 patterns (architecture phase).
+    /// Additive: `PatternRef` still resolves by role+genre+name; this index only
+    /// adds id lookup and an alias fallback for renamed patterns.
+    pub v2_index: V2Index,
+    /// Flat search/filter index over every pattern (legacy + v2), built once at
+    /// load (Phase 8). Additive — existing accessors are untouched.
+    pub records: Vec<crate::pattern::index::Record>,
+}
+
+/// One stable-id record: the pattern's `factory_id` mapped to its identity triple.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FactoryIdEntry {
+    pub factory_id: String,
+    pub role: LibRole,
+    pub genre: String,
+    pub name: String,
+}
+
+/// One alias record: a prior display `alias` (within role+genre) that should
+/// resolve to the current `canonical` name.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AliasEntry {
+    pub role: LibRole,
+    pub genre: String,
+    pub alias: String,
+    pub canonical: String,
+}
+
+/// Retained v2 envelope metadata for one pattern, keyed by identity. Populated at
+/// merge time so the search index (Phase 8) can filter on it; empty for legacy.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct V2Meta {
+    pub subgenre: Option<String>,
+    pub bpm: Option<(u16, u16)>,
+    /// The timing-template name (Phase 7) or a free `feel` string.
+    pub feel: Option<String>,
+    pub energy: Option<String>,
+    pub density: Option<String>,
+    pub harmonic: Option<String>,
+    pub tags: Vec<String>,
+    pub author: Option<String>,
+    pub source: Option<String>,
+}
+
+/// Registry populated from v2 factory patterns. Empty when no v2 files are present,
+/// so it is inert for a purely-legacy library.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct V2Index {
+    pub ids: Vec<FactoryIdEntry>,
+    pub aliases: Vec<AliasEntry>,
+    /// Envelope metadata keyed by (role, genre, name).
+    pub meta: std::collections::HashMap<(LibRole, String, String), V2Meta>,
 }
 
 // --- raw JSON shapes (mpump format) ---------------------------------------
@@ -205,6 +306,105 @@ pub fn parse_catalog(
     Ok(map)
 }
 
+// --- families (Phase 3) ---------------------------------------------------
+
+#[derive(Deserialize)]
+struct RawFamilyMember {
+    function: PatternFunction,
+    name: String,
+}
+
+#[derive(Deserialize)]
+struct RawFamily {
+    id: String,
+    label: String,
+    role: String,
+    genre: String,
+    members: Vec<RawFamilyMember>,
+}
+
+#[derive(Deserialize)]
+struct FamiliesRoot {
+    #[serde(default)]
+    families: Vec<RawFamily>,
+}
+
+/// Parse the optional top-level `families` array from catalog.json. Non-fatal:
+/// returns empty on any parse error or when the key is absent (families whose
+/// `role` is unknown are skipped).
+/// Parse the retained v2 envelope metadata (free-form JSON maps) into typed
+/// `V2Meta`. Missing/garbage keys degrade to None — never fails.
+fn v2meta_from(
+    md: &serde_json::Map<String, serde_json::Value>,
+    prov: &Option<serde_json::Map<String, serde_json::Value>>,
+) -> V2Meta {
+    let s = |k: &str| md.get(k).and_then(|v| v.as_str()).map(|s| s.to_string());
+    let u16v = |k: &str| md.get(k).and_then(|v| v.as_u64()).map(|n| n as u16);
+    let bpm = match (u16v("bpm_min"), u16v("bpm_max")) {
+        (Some(a), Some(b)) => Some((a, b)),
+        _ => None,
+    };
+    let tags = md
+        .get("tags")
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+    let pstr = |k: &str| {
+        prov.as_ref()
+            .and_then(|p| p.get(k))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+    };
+    V2Meta {
+        subgenre: s("subgenre"),
+        bpm,
+        // Prefer the timing-template name (Phase 7); fall back to a free feel string.
+        feel: s("timing").or_else(|| s("feel")),
+        energy: s("energy"),
+        density: s("density"),
+        harmonic: s("harmonic"),
+        tags,
+        author: pstr("author"),
+        source: pstr("source"),
+    }
+}
+
+pub fn parse_families(json: &str) -> Vec<Family> {
+    let root: FamiliesRoot = match serde_json::from_str(json) {
+        Ok(r) => r,
+        Err(_) => return Vec::new(),
+    };
+    root.families
+        .into_iter()
+        .filter_map(|rf| {
+            let role = match rf.role.as_str() {
+                "drums" => LibRole::Drums,
+                "bass" => LibRole::Bass,
+                "synth" => LibRole::Synth,
+                _ => return None,
+            };
+            Some(Family {
+                id: rf.id,
+                label: rf.label,
+                role,
+                genre: rf.genre,
+                members: rf
+                    .members
+                    .into_iter()
+                    .map(|m| FamilyMember {
+                        function: m.function,
+                        name: m.name,
+                    })
+                    .collect(),
+            })
+        })
+        .collect()
+}
+
 /// Sort a GenreMap alphabetically by genre name.
 fn sort_genres(map: GenreMap) -> GenreMap {
     let mut entries: Vec<(String, Vec<Pattern>)> = map.into_iter().collect();
@@ -266,7 +466,37 @@ impl Library {
             &synth_cat,
         ));
 
-        Ok(Library { drums, bass, synth })
+        // Performance families (Phase 3) — optional; empty if the catalog is
+        // absent or has no `families` array. Additive metadata only.
+        let families = catalog_json
+            .as_deref()
+            .map(parse_families)
+            .unwrap_or_default();
+
+        let mut lib = Library {
+            drums,
+            bass,
+            synth,
+            families,
+            v2_index: V2Index::default(),
+            records: Vec::new(),
+        };
+
+        // v2 factory patterns (architecture phase) — optional, additive, non-fatal.
+        // Any v2 file under `<dir>/v2/` is merged into the genre maps and its stable
+        // id/aliases recorded. A missing dir yields nothing; a malformed or too-new
+        // file is skipped with a warning rather than failing the whole load.
+        let (loaded, mut warnings) = crate::pattern::format_v2::load_v2_dir(&dir.join("v2"));
+        warnings.extend(lib.merge_v2(loaded));
+        for w in &warnings {
+            eprintln!("midip: v2 pattern load: {w}");
+        }
+
+        // Build the flat search/filter index (Phase 8) once, after all patterns are
+        // present. Purely additive — existing accessors are unaffected.
+        lib.records = lib.build_records();
+
+        Ok(lib)
     }
 
     /// Construct an empty library (no patterns in any role).
@@ -275,7 +505,226 @@ impl Library {
             drums: GenreMap::new(),
             bass: GenreMap::new(),
             synth: GenreMap::new(),
+            families: Vec::new(),
+            v2_index: V2Index::default(),
+            records: Vec::new(),
         }
+    }
+
+    /// Merge parsed v2 patterns into the library. Each pattern is appended to its
+    /// `role`/`genre` list (creating the genre if new) and its stable id + aliases
+    /// are recorded. A v2 pattern whose `name` collides with an existing pattern in
+    /// the same role+genre is **skipped** (returned as a warning) so it can never
+    /// shadow or duplicate a legacy pattern that saved refs point at.
+    ///
+    /// Returns a list of human-readable warnings for skipped patterns.
+    pub fn merge_v2(&mut self, loaded: Vec<crate::pattern::format_v2::LoadedV2>) -> Vec<String> {
+        let mut warnings = Vec::new();
+        for item in loaded {
+            let map = match item.role {
+                LibRole::Drums => &mut self.drums,
+                LibRole::Bass => &mut self.bass,
+                LibRole::Synth => &mut self.synth,
+            };
+            let bucket = map.entry(item.genre.clone()).or_default();
+            if bucket.iter().any(|p| p.name == item.pattern.name) {
+                warnings.push(format!(
+                    "v2 {}: name '{}' already exists in {}/{} — skipped",
+                    item.factory_id,
+                    item.pattern.name,
+                    crate::pattern::format_v2::role_str(item.role),
+                    item.genre
+                ));
+                continue;
+            }
+            bucket.push(item.pattern.clone());
+            self.v2_index.meta.insert(
+                (item.role, item.genre.clone(), item.pattern.name.clone()),
+                v2meta_from(&item.metadata, &item.provenance),
+            );
+            self.v2_index.ids.push(FactoryIdEntry {
+                factory_id: item.factory_id,
+                role: item.role,
+                genre: item.genre.clone(),
+                name: item.pattern.name.clone(),
+            });
+            for alias in item.aliases {
+                self.v2_index.aliases.push(AliasEntry {
+                    role: item.role,
+                    genre: item.genre.clone(),
+                    alias,
+                    canonical: item.pattern.name.clone(),
+                });
+            }
+        }
+        warnings
+    }
+
+    /// The stable factory id for a pattern identity, if one is registered.
+    pub fn factory_id_of(&self, role: LibRole, genre: &str, name: &str) -> Option<&str> {
+        self.v2_index
+            .ids
+            .iter()
+            .find(|e| e.role == role && e.genre == genre && e.name == name)
+            .map(|e| e.factory_id.as_str())
+    }
+
+    /// Resolve a stable factory id back to its `(role, genre, name)` identity.
+    pub fn resolve_factory_id(&self, factory_id: &str) -> Option<(LibRole, &str, &str)> {
+        self.v2_index
+            .ids
+            .iter()
+            .find(|e| e.factory_id == factory_id)
+            .map(|e| (e.role, e.genre.as_str(), e.name.as_str()))
+    }
+
+    /// If `name` is a registered alias within `role`+`genre`, return the current
+    /// canonical name it maps to. Used as a resolution fallback for renamed
+    /// patterns so old saved `PatternRef`s keep working. `role` is the wire string
+    /// ("drums"/"bass"/"synth").
+    pub fn resolve_alias_name(&self, role: &str, genre: &str, name: &str) -> Option<&str> {
+        let role = match role {
+            "drums" => LibRole::Drums,
+            "bass" => LibRole::Bass,
+            "synth" => LibRole::Synth,
+            _ => return None,
+        };
+        self.v2_index
+            .aliases
+            .iter()
+            .find(|a| a.role == role && a.genre == genre && a.alias == name)
+            .map(|a| a.canonical.as_str())
+    }
+
+    /// Look up a pattern by role+genre+name, falling back to the v2 alias registry
+    /// when the direct name misses (so a renamed pattern still resolves by its old
+    /// name). This is the single consult point for alias-aware resolution.
+    pub fn find_aliased(&self, role: &str, genre: &str, name: &str) -> Option<&Pattern> {
+        self.find(role, genre, name).or_else(|| {
+            self.resolve_alias_name(role, genre, name)
+                .and_then(|canon| self.find(role, genre, canon))
+        })
+    }
+
+    /// All performance families.
+    pub fn families(&self) -> &[Family] {
+        &self.families
+    }
+
+    /// The flat search/filter index over every pattern (Phase 8).
+    pub fn records(&self) -> &[crate::pattern::index::Record] {
+        &self.records
+    }
+
+    /// Run a query against the index, returning the matching records (sorted).
+    pub fn query<'a>(
+        &'a self,
+        q: &crate::pattern::index::Query,
+        favs: &crate::pattern::store::Favorites,
+    ) -> Vec<&'a crate::pattern::index::Record> {
+        crate::pattern::index::filter(&self.records, q, favs)
+            .into_iter()
+            .map(|i| &self.records[i])
+            .collect()
+    }
+
+    /// Build the flat record index over all patterns. v2 patterns take their rich
+    /// metadata from the retained envelope; legacy patterns derive what they can and
+    /// leave the rest Unknown/None.
+    fn build_records(&self) -> Vec<crate::pattern::index::Record> {
+        use crate::pattern::index::{feel_from_data, make_record, poly_of, Density, Energy, Feel};
+        let mut out = Vec::new();
+        for (role, map) in [
+            (LibRole::Drums, &self.drums),
+            (LibRole::Bass, &self.bass),
+            (LibRole::Synth, &self.synth),
+        ] {
+            for (genre, pats) in map {
+                for p in pats {
+                    let fam = self.family_of(role, genre, &p.name);
+                    let m = self
+                        .v2_index
+                        .meta
+                        .get(&(role, genre.clone(), p.name.clone()));
+                    let fid = self
+                        .factory_id_of(role, genre, &p.name)
+                        .map(|s| s.to_string());
+                    let (feel, energy, density, bpm, harmonic, subgenre, tags, author, source) =
+                        match m {
+                            Some(m) => (
+                                m.feel.as_deref().map(Feel::parse).unwrap_or(Feel::Straight),
+                                m.energy
+                                    .as_deref()
+                                    .map(Energy::parse)
+                                    .unwrap_or(Energy::Unknown),
+                                m.density
+                                    .as_deref()
+                                    .map(Density::parse)
+                                    .unwrap_or(Density::Unknown),
+                                m.bpm,
+                                m.harmonic.clone(),
+                                m.subgenre.clone(),
+                                m.tags.clone(),
+                                m.author.clone(),
+                                m.source.clone(),
+                            ),
+                            None => (
+                                feel_from_data(&p.data),
+                                Energy::Unknown,
+                                Density::Unknown,
+                                None,
+                                None,
+                                None,
+                                Vec::new(),
+                                None,
+                                None,
+                            ),
+                        };
+                    out.push(make_record(
+                        role,
+                        genre.clone(),
+                        p.name.clone(),
+                        fid,
+                        p.kind(),
+                        p.length,
+                        fam.map(|(f, _)| f.label.clone()),
+                        fam.map(|(_, func)| func),
+                        feel,
+                        poly_of(&p.data),
+                        subgenre,
+                        bpm,
+                        energy,
+                        density,
+                        harmonic,
+                        tags,
+                        author,
+                        source,
+                        p.desc.clone(),
+                    ));
+                }
+            }
+        }
+        out
+    }
+
+    /// The family and function a given pattern belongs to, if any. Matches by
+    /// role + genre + name (the same identity as `PatternRef`).
+    pub fn family_of(
+        &self,
+        role: LibRole,
+        genre: &str,
+        name: &str,
+    ) -> Option<(&Family, PatternFunction)> {
+        self.families.iter().find_map(|f| {
+            if f.role == role && f.genre == genre {
+                f.members
+                    .iter()
+                    .find(|m| m.name == name)
+                    .map(|m| (f, m.function))
+            } else {
+                None
+            }
+        })
     }
 
     /// Genre names in file order for a given role.
@@ -506,10 +955,11 @@ mod tests {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/patterns");
         let lib = Library::load(&dir).unwrap();
 
-        // Each role: 20 genres.
-        assert_eq!(lib.genres(LibRole::Drums).len(), 20);
-        assert_eq!(lib.genres(LibRole::Bass).len(), 20);
-        assert_eq!(lib.genres(LibRole::Synth).len(), 20);
+        // Each role has the 20 original legacy genres, plus any additive v2 genre
+        // packs (Phase 6). The legacy files themselves still contribute exactly 20.
+        assert!(lib.genres(LibRole::Drums).len() >= 20);
+        assert!(lib.genres(LibRole::Bass).len() >= 20);
+        assert!(lib.genres(LibRole::Synth).len() >= 20);
 
         // Genres are alphabetical — "acid-techno" sorts before everything else.
         assert_eq!(lib.genres(LibRole::Drums)[0], "acid-techno");
@@ -541,6 +991,75 @@ mod tests {
         assert_eq!(bpats.len(), 20);
         assert_eq!(bpats[0].length, 16);
         assert_eq!(bpats[0].kind(), LaneKind::Melodic);
+    }
+
+    #[test]
+    fn parse_families_reads_schema_and_skips_unknown_roles() {
+        let json = r#"{"families":[
+          {"id":"a-drums","label":"A","role":"drums","genre":"techno",
+           "members":[{"function":"core","name":"Four on Floor"},
+                      {"function":"variation_a","name":"Kick Drive"}]},
+          {"id":"bad","label":"B","role":"percussion","genre":"techno",
+           "members":[{"function":"core","name":"X"}]}
+        ]}"#;
+        let fams = parse_families(json);
+        // Unknown role ("percussion") is skipped.
+        assert_eq!(fams.len(), 1);
+        let f = &fams[0];
+        assert_eq!(f.id, "a-drums");
+        assert_eq!(f.role, LibRole::Drums);
+        assert_eq!(f.members[0].function, PatternFunction::Core);
+        assert_eq!(f.members[1].function, PatternFunction::VariationA);
+        // Absent/garbage → empty, never a panic.
+        assert!(parse_families("{}").is_empty());
+        assert!(parse_families("not json").is_empty());
+    }
+
+    #[test]
+    fn load_reads_families_and_family_of_matches_by_identity() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/patterns");
+        let lib = Library::load(&dir).unwrap();
+
+        // Catalog ships the 20 original Phase-3 families plus the Phase-6 genre-pack
+        // families; each has a Core member and every member resolves in its role+genre.
+        assert!(
+            lib.families().len() >= 20,
+            "expected at least the 20 original families, got {}",
+            lib.families().len()
+        );
+        for fam in lib.families() {
+            let role = match fam.role {
+                LibRole::Drums => "drums",
+                LibRole::Bass => "bass",
+                LibRole::Synth => "synth",
+            };
+            assert!(
+                fam.members
+                    .iter()
+                    .any(|m| m.function == PatternFunction::Core),
+                "family {} lacks a Core member",
+                fam.id
+            );
+            for m in &fam.members {
+                assert!(
+                    lib.find(role, &fam.genre, &m.name).is_some(),
+                    "family {} member {:?} does not resolve",
+                    fam.id,
+                    m.name
+                );
+            }
+        }
+
+        // family_of matches by role+genre+name (same identity as PatternRef).
+        let (fam, func) = lib
+            .family_of(LibRole::Drums, "techno", "Four on Floor")
+            .expect("Four on Floor is in the techno drum family");
+        assert_eq!(fam.id, "techno-drive-drums");
+        assert_eq!(func, PatternFunction::Core);
+        // A pattern not enrolled in any family → None.
+        assert!(lib
+            .family_of(LibRole::Drums, "techno", "Iron Grid")
+            .is_none());
     }
 
     #[test]

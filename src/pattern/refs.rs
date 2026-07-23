@@ -44,7 +44,9 @@ impl PatternRef {
 /// Returns None if unresolvable.
 pub fn resolve_pattern_ref(r: &PatternRef, lib: &Library, user_dir: &Path) -> Option<Pattern> {
     match r {
-        PatternRef::Vendored { role, genre, name } => lib.find(role, genre, name).cloned(),
+        // Alias-aware: falls back to the v2 alias registry when the direct
+        // role+genre+name misses, so a renamed factory pattern still resolves.
+        PatternRef::Vendored { role, genre, name } => lib.find_aliased(role, genre, name).cloned(),
         PatternRef::User(id) => {
             for path in list_user_patterns(user_dir) {
                 if let Ok(pat) = load_user_pattern(&path) {
@@ -86,7 +88,7 @@ pub fn resolve_scene(
             // search is omitted: two vendored entries can share a name while differing in
             // role or genre, which would cause silent mis-resolution.
             PatternRef::Vendored { role, genre, name } => {
-                lib.find(role, genre, name).cloned().ok_or(())
+                lib.find_aliased(role, genre, name).cloned().ok_or(())
             }
             PatternRef::User(id) => inline_patterns
                 .iter()

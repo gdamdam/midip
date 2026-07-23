@@ -139,6 +139,7 @@ fn three_lane_set() -> Set {
         scenes: Vec::new(),
         chains: Vec::new(),
         clock_in_port: None,
+        steps_per_bar: 16,
     }
 }
 
@@ -554,9 +555,12 @@ fn status_string_appears_in_transport() {
 
     fn empty_library() -> Library {
         Library {
+            records: Vec::new(),
             drums: GenreMap::new(),
             bass: GenreMap::new(),
             synth: GenreMap::new(),
+            families: Vec::new(),
+            v2_index: Default::default(),
         }
     }
 

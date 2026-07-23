@@ -1,0 +1,141 @@
+{
+  "schema": "midip.pattern",
+  "version": 2,
+  "factory_id": "synth.boom-bap.jazz-ii-v-i",
+  "role": "synth",
+  "kind": "melodic",
+  "genre": "boom-bap",
+  "name": "Jazz ii-V-i",
+  "desc": "A ii-V-i in minor: held Dm7, G7, then a resting Am7 chord.",
+  "length": 16,
+  "steps": [
+    [
+      {
+        "semi": 5,
+        "vel": 1.0,
+        "slide": false,
+        "len": 1.5
+      },
+      {
+        "semi": 9,
+        "vel": 1.0,
+        "slide": false,
+        "len": 1.5
+      },
+      {
+        "semi": 12,
+        "vel": 1.0,
+        "slide": false,
+        "len": 1.5
+      },
+      {
+        "semi": 15,
+        "vel": 1.0,
+        "slide": false,
+        "len": 1.5
+      }
+    ],
+    null,
+    null,
+    null,
+    [
+      {
+        "semi": 10,
+        "vel": 1.0,
+        "slide": false,
+        "len": 1.5
+      },
+      {
+        "semi": 14,
+        "vel": 1.0,
+        "slide": false,
+        "len": 1.5
+      },
+      {
+        "semi": 17,
+        "vel": 1.0,
+        "slide": false,
+        "len": 1.5
+      },
+      {
+        "semi": 20,
+        "vel": 1.0,
+        "slide": false,
+        "len": 1.5
+      }
+    ],
+    null,
+    null,
+    null,
+    [
+      {
+        "semi": 0,
+        "vel": 1.15,
+        "slide": false,
+        "len": 2.5
+      },
+      {
+        "semi": 3,
+        "vel": 1.15,
+        "slide": false,
+        "len": 2.5
+      },
+      {
+        "semi": 7,
+        "vel": 1.15,
+        "slide": false,
+        "len": 2.5
+      },
+      {
+        "semi": 10,
+        "vel": 1.15,
+        "slide": false,
+        "len": 2.5
+      }
+    ],
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+  ],
+  "metadata": {
+    "bpm_min": 82,
+    "bpm_max": 98,
+    "feel": "swung-16 (mpc 58%)",
+    "timing": "mpc-swing",
+    "energy": "mid",
+    "density": "core",
+    "tags": [
+      "hip-hop",
+      "boom-bap",
+      "keys"
+    ],
+    "harmonic": "minor7",
+    "chord_poly": "chord",
+    "subgenre": "boom-bap",
+    "compatible_devices": [
+      "s1",
+      "j-6",
+      "monologue",
+      "microfreak",
+      "minilogue-xd",
+      "generic-poly"
+    ],
+    "function": "variation_b"
+  },
+  "provenance": {
+    "source": "factory",
+    "author": "midip factory",
+    "pack": "hip-hop",
+    "license": "original generic groove (no copyrighted material)",
+    "references": [
+      "Magenta Groove MIDI Dataset (groove/microtiming methodology)",
+      "Gillick et al. 2019 'Learning to Groove' arXiv:1905.06118",
+      "MPC classic boom-bap swing workflow references",
+      "Roland TR-909 kick heritage (Wikipedia)"
+    ]
+  }
+}

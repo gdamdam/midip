@@ -1,0 +1,93 @@
+{
+  "schema": "midip.pattern",
+  "version": 2,
+  "factory_id": "bass.afro-house.rolling-pentatonic",
+  "role": "bass",
+  "kind": "melodic",
+  "genre": "afro-house",
+  "name": "Rolling Pentatonic",
+  "desc": "Hypnotic rolling minor-pentatonic bass sitting under the four-on-floor.",
+  "length": 16,
+  "steps": [
+    {
+      "semi": 0,
+      "vel": 1.15,
+      "slide": false,
+      "len": 0.5
+    },
+    null,
+    null,
+    null,
+    {
+      "semi": 3,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.5
+    },
+    null,
+    {
+      "semi": 7,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.5
+    },
+    null,
+    {
+      "semi": 0,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.5
+    },
+    null,
+    null,
+    {
+      "semi": 10,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.5
+    },
+    null,
+    null,
+    {
+      "semi": 7,
+      "vel": 0.82,
+      "slide": false,
+      "len": 0.5
+    },
+    null
+  ],
+  "metadata": {
+    "bpm_min": 118,
+    "bpm_max": 125,
+    "feel": "straight",
+    "timing": "straight",
+    "energy": "mid",
+    "density": "core",
+    "tags": [
+      "afro-house",
+      "bass",
+      "rolling"
+    ],
+    "harmonic": "minor-pentatonic",
+    "chord_poly": "mono",
+    "subgenre": "afro-house",
+    "compatible_devices": [
+      "t8-bass",
+      "td-3",
+      "generic-mono"
+    ],
+    "function": "core"
+  },
+  "provenance": {
+    "source": "factory",
+    "author": "midip factory",
+    "pack": "afro-house-amapiano",
+    "license": "original generic groove (no copyrighted material)",
+    "references": [
+      "Afro House production 101 (Native Instruments)",
+      "Afro House BPM & structure references (vibesdj)",
+      "Generic son-style bell timeline (public-domain rhythmic template)",
+      "Magenta Groove MIDI Dataset"
+    ]
+  }
+}

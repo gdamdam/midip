@@ -1,0 +1,85 @@
+{
+  "schema": "midip.pattern",
+  "version": 2,
+  "factory_id": "bass.amapiano.log-drum",
+  "role": "bass",
+  "kind": "melodic",
+  "genre": "amapiano",
+  "name": "Log Drum",
+  "desc": "The amapiano log drum: a deep, syncopated, gliding pitched bass figure landing in the kick gaps.",
+  "length": 16,
+  "steps": [
+    null,
+    null,
+    null,
+    {
+      "semi": 0,
+      "vel": 1.15,
+      "slide": true,
+      "len": 1.0,
+      "micro": 160
+    },
+    null,
+    null,
+    {
+      "semi": 3,
+      "vel": 1.0,
+      "slide": true,
+      "len": 1.25
+    },
+    null,
+    null,
+    null,
+    {
+      "semi": -2,
+      "vel": 1.0,
+      "slide": true,
+      "len": 1.0
+    },
+    null,
+    null,
+    {
+      "semi": 0,
+      "vel": 1.15,
+      "slide": true,
+      "len": 1.25,
+      "micro": 160
+    },
+    null,
+    null
+  ],
+  "metadata": {
+    "bpm_min": 108,
+    "bpm_max": 118,
+    "feel": "swung-16 (mpc 58%)",
+    "timing": "mpc-swing",
+    "energy": "mid",
+    "density": "core",
+    "tags": [
+      "amapiano",
+      "log-drum",
+      "bass"
+    ],
+    "harmonic": "minor",
+    "chord_poly": "mono",
+    "subgenre": "amapiano",
+    "compatible_devices": [
+      "t8-bass",
+      "td-3",
+      "generic-mono"
+    ],
+    "function": "core"
+  },
+  "provenance": {
+    "source": "factory",
+    "author": "midip factory",
+    "pack": "afro-house-amapiano",
+    "license": "original generic groove (no copyrighted material)",
+    "references": [
+      "'Amapiano' (Wikipedia): Gauteng township origins, kwaito/deep-house/jazz lineage, log drum",
+      "Amapiano's Second Wave \u2014 South African history (Mixmag)",
+      "Amapiano log-drum production (InspiredByBeatz)",
+      "Amapiano BPM ~108-118 (vibesdj)"
+    ]
+  }
+}

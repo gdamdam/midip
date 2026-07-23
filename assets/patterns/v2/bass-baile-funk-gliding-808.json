@@ -1,0 +1,82 @@
+{
+  "schema": "midip.pattern",
+  "version": 2,
+  "factory_id": "bass.baile-funk.gliding-808",
+  "role": "bass",
+  "kind": "melodic",
+  "genre": "baile-funk",
+  "name": "Gliding 808",
+  "desc": "808-style sub that glides between roots, reinforcing the low 'tum'.",
+  "length": 16,
+  "steps": [
+    {
+      "semi": 0,
+      "vel": 1.15,
+      "slide": false,
+      "len": 1.5
+    },
+    null,
+    null,
+    null,
+    null,
+    null,
+    {
+      "semi": 0,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.5
+    },
+    null,
+    null,
+    null,
+    {
+      "semi": -4,
+      "vel": 1.0,
+      "slide": true,
+      "len": 1.5
+    },
+    null,
+    null,
+    {
+      "semi": -2,
+      "vel": 1.0,
+      "slide": true,
+      "len": 0.75
+    },
+    null,
+    null
+  ],
+  "metadata": {
+    "bpm_min": 128,
+    "bpm_max": 140,
+    "feel": "straight-16",
+    "timing": "straight",
+    "energy": "mid",
+    "density": "core",
+    "tags": [
+      "baile-funk",
+      "bass",
+      "808"
+    ],
+    "harmonic": "minor",
+    "chord_poly": "mono",
+    "subgenre": "baile-funk",
+    "compatible_devices": [
+      "t8-bass",
+      "td-3",
+      "generic-mono"
+    ],
+    "function": "core"
+  },
+  "provenance": {
+    "source": "factory",
+    "author": "midip factory",
+    "pack": "reggaeton-dembow-baile",
+    "license": "original generic groove (no copyrighted material)",
+    "references": [
+      "'Funk carioca' (Wikipedia) & 'Tamborzao' (Rate Your Music): origins, tempo",
+      "How to Make Brazilian Funk (Loopcloud) \u2014 'do not over-quantize'",
+      "Magenta Groove MIDI Dataset"
+    ]
+  }
+}

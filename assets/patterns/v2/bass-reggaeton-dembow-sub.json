@@ -1,0 +1,83 @@
+{
+  "schema": "midip.pattern",
+  "version": 2,
+  "factory_id": "bass.reggaeton.dembow-sub",
+  "role": "bass",
+  "kind": "melodic",
+  "genre": "reggaeton",
+  "name": "Dembow Sub",
+  "desc": "Sub bass locked to the kick with a short minor tail into the turnaround.",
+  "length": 16,
+  "steps": [
+    {
+      "semi": 0,
+      "vel": 1.15,
+      "slide": false,
+      "len": 0.75
+    },
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    {
+      "semi": 0,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.75
+    },
+    null,
+    null,
+    {
+      "semi": -2,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.5
+    },
+    null,
+    null,
+    {
+      "semi": -4,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.5
+    },
+    null
+  ],
+  "metadata": {
+    "bpm_min": 88,
+    "bpm_max": 100,
+    "feel": "straight-16",
+    "timing": "straight",
+    "energy": "mid",
+    "density": "core",
+    "tags": [
+      "reggaeton",
+      "bass",
+      "sub"
+    ],
+    "harmonic": "minor",
+    "chord_poly": "mono",
+    "subgenre": "reggaeton",
+    "compatible_devices": [
+      "t8-bass",
+      "td-3",
+      "generic-mono"
+    ],
+    "function": "core"
+  },
+  "provenance": {
+    "source": "factory",
+    "author": "midip factory",
+    "pack": "reggaeton-dembow-baile",
+    "license": "original generic groove (no copyrighted material)",
+    "references": [
+      "'Dembow beat' (Wikipedia): rhythm structure, dancehall->reggaeton lineage",
+      "'Dembow Explained' (Berklee)",
+      "3+3+2 / habanera shared rhythmic ancestor (Wayne Marshall commentary)",
+      "Reggaeton programming (Native Instruments / MusicRadar)"
+    ]
+  }
+}

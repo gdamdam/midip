@@ -1,0 +1,363 @@
+{
+  "schema": "midip.pattern",
+  "version": 2,
+  "factory_id": "drums.footwork.juke-two-bar",
+  "role": "drums",
+  "kind": "drums",
+  "genre": "footwork",
+  "name": "Juke Two-Bar",
+  "desc": "Two-bar footwork with a triplet-ratchet fill.",
+  "length": 32,
+  "steps": [
+    [
+      {
+        "note": 36,
+        "vel": 118,
+        "micro": 5
+      },
+      {
+        "note": 42,
+        "vel": 102,
+        "micro": 5
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102,
+        "micro": -42
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102,
+        "micro": 23
+      }
+    ],
+    [
+      {
+        "note": 36,
+        "vel": 102,
+        "micro": -36
+      },
+      {
+        "note": 42,
+        "vel": 102,
+        "micro": -36
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102,
+        "micro": 36
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102,
+        "micro": -5
+      }
+    ],
+    [
+      {
+        "note": 36,
+        "vel": 102,
+        "micro": 29
+      },
+      {
+        "note": 42,
+        "vel": 102,
+        "micro": 29
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102,
+        "micro": -23
+      }
+    ],
+    [
+      {
+        "note": 38,
+        "vel": 118,
+        "micro": -26
+      },
+      {
+        "note": 42,
+        "vel": 102,
+        "micro": -26
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102,
+        "micro": 20
+      }
+    ],
+    [
+      {
+        "note": 36,
+        "vel": 102,
+        "micro": -14
+      },
+      {
+        "note": 42,
+        "vel": 102,
+        "micro": -14
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102,
+        "micro": 39
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102,
+        "micro": -7
+      }
+    ],
+    [
+      {
+        "note": 36,
+        "vel": 102,
+        "micro": 10
+      },
+      {
+        "note": 42,
+        "vel": 102,
+        "micro": 10
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102,
+        "micro": -45
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102,
+        "micro": 2
+      }
+    ],
+    [
+      {
+        "note": 36,
+        "vel": 118,
+        "micro": -39
+      },
+      {
+        "note": 42,
+        "vel": 102,
+        "micro": -39
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102,
+        "micro": -5
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102,
+        "micro": 49
+      }
+    ],
+    [
+      {
+        "note": 36,
+        "vel": 102,
+        "micro": -11
+      },
+      {
+        "note": 42,
+        "vel": 102,
+        "micro": -11
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102,
+        "micro": -34
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102,
+        "micro": 21
+      }
+    ],
+    [
+      {
+        "note": 36,
+        "vel": 102,
+        "micro": -15
+      },
+      {
+        "note": 42,
+        "vel": 102,
+        "micro": -15
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102,
+        "micro": 26
+      }
+    ],
+    [
+      {
+        "note": 38,
+        "vel": 118,
+        "micro": -2
+      },
+      {
+        "note": 42,
+        "vel": 102,
+        "micro": -2
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102,
+        "micro": 32
+      }
+    ],
+    [
+      {
+        "note": 36,
+        "vel": 102,
+        "micro": 18
+      },
+      {
+        "note": 42,
+        "vel": 102,
+        "micro": 18
+      },
+      {
+        "note": 47,
+        "vel": 102,
+        "micro": 18
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102,
+        "micro": -27
+      }
+    ],
+    [
+      {
+        "note": 38,
+        "vel": 102,
+        "micro": 18
+      },
+      {
+        "note": 42,
+        "vel": 102,
+        "micro": 18
+      }
+    ],
+    [
+      {
+        "note": 36,
+        "vel": 102,
+        "micro": -43
+      },
+      {
+        "note": 38,
+        "vel": 102,
+        "ratchet": 2,
+        "micro": -43
+      },
+      {
+        "note": 42,
+        "vel": 102,
+        "micro": -43
+      }
+    ],
+    [
+      {
+        "note": 38,
+        "vel": 102,
+        "ratchet": 3,
+        "micro": 48
+      },
+      {
+        "note": 42,
+        "vel": 102,
+        "micro": 48
+      }
+    ],
+    [
+      {
+        "note": 38,
+        "vel": 102,
+        "ratchet": 4,
+        "micro": -49
+      },
+      {
+        "note": 42,
+        "vel": 102,
+        "micro": -49
+      }
+    ]
+  ],
+  "metadata": {
+    "bpm_min": 158,
+    "bpm_max": 162,
+    "feel": "humanized microtiming",
+    "timing": "humanized",
+    "energy": "high",
+    "density": "dense",
+    "tags": [
+      "footwork",
+      "two-bar",
+      "4/4"
+    ],
+    "harmonic": null,
+    "chord_poly": "none",
+    "subgenre": "footwork",
+    "compatible_devices": [
+      "t8-drums",
+      "rd-8",
+      "drumbrute-impact",
+      "circuit-drums",
+      "generic-gm-drums"
+    ],
+    "meter": "4/4",
+    "steps_per_bar": 16,
+    "bars": 2,
+    "function": "variation_b"
+  },
+  "provenance": {
+    "source": "factory",
+    "author": "midip factory",
+    "pack": "multi-bar",
+    "license": "original generic groove (no copyrighted material)",
+    "references": [
+      "Magenta Groove MIDI Dataset",
+      "documented genre groove references",
+      "standard meter/subdivision theory (3/4, 6/8, 5/4)"
+    ]
+  }
+}

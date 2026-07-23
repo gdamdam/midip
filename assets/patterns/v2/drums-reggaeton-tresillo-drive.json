@@ -1,0 +1,180 @@
+{
+  "schema": "midip.pattern",
+  "version": 2,
+  "factory_id": "drums.reggaeton.tresillo-drive",
+  "role": "drums",
+  "kind": "drums",
+  "genre": "reggaeton",
+  "name": "Tresillo Drive",
+  "desc": "Tresillo (3+3+2) kick under a busy dembow snare and driving sixteenth hats.",
+  "length": 16,
+  "steps": [
+    [
+      {
+        "note": 36,
+        "vel": 118
+      },
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 38,
+        "vel": 102
+      },
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 36,
+        "vel": 102
+      },
+      {
+        "note": 38,
+        "vel": 118
+      },
+      {
+        "note": 42,
+        "vel": 102
+      },
+      {
+        "note": 46,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 36,
+        "vel": 102
+      },
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 38,
+        "vel": 102
+      },
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 38,
+        "vel": 118
+      },
+      {
+        "note": 42,
+        "vel": 102
+      },
+      {
+        "note": 46,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ]
+  ],
+  "metadata": {
+    "bpm_min": 88,
+    "bpm_max": 100,
+    "feel": "straight-16",
+    "timing": "straight",
+    "energy": "high",
+    "density": "dense",
+    "tags": [
+      "reggaeton",
+      "dembow"
+    ],
+    "harmonic": null,
+    "chord_poly": "none",
+    "subgenre": "reggaeton",
+    "compatible_devices": [
+      "t8-drums",
+      "rd-8",
+      "drumbrute-impact",
+      "circuit-drums",
+      "generic-gm-drums"
+    ],
+    "function": "variation_b"
+  },
+  "provenance": {
+    "source": "factory",
+    "author": "midip factory",
+    "pack": "reggaeton-dembow-baile",
+    "license": "original generic groove (no copyrighted material)",
+    "references": [
+      "'Dembow beat' (Wikipedia): rhythm structure, dancehall->reggaeton lineage",
+      "'Dembow Explained' (Berklee)",
+      "3+3+2 / habanera shared rhythmic ancestor (Wayne Marshall commentary)",
+      "Reggaeton programming (Native Instruments / MusicRadar)"
+    ]
+  }
+}

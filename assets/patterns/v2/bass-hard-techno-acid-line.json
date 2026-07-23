@@ -1,0 +1,102 @@
+{
+  "schema": "midip.pattern",
+  "version": 2,
+  "factory_id": "bass.hard-techno.acid-line",
+  "role": "bass",
+  "kind": "melodic",
+  "genre": "hard-techno",
+  "name": "Acid Line",
+  "desc": "Phrygian acid line with slides and accents for hypnotic tension.",
+  "length": 16,
+  "steps": [
+    {
+      "semi": 0,
+      "vel": 1.15,
+      "slide": false,
+      "len": 0.25
+    },
+    null,
+    {
+      "semi": 0,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.25
+    },
+    {
+      "semi": 1,
+      "vel": 0.82,
+      "slide": false,
+      "len": 0.25
+    },
+    null,
+    null,
+    {
+      "semi": 12,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.25
+    },
+    null,
+    {
+      "semi": 0,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.25
+    },
+    null,
+    {
+      "semi": 3,
+      "vel": 0.82,
+      "slide": false,
+      "len": 0.25
+    },
+    {
+      "semi": 1,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.25
+    },
+    null,
+    null,
+    {
+      "semi": 0,
+      "vel": 1.0,
+      "slide": false,
+      "len": 0.25
+    },
+    null
+  ],
+  "metadata": {
+    "bpm_min": 140,
+    "bpm_max": 155,
+    "feel": "straight",
+    "timing": "straight",
+    "energy": "high",
+    "density": "dense",
+    "tags": [
+      "hard-techno",
+      "acid",
+      "bass"
+    ],
+    "harmonic": "phrygian",
+    "chord_poly": "mono",
+    "subgenre": "hard-techno",
+    "compatible_devices": [
+      "t8-bass",
+      "td-3",
+      "generic-mono"
+    ],
+    "function": "variation_b"
+  },
+  "provenance": {
+    "source": "factory",
+    "author": "midip factory",
+    "pack": "modern-club",
+    "license": "original generic groove (no copyrighted material)",
+    "references": [
+      "Techno BPM guide (ZIPDJ)",
+      "Hard-techno production references",
+      "Roland TR-909 heritage"
+    ]
+  }
+}

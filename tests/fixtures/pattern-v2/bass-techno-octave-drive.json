@@ -1,0 +1,23 @@
+{
+  "schema": "midip.pattern",
+  "version": 2,
+  "factory_id": "bass.techno.octave-drive-v2",
+  "role": "bass",
+  "kind": "melodic",
+  "name": "Octave Drive V2",
+  "aliases": ["Octave Pulse V2 (old)"],
+  "genre": "techno",
+  "desc": "Representative v2 mono-bass fixture: slide, explicit len, Ratio cond, prob<1.",
+  "length": 8,
+  "steps": [
+    {"semi": 0, "vel": 1.0, "slide": false, "len": 0.5},
+    null,
+    {"semi": 0, "vel": 1.0, "slide": true, "len": 1.0},
+    {"semi": 12, "vel": 1.1, "slide": false, "len": 0.5, "prob": 0.8},
+    {"semi": 0, "vel": 1.0, "slide": false, "len": 0.5},
+    null,
+    {"semi": 0, "vel": 1.0, "slide": false, "len": 0.5, "cond": {"type": "Ratio", "x": 1, "y": 2}},
+    {"semi": 7, "vel": 1.0, "slide": true, "len": 0.5, "ratchet": 2}
+  ],
+  "provenance": { "source": "factory", "author": "midip" }
+}
