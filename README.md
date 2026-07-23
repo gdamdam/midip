@@ -5,10 +5,10 @@
 **A terminal MIDI sequencer & live groovebox — built‑in profiles for the Roland AIRA Compact T‑8 & S‑1, plus a device library for any class‑compliant USB‑MIDI gear**
 
 [![License](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.4.1-success.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.8.0-success.svg)](CHANGELOG.md)
 [![Rust](https://img.shields.io/badge/rust-2021%20edition-orange.svg)](https://www.rust-lang.org)
 [![Tests](https://img.shields.io/badge/tests-1010%20passing-brightgreen.svg)](CHANGELOG.md)
-[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg)](#build--run)
+[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey.svg)](#build--run)
 [![Built with ratatui](https://img.shields.io/badge/TUI-ratatui-blueviolet.svg)](https://ratatui.rs)
 
 ![midip demo](midip.gif)
@@ -151,6 +151,26 @@ cargo test                   # run the test suite (1010 tests, no hardware neede
 
 > Run it in a real terminal (not piped) — it takes over the screen while running and restores
 > it on exit. Press `?` any time for the full control list, `q` (twice while playing) to quit.
+
+## Desktop GUI (midip-gui)
+
+midip also ships a **Tauri 2 + Svelte 5 desktop app** in `gui/` — a second frontend over the
+**same** Rust engine (the TUI is unchanged). It's a native window (OS webview, not Electron):
+the Rust core owns all sequencing, MIDI and timing; the UI only sends typed commands and
+renders snapshots, so the GUI thread never touches MIDI scheduling.
+
+```sh
+cd gui
+npm install            # first time only
+npx tauri dev          # launch the desktop app (compiles the Rust app on first run)
+npx tauri build        # build an installable bundle (.dmg / .msi+.exe / .deb+.AppImage)
+```
+
+It carries midip's "Ember" look and has full feature parity with the TUI: transport, three
+lane strips, drum grid (click + drag-paint) and a melodic piano-roll, a step inspector,
+pattern library with audition/favorites/crates, Song mode (scenes + chains), routing &
+clock-in, the generative tool (Generate/Vary/Arp with live preview), a command palette
+(**⌘K**), help (**?**) and crash recovery. No MIDI hardware is required to open it.
 
 ## Quick start
 

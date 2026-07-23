@@ -1,0 +1,115 @@
+/* Ember design tokens — mirrors src/ui/theme.rs (Gruvbox-dark hard). The GUI is
+   a focused musical instrument: dense, dark, warm, restrained. */
+:root {
+  --bg: #1d2021; /* dark warm charcoal */
+  --panel: #282828; /* raised panel */
+  --panel-2: #32302f; /* nested panel */
+  --fg: #ebdbb2; /* cream primary text */
+  --fg-dim: #a89984; /* secondary text */
+  --dim: #665c54; /* borders / separators / empty */
+  --dim-2: #504945;
+
+  --ember: #fe8019; /* principal accent + drums */
+  --pink: #d3869b; /* secondary emphasis + bass */
+  --aqua: #83a598; /* connected / synced + synth */
+  --warn: #fabd2f; /* queued / edited */
+  --err: #fb4934; /* panic / error only */
+  --ok: #b8bb26; /* saved / solo / ok */
+
+  --selection: #504945;
+  --playhead: #3c3836;
+
+  --step: 26px; /* grid cell size */
+  --radius: 3px;
+  --border: 1px solid var(--dim);
+  --border-strong: 1px solid var(--dim-2);
+
+  --mono: "SF Mono", "JetBrains Mono", "Fira Code", ui-monospace, "Cascadia Code",
+    Menlo, Consolas, monospace;
+
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.35;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+  user-select: none;
+}
+
+button {
+  font-family: inherit;
+  font-size: inherit;
+  color: var(--fg);
+  background: var(--panel-2);
+  border: var(--border);
+  border-radius: var(--radius);
+  padding: 4px 9px;
+  cursor: pointer;
+}
+button:hover {
+  border-color: var(--fg-dim);
+}
+button:focus-visible {
+  outline: 2px solid var(--ember);
+  outline-offset: 1px;
+}
+button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+input {
+  font-family: inherit;
+  font-size: inherit;
+  color: var(--fg);
+  background: var(--bg);
+  border: var(--border);
+  border-radius: var(--radius);
+  padding: 3px 6px;
+}
+
+.mono {
+  font-variant-numeric: tabular-nums;
+}
+.muted {
+  color: var(--fg-dim);
+}
+.dim {
+  color: var(--dim);
+}
+
+/* Scrollbars — restrained, dark. */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--dim-2);
+  border-radius: 5px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}

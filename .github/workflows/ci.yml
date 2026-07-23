@@ -53,3 +53,51 @@ jobs:
 
       - name: Run tests
         run: cargo test --all-targets --verbose
+
+  gui:
+    name: GUI (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable (fmt + clippy)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: gui/src-tauri
+          key: gui-ci
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install GUI system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev patchelf \
+            libayatana-appindicator3-dev libasound2-dev
+
+      - name: Install frontend dependencies
+        working-directory: gui
+        run: npm ci
+
+      # Frontend must build first: it produces gui/dist, which the Tauri crate's
+      # `generate_context!` embeds at compile time (so cargo checks below need it).
+      - name: Frontend typecheck + build
+        working-directory: gui
+        run: npm run build
+
+      - name: Check formatting
+        run: cargo fmt --manifest-path gui/src-tauri/Cargo.toml --all -- --check
+
+      - name: Clippy (deny warnings)
+        run: cargo clippy --manifest-path gui/src-tauri/Cargo.toml --all-targets -- -D warnings
+
+      - name: Run tests
+        run: cargo test --manifest-path gui/src-tauri/Cargo.toml --all-targets --verbose

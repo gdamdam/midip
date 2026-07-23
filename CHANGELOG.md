@@ -7,6 +7,30 @@ feature milestone is a minor bump).
 
 ## [Unreleased]
 
+## [1.8.0] — 2026-07-23 — Desktop GUI (midip-gui)
+
+### Added
+- **New Tauri 2 + Svelte 5 desktop GUI (`midip-gui`)**, a second frontend over the
+  existing Rust engine — the Ratatui TUI is unchanged. Lives in `gui/`; the Tauri crate
+  depends on the `midip` library by path and reuses the engine, `App::apply`, persistence,
+  library, devices and Ableton Link verbatim through a typed `GuiCommand` bridge and
+  deliberate snapshot DTOs. The GUI thread never schedules MIDI; the engine stays on its
+  own thread, and shutdown sends `Quit` + joins (all-notes-off) even mid-playback.
+- **Full feature parity with the TUI:** transport (play/stop, BPM, swing, Link, tap,
+  panic, mirror, position, undo/redo), three lane strips (focus/mute/solo/channel/device/
+  queued/activity), drum grid (click + drag paint/erase) and melodic piano-roll (click to
+  place pitch, drag to re-pitch), step inspector (velocity/probability/ratchet/length/
+  slide/microtiming/trig-cond/CC), pattern library with audition + favorites + crates,
+  Song mode (scene + chain authoring), Setup (routing, clock-in, set save/load/rename/
+  duplicate/delete), user-pattern management, pattern transforms (euclid/rotate/conform/
+  fill), the generative tool (Generate/Vary/Arp with live preview), a command palette,
+  help, first-run onboarding, and crash recovery.
+- **Ember visual identity** carried into the GUI (Gruvbox-dark palette, dense groovebox
+  layout, reduced-motion aware) with a step-grid app icon.
+- **CI/release:** per-PR GUI checks (svelte-check + vite build + `cargo fmt`/clippy/test on
+  the Tauri crate) and tag-triggered installable GUI bundles (`.dmg` / `.exe`+`.msi` /
+  `.deb`+`.AppImage`) attached to the GitHub release.
+
 ## [1.4.1] — 2026-07-14 — CI: rustfmt
 
 ### Fixed
