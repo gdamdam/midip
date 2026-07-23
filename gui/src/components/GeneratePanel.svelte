@@ -1,7 +1,8 @@
 <script lang="ts">
   import { app, send } from "../lib/store.svelte";
 
-  const gen = $derived(app.snap!.gen);
+  // Rendered at the top level (before the snapshot loads), so stay null-safe.
+  const gen = $derived(app.snap?.gen ?? null);
 
   const MODES = [
     { id: "generate", label: "Generate" },
@@ -14,7 +15,7 @@
   }
 </script>
 
-{#if gen.active}
+{#if gen?.active}
   <div class="scrim" role="presentation" onclick={() => send({ type: "genCancel" })}></div>
   <div class="panel" role="dialog" aria-label="Pattern generator">
     <div class="head">
