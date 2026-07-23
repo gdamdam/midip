@@ -365,15 +365,97 @@ pub fn generate(params: &GenParams, source: &Pattern, lane: &Lane) -> Pattern {
     }
 }
 
-/// Offline arp generator. Stubbed in Task 1; implemented in Task 4.
-fn generate_arp(_params: &GenParams, source: &Pattern, _lane: &Lane) -> Pattern {
-    source.clone()
+/// Split a seed into an independent xorshift stream (odd, non-zero constant).
+fn split_seed(seed: u64) -> u64 {
+    let s = seed ^ 0x9E37_79B9_7F4A_7C15;
+    if s == 0 {
+        1
+    } else {
+        s
+    }
+}
+
+/// Map an RNG draw + vel_var into a MelodicNote velocity multiplier.
+/// vel_var 0 => constant 1.0; higher => wider spread, always clamped to model range.
+fn arp_velocity(rand: u64, vel_var: u8) -> f32 {
+    if vel_var == 0 {
+        return 1.0;
+    }
+    let spread = (vel_var as f32 / 100.0) * 0.4; // up to ±0.2 around 1.0
+    let frac = (rand % MEL_VEL_DENOM) as f32 / MEL_VEL_DENOM as f32; // [0,1)
+    (1.0 - spread / 2.0 + frac * spread).clamp(0.5, 1.3)
+}
+
+/// Offline arp generator: Euclidean firing mask (density) + a scale-degree pool
+/// walked in the chosen shape, one mono note per firing step. Melodic only.
+fn generate_arp(params: &GenParams, source: &Pattern, lane: &Lane) -> Pattern {
+    let length = source.length;
+    let mut out = source.clone();
+
+    let pulses = if params.density == 0 {
+        0
+    } else if params.density >= 100 {
+        length
+    } else {
+        let d = params.density as usize;
+        (d * length + 50) / 100
+    };
+
+    let mask = bjorklund(pulses, length, 0);
+    let fire_count = mask.iter().filter(|&&a| a).count();
+
+    let pool = arp_pool(params.arp_chord, params.arp_octaves, lane.scale);
+
+    // Independent RNG streams: pitch order (Random) vs velocity.
+    let mut pitch_rng = if params.seed == 0 { 1 } else { params.seed };
+    let mut vel_rng = split_seed(params.seed);
+
+    let seq = arp_sequence(&pool, params.arp_shape, fire_count, &mut pitch_rng);
+    let gate = params.arp_gate.clamp(0.05, 1.0);
+    let root = lane.effective_root() as i32;
+
+    let mut seq_idx = 0usize;
+    let steps: Vec<MelodicStep> = mask
+        .into_iter()
+        .map(|active| {
+            if !active {
+                return MelodicStep::default();
+            }
+            let semi_raw = seq.get(seq_idx).copied().unwrap_or(0);
+            seq_idx += 1;
+
+            // Velocity stream advances on every firing step regardless of vel_var,
+            // so vel_var never perturbs the pitch stream.
+            let v = next_rng(&mut vel_rng);
+            let vel = arp_velocity(v, params.arp_vel_var);
+
+            // Drop (rest) any note that would fall outside i8 or MIDI 0..=127.
+            let abs = root + semi_raw;
+            let fits = (i8::MIN as i32..=i8::MAX as i32).contains(&semi_raw)
+                && (0..=127).contains(&abs);
+            if !fits {
+                return MelodicStep::default();
+            }
+
+            MelodicStep::from(vec![MelodicNote {
+                semi: semi_raw as i8,
+                vel,
+                slide: false,
+                len: gate,
+                prob: 1.0,
+                ratchet: 1,
+                micro: 0,
+                cond: TrigCond::Always,
+            }])
+        })
+        .collect();
+
+    out.data = PatternData::Melodic(steps);
+    out
 }
 
 impl ArpChord {
     /// Indices into `Scale::degrees()` for non-chromatic scales.
-    #[allow(dead_code)]
-    // Wired into generate_arp in Task 4; remove this allow then.
     fn degree_indices(self) -> &'static [usize] {
         match self {
             ArpChord::Power => &[0, 4],
@@ -385,8 +467,6 @@ impl ArpChord {
 
     /// Fixed semitone intervals used when the lane scale is Chromatic
     /// (where degree indexing would not yield a real chord).
-    #[allow(dead_code)]
-    // Wired into generate_arp in Task 4; remove this allow then.
     fn chromatic_intervals(self) -> &'static [i32] {
         match self {
             ArpChord::Power => &[0, 7],
@@ -401,8 +481,6 @@ impl ArpChord {
 /// the lane scale (fixed intervals for Chromatic), then stack across `octaves`
 /// registers (+12 each). No preset includes the octave, so endpoints never
 /// duplicate across registers. A final `fold_to_scale` guards edge cases.
-#[allow(dead_code)]
-// Wired into generate_arp in Task 4; remove this allow then.
 fn arp_pool(chord: ArpChord, octaves: u8, scale: Scale) -> Vec<i32> {
     let base: Vec<i32> = if scale == Scale::Chromatic {
         chord.chromatic_intervals().to_vec()
@@ -426,8 +504,6 @@ fn arp_pool(chord: ArpChord, octaves: u8, scale: Scale) -> Vec<i32> {
 }
 
 /// In-place Fisher–Yates shuffle using the shared xorshift stream.
-#[allow(dead_code)]
-// Wired into generate_arp in Task 4; remove this allow then.
 fn shuffle_in_place(v: &mut [i32], rng: &mut u64) {
     if v.len() < 2 {
         return;
@@ -440,8 +516,6 @@ fn shuffle_in_place(v: &mut [i32], rng: &mut u64) {
 
 /// UpDown cycle for an ascending pool: ascend then descend the interior only,
 /// so top/bottom are not repeated back-to-back. [a,b,c] -> [a,b,c,b] (len 2n-2).
-#[allow(dead_code)]
-// Wired into generate_arp in Task 4; remove this allow then.
 fn updown_cycle(pool: &[i32]) -> Vec<i32> {
     if pool.len() < 2 {
         return pool.to_vec();
@@ -456,8 +530,6 @@ fn updown_cycle(pool: &[i32]) -> Vec<i32> {
 /// Produce exactly `count` pitches by walking `pool` in `shape` order, repeating
 /// the cycle as needed. Random reshuffles the whole pool each cycle (arp-like,
 /// avoids accidental in-cycle repeats).
-#[allow(dead_code)]
-// Wired into generate_arp in Task 4; remove this allow then.
 fn arp_sequence(pool: &[i32], shape: ArpShape, count: usize, rng: &mut u64) -> Vec<i32> {
     let mut seq = Vec::with_capacity(count);
     if pool.is_empty() || count == 0 {
@@ -1333,5 +1405,101 @@ mod gen_core_tests {
             arp_sequence(&[7], ArpShape::UpDown, 3, &mut rng),
             vec![7, 7, 7]
         );
+    }
+
+    // ── Task 4: full generate_arp — mask, shape walk, bounds, velocity ─────────
+
+    /// Helper: collect (index, semi) of firing steps from a melodic pattern.
+    fn arp_notes(p: &Pattern) -> Vec<(usize, i8)> {
+        match &p.data {
+            PatternData::Melodic(steps) => steps
+                .iter()
+                .enumerate()
+                .filter_map(|(i, s)| s.iter().next().map(|n| (i, n.semi)))
+                .collect(),
+            _ => vec![],
+        }
+    }
+
+    #[test]
+    fn arp_density_zero_is_all_rests() {
+        let (mut params, source, lane) = melodic_fixture(Scale::Major);
+        params.mode = GenMode::Arp;
+        params.density = 0;
+        let out = generate_arp(&params, &source, &lane);
+        assert!(arp_notes(&out).is_empty(), "density 0 => no notes");
+    }
+
+    #[test]
+    fn arp_density_full_fires_every_step() {
+        let (mut params, source, lane) = melodic_fixture(Scale::Major);
+        params.mode = GenMode::Arp;
+        params.density = 100;
+        let out = generate_arp(&params, &source, &lane);
+        assert_eq!(arp_notes(&out).len(), source.length, "density 100 => every step fires");
+    }
+
+    #[test]
+    fn arp_gate_clamped_into_len() {
+        let (mut params, source, lane) = melodic_fixture(Scale::Major);
+        params.mode = GenMode::Arp;
+        params.density = 100;
+        params.arp_gate = 5.0; // out of range; must clamp to 1.0
+        let out = generate_arp(&params, &source, &lane);
+        if let PatternData::Melodic(steps) = &out.data {
+            let n = steps.iter().flat_map(|s| s.iter()).next().unwrap();
+            assert!((n.len - 1.0).abs() < f32::EPSILON, "gate clamps to 1.0");
+        }
+        params.arp_gate = 0.0; // clamps up to 0.05
+        let out2 = generate_arp(&params, &source, &lane);
+        if let PatternData::Melodic(steps) = &out2.data {
+            let n = steps.iter().flat_map(|s| s.iter()).next().unwrap();
+            assert!((n.len - 0.05).abs() < f32::EPSILON, "gate clamps to 0.05");
+        }
+    }
+
+    #[test]
+    fn arp_vel_var_does_not_change_pitch_sequence() {
+        let (mut params, source, lane) = melodic_fixture(Scale::Major);
+        params.mode = GenMode::Arp;
+        params.density = 100;
+        params.arp_shape = ArpShape::Random;
+        params.arp_vel_var = 0;
+        let a = arp_notes(&generate_arp(&params, &source, &lane));
+        params.arp_vel_var = 100;
+        let b = arp_notes(&generate_arp(&params, &source, &lane));
+        assert_eq!(a, b, "changing vel_var must not alter the pitch sequence");
+    }
+
+    #[test]
+    fn arp_drops_notes_outside_midi_range() {
+        // Force a lane whose root is near the ceiling so high pool notes exceed 127.
+        let (mut params, source, mut lane) = melodic_fixture(Scale::Major);
+        lane.root = Some(125); // effective_root 125; +12/+16/+19 exceed 127
+        params.mode = GenMode::Arp;
+        params.density = 100;
+        params.arp_chord = ArpChord::Triad;
+        params.arp_octaves = 2; // pool up to +19 => 144 > 127 for several notes
+        let out = generate_arp(&params, &source, &lane);
+        if let PatternData::Melodic(steps) = &out.data {
+            for n in steps.iter().flat_map(|s| s.iter()) {
+                let abs = 125i32 + n.semi as i32;
+                assert!((0..=127).contains(&abs), "no note exceeds MIDI range");
+            }
+        }
+    }
+
+    #[test]
+    fn arp_velocity_within_model_bounds() {
+        let (mut params, source, lane) = melodic_fixture(Scale::Major);
+        params.mode = GenMode::Arp;
+        params.density = 100;
+        params.arp_vel_var = 100;
+        let out = generate_arp(&params, &source, &lane);
+        if let PatternData::Melodic(steps) = &out.data {
+            for n in steps.iter().flat_map(|s| s.iter()) {
+                assert!((0.5..=1.3).contains(&n.vel), "vel stays in model range");
+            }
+        }
     }
 }
