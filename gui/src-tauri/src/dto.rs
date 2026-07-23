@@ -20,7 +20,41 @@ pub struct Snapshot {
     pub focused_pattern: PatternDto,
     pub selection: SelectionDto,
     pub inspector: InspectorDto,
+    pub song: SongDto,
     pub status: String,
+}
+
+// --- Song (scenes + chains) --------------------------------------------
+
+#[derive(Serialize, Clone)]
+pub struct SongDto {
+    pub scenes: Vec<SceneDto>,
+    pub chains: Vec<ChainDto>,
+    /// Index of the chain currently auto-advancing, if any.
+    pub playing_chain: Option<usize>,
+}
+
+#[derive(Serialize, Clone)]
+pub struct SceneDto {
+    pub index: usize,
+    pub name: String,
+}
+
+#[derive(Serialize, Clone)]
+pub struct ChainDto {
+    pub index: usize,
+    pub name: String,
+    pub looped: bool,
+    pub entries: Vec<ChainEntryDto>,
+    /// Currently-playing entry index within this chain (when it is the active chain).
+    pub current_entry: Option<usize>,
+}
+
+#[derive(Serialize, Clone)]
+pub struct ChainEntryDto {
+    pub scene: String,
+    pub repeats: u32,
+    pub bars: u32,
 }
 
 #[derive(Serialize, Clone)]
@@ -236,6 +270,7 @@ impl Snapshot {
             col: app.cur_col,
         };
         let inspector = build_inspector(app);
+        let song = build_song(app);
 
         Snapshot {
             transport,
@@ -244,8 +279,68 @@ impl Snapshot {
             focused_pattern,
             selection,
             inspector,
+            song,
             status: app.status.clone(),
         }
+    }
+}
+
+fn build_song(app: &App) -> SongDto {
+    let set = &app.set;
+    let scenes = set
+        .scenes
+        .iter()
+        .enumerate()
+        .map(|(i, s)| SceneDto {
+            index: i,
+            name: s.name.clone(),
+        })
+        .collect();
+
+    // Which chain (if any) is actively auto-advancing, and at which entry.
+    let (active_chain_id, active_entry) = match &app.chain_playback {
+        Some(pb) if pb.active => (Some(pb.chain_id.clone()), Some(pb.entry_idx)),
+        _ => (None, None),
+    };
+    let mut playing_chain = None;
+
+    let chains = set
+        .chains
+        .iter()
+        .enumerate()
+        .map(|(i, c)| {
+            let is_active = active_chain_id.as_ref() == Some(&c.id);
+            if is_active {
+                playing_chain = Some(i);
+            }
+            let entries = c
+                .entries
+                .iter()
+                .map(|e| ChainEntryDto {
+                    scene: set
+                        .scenes
+                        .iter()
+                        .find(|s| s.id == e.scene_id)
+                        .map(|s| s.name.clone())
+                        .unwrap_or_else(|| "(missing)".into()),
+                    repeats: e.repeats,
+                    bars: e.bars,
+                })
+                .collect();
+            ChainDto {
+                index: i,
+                name: c.name.clone(),
+                looped: c.looped,
+                entries,
+                current_entry: if is_active { active_entry } else { None },
+            }
+        })
+        .collect();
+
+    SongDto {
+        scenes,
+        chains,
+        playing_chain,
     }
 }
 

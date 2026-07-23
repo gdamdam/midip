@@ -126,6 +126,28 @@ export interface Inspector {
   cc: CcLock[];
 }
 
+export interface SceneItem {
+  index: number;
+  name: string;
+}
+export interface ChainEntryItem {
+  scene: string;
+  repeats: number;
+  bars: number;
+}
+export interface ChainItem {
+  index: number;
+  name: string;
+  looped: boolean;
+  entries: ChainEntryItem[];
+  current_entry: number | null;
+}
+export interface Song {
+  scenes: SceneItem[];
+  chains: ChainItem[];
+  playing_chain: number | null;
+}
+
 export interface Snapshot {
   transport: Transport;
   lanes: Lane[];
@@ -133,6 +155,7 @@ export interface Snapshot {
   focused_pattern: Pattern;
   selection: Selection;
   inspector: Inspector;
+  song: Song;
   status: string;
 }
 
@@ -205,6 +228,10 @@ export type GuiCommand =
   | { type: "cycleScale"; args: { lane: number; delta: number } }
   | { type: "adjustRoot"; args: { lane: number; delta: number } }
   | { type: "adjustOctave"; args: { lane: number; delta: number } }
+  | { type: "recallScene"; args: number }
+  | { type: "captureScene" }
+  | { type: "playChain"; args: number }
+  | { type: "stopChain" }
   | { type: "undo" }
   | { type: "redo" }
   | { type: "save" }

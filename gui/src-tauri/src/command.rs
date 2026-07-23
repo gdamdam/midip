@@ -171,6 +171,12 @@ pub enum GuiCommand {
         delta: i32,
     },
 
+    // --- song (scenes + chains) ---
+    RecallScene(usize),
+    CaptureScene,
+    PlayChain(usize),
+    StopChain,
+
     // --- history ---
     Undo,
     Redo,
@@ -269,6 +275,12 @@ pub fn gui_to_actions(cmd: &GuiCommand) -> Vec<Action> {
         G::ToggleMirror => vec![Action::ToggleMirror],
         G::Undo => vec![Action::Undo],
         G::Redo => vec![Action::Redo],
+
+        // song — App guards scene/chain indices internally
+        G::RecallScene(i) => vec![Action::RecallScene(i)],
+        G::CaptureScene => vec![Action::CaptureScene],
+        G::PlayChain(i) => vec![Action::PlayChain(i)],
+        G::StopChain => vec![Action::StopChain],
 
         // persistence — the engine's own actions self-resolve the data dir,
         // mark dirty, set status and manage recovery, so we simply forward them.
@@ -452,6 +464,29 @@ mod tests {
         assert_eq!(route_prep(&GuiCommand::TogglePlay), None);
         // Routing commands are lane-bounds-checked.
         assert_eq!(command_lane(&GuiCommand::ToggleClockOut(2)), Some(2));
+    }
+
+    #[test]
+    fn song_translation() {
+        assert_eq!(
+            gui_to_actions(&GuiCommand::RecallScene(2)),
+            vec![Action::RecallScene(2)]
+        );
+        assert_eq!(
+            gui_to_actions(&GuiCommand::CaptureScene),
+            vec![Action::CaptureScene]
+        );
+        assert_eq!(
+            gui_to_actions(&GuiCommand::PlayChain(1)),
+            vec![Action::PlayChain(1)]
+        );
+        assert_eq!(
+            gui_to_actions(&GuiCommand::StopChain),
+            vec![Action::StopChain]
+        );
+        // Song commands are global (no lane / no cell targeting).
+        assert_eq!(command_lane(&GuiCommand::PlayChain(1)), None);
+        assert_eq!(target_cell(&GuiCommand::RecallScene(0)), None);
     }
 
     #[test]

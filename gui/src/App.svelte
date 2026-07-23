@@ -5,6 +5,7 @@
   import PatternGrid from "./components/PatternGrid.svelte";
   import StepInspector from "./components/StepInspector.svelte";
   import PatternLibrary from "./components/PatternLibrary.svelte";
+  import SongPanel from "./components/SongPanel.svelte";
   import SetupPanel from "./components/SetupPanel.svelte";
   import StatusToast from "./components/StatusToast.svelte";
 
@@ -14,7 +15,7 @@
     { id: "perform", label: "Perform" },
     { id: "pattern", label: "Pattern" },
     { id: "library", label: "Library" },
-    { id: "song", label: "Song", later: true },
+    { id: "song", label: "Song" },
     { id: "setup", label: "Setup" },
   ];
 
@@ -111,15 +112,7 @@
           <div class="right wide"><PatternLibrary /></div>
         </div>
       {:else if tab === "song"}
-        <div class="later">
-          <div>
-            <h2>Song mode</h2>
-            <p class="muted">
-              Scenes and chains are implemented in the engine and will arrive in a later GUI
-              milestone. Use the TUI (<code>midip</code>) for song arrangement today.
-            </p>
-          </div>
-        </div>
+        <SongPanel />
       {:else if tab === "setup"}
         <SetupPanel />
       {/if}
@@ -203,23 +196,5 @@
     background: var(--panel);
     min-height: 0;
     overflow: hidden;
-  }
-  .later {
-    display: grid;
-    place-items: center;
-    height: 100%;
-    padding: 40px;
-    text-align: center;
-  }
-  .later h2 {
-    color: var(--ember);
-    margin-bottom: 8px;
-  }
-  .later p {
-    max-width: 420px;
-    line-height: 1.6;
-  }
-  code {
-    color: var(--aqua);
   }
 </style>
