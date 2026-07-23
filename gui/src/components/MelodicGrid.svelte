@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { app, send } from "../lib/store.svelte";
+  import { app, send, placeNote } from "../lib/store.svelte";
   import { midiName } from "../lib/music";
 
   const pat = $derived(app.snap!.focused_pattern);
@@ -35,9 +35,14 @@
 
   const playCol = $derived(t.playing ? t.playhead % Math.max(pat.length, 1) : -1);
 
-  // Click a column: toggle a note there (place scale-folded default, or clear).
-  function toggleCol(col: number) {
-    send({ type: "toggleStep", args: { lane, row: 0, col } });
+  // Click an empty cell: place a note at that row's pitch (scale-folded by the
+  // engine). Placing in an occupied column replaces the note (mono lanes).
+  function place(col: number, pitch: number) {
+    placeNote(lane, col, pitch);
+  }
+  // Remove the note in a column via toggle (it clears when a note is present).
+  function clearCol(col: number) {
+    send({ type: "clearStep", args: { lane, row: 0, col } });
   }
 
   // Vertical drag on the selected step nudges pitch by scale degree.
@@ -92,24 +97,25 @@
         <div class="keylabel mono">{midiName(pitch)}</div>
         {#each cols as c (c)}
           {@const n = firstNote(c)}
-          {@const on = n && n.pitch === pitch}
+          {@const on = !!(n && n.pitch === pitch)}
           <button
             class="mcell"
             class:sep={c % 4 === 3 && c !== pat.length - 1}
             class:playhead={c === playCol}
             class:selected={sel.col === c && on}
-            onclick={() => !n && toggleCol(c)}
+            onclick={() => !on && place(c, pitch)}
             aria-label={`step ${c + 1} pitch ${midiName(pitch)}`}
           >
             {#if on}
               <span
                 class="note"
-                class:slide={n.slide}
-                style:opacity={0.4 + 0.6 * n.vel}
+                class:slide={n!.slide}
+                style:opacity={0.4 + 0.6 * n!.vel}
                 onmousedown={(e) => noteDown(e, c)}
+                ondblclick={() => clearCol(c)}
                 role="button"
                 tabindex="-1"
-                title="{midiName(pitch)} — drag to pitch, click column to remove"
+                title="{midiName(pitch)} — drag to change pitch, double-click to remove"
               ></span>
             {/if}
           </button>

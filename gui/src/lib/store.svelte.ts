@@ -10,6 +10,7 @@ import {
   loadLibraryPattern,
   onSnapshot,
   onTransport,
+  placeNote as bridgePlaceNote,
   stopAudition,
   toggleFavorite,
 } from "./bridge";
@@ -64,6 +65,18 @@ export async function loadPattern(
 ): Promise<void> {
   try {
     app.snap = await loadLibraryPattern(role, genre, name);
+  } catch (e) {
+    app.error = String(e);
+  }
+}
+
+export async function placeNote(
+  lane: number,
+  col: number,
+  pitch: number,
+): Promise<void> {
+  try {
+    app.snap = await bridgePlaceNote(lane, col, pitch);
   } catch (e) {
     app.error = String(e);
   }

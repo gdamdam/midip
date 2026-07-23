@@ -24,6 +24,12 @@ export const loadLibraryPattern = (
   name: string,
 ): Promise<Snapshot> => invoke("gui_load_pattern", { role, genre, name });
 
+export const placeNote = (
+  lane: number,
+  col: number,
+  pitch: number,
+): Promise<Snapshot> => invoke("gui_place_note", { lane, col, pitch });
+
 export const auditionPattern = (
   role: string,
   genre: string,

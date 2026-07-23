@@ -125,6 +125,34 @@ impl Core {
         self.forward(cmds);
     }
 
+    /// Place a melodic note of a specific absolute MIDI `pitch` at `(lane,col)`,
+    /// driving the engine's note-input path (which scale-folds on placement, so a
+    /// click on a non-scale row snaps to the nearest degree). Inverts
+    /// `resolve_melodic_pitch` (root+semi+transpose+12·octave) to derive the
+    /// relative semitone, then splits it into the note-input octave + offset.
+    pub fn place_note(&mut self, lane: usize, col: usize, pitch: u8) {
+        if lane >= self.app.set.lanes.len() {
+            return;
+        }
+        self.place_cursor(lane, 0, col);
+        let l = &self.app.set.lanes[lane];
+        if l.pattern.kind() != LaneKind::Melodic {
+            return;
+        }
+        let desired =
+            pitch as i32 - l.effective_root() as i32 - l.transpose as i32 - 12 * l.octave as i32;
+        // Open note-input (resets note_input_octave to 0), then set our own octave
+        // + offset so `NoteInputPlace` reconstructs `desired = offset + oct*12`.
+        let c0 = self.app.apply(Action::OpenNoteInput);
+        self.forward(c0);
+        self.app.note_input_octave = desired.div_euclid(12).clamp(-10, 10) as i8;
+        let offset = desired.rem_euclid(12) as i8;
+        let c1 = self.app.apply(Action::NoteInputPlace(offset));
+        self.forward(c1);
+        let c2 = self.app.apply(Action::CloseNoteInput);
+        self.forward(c2);
+    }
+
     /// Cue a library pattern as an isolated preview on its role's lane WITHOUT
     /// mutating the committed set. Mirrors `Action::Audition` (which is bound to
     /// the TUI's lib-selection cursor) using the public `AuditionPreview`.
@@ -252,6 +280,13 @@ fn gui_audition(
 ) -> Snapshot {
     let mut core = state.core.lock().unwrap();
     core.audition(role, genre, name);
+    core.snapshot()
+}
+
+#[tauri::command]
+fn gui_place_note(lane: usize, col: usize, pitch: u8, state: tauri::State<GuiState>) -> Snapshot {
+    let mut core = state.core.lock().unwrap();
+    core.place_note(lane, col, pitch);
     core.snapshot()
 }
 
@@ -399,6 +434,7 @@ pub fn run() {
             gui_library,
             gui_load_pattern,
             gui_audition,
+            gui_place_note,
             gui_stop_audition,
             gui_toggle_favorite,
             gui_set_list,
@@ -530,6 +566,25 @@ mod tests {
             assert_eq!(snap.focused_pattern.drum_steps.len(), len);
             // Cursor at the last cell must be representable.
             assert!(snap.focused_pattern.cc.len() == len);
+        }
+    }
+
+    #[test]
+    fn place_note_lands_on_requested_pitch_on_chromatic_scale() {
+        let mut app = App::new(Set::default_set(default_profiles()), Library::empty());
+        // Lane 1 is the melodic bass lane; Chromatic means no scale folding, so the
+        // placed pitch must equal the request exactly.
+        app.set.lanes[1].scale = midip::music::scale::Scale::Chromatic;
+        app.focus = 1;
+        let (tx, _rx) = unbounded();
+        let mut core = Core::new(app, tx, std::env::temp_dir());
+
+        for target in [40u8, 50, 55, 62, 69] {
+            core.place_note(1, 0, target);
+            let snap = core.snapshot();
+            let notes = &snap.focused_pattern.melodic_steps[0];
+            assert_eq!(notes.len(), 1, "one note at step 0");
+            assert_eq!(notes[0].pitch, target, "placed pitch matches request");
         }
     }
 
