@@ -74,7 +74,8 @@
       "drumbrute-impact",
       "circuit-drums",
       "generic-gm-drums"
-    ]
+    ],
+    "function": "variation_a"
   },
   "provenance": {
     "source": "factory",

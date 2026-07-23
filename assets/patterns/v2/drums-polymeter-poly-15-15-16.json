@@ -144,7 +144,8 @@
     ],
     "meter": "poly",
     "steps_per_bar": 15,
-    "bars": 1
+    "bars": 1,
+    "function": "core"
   },
   "provenance": {
     "source": "factory",

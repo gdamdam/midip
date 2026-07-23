@@ -87,7 +87,8 @@
     ],
     "meter": "6/8",
     "steps_per_bar": 12,
-    "bars": 1
+    "bars": 1,
+    "function": "variation_a"
   },
   "provenance": {
     "source": "factory",

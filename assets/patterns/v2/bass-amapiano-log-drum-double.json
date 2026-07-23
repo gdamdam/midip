@@ -82,7 +82,8 @@
       "t8-bass",
       "td-3",
       "generic-mono"
-    ]
+    ],
+    "function": "variation_b"
   },
   "provenance": {
     "source": "factory",

@@ -147,6 +147,11 @@ def emit(role, genre, name, function, data_steps, kind, length, meta, prov, cc=N
            "role":role,"kind":kind,"genre":genre,"name":name,
            "desc":meta.pop("desc"),"length":length,"steps":data_steps}
     if cc: obj["cc"]=cc
+    # Every pattern self-declares its function (Phase 10 quality gate), normalized
+    # to the canonical enum name (sparse→variation_a, dense→variation_b, …); words
+    # already in enum form pass through. Kept in metadata so even standalone
+    # patterns carry a function purpose.
+    meta.setdefault("function", FUNC.get(function, function))
     obj["metadata"]=meta
     obj["provenance"]=prov
     fn=f"{role}-{genre}-{slug(name)}.json"
@@ -165,6 +170,20 @@ def family(fid, label, role, genre, members):
         seen.add(f); fm.append({"function":f,"name":nm})
     assert "core" in seen, f"family {fid} missing core"
     FAMILIES.append({"id":fid,"label":label,"role":role,"genre":genre,"members":fm})
+
+
+def extend_family(fid, members):
+    """Append members (function_word, pattern_name) to an already-declared family
+    by id — used by the coverage-completion pass (Phase 10) to add Fill/Breakdown/
+    variation members without re-declaring (which would duplicate the family id)."""
+    fam = next((f for f in FAMILIES if f["id"] == fid), None)
+    assert fam is not None, f"extend_family: unknown family {fid}"
+    seen = {m["function"] for m in fam["members"]}
+    for fword, nm in members:
+        f = FUNC[fword]
+        assert f not in seen, f"family {fid} already has function {f}"
+        seen.add(f)
+        fam["members"].append({"function": f, "name": nm})
 
 
 def write_all():

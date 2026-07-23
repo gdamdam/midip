@@ -123,7 +123,8 @@
     ],
     "meter": "5/4",
     "steps_per_bar": 20,
-    "bars": 1
+    "bars": 1,
+    "function": "core"
   },
   "provenance": {
     "source": "factory",

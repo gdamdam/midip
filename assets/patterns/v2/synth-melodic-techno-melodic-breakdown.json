@@ -119,7 +119,8 @@
       "microfreak",
       "minilogue-xd",
       "generic-poly"
-    ]
+    ],
+    "function": "breakdown"
   },
   "provenance": {
     "source": "factory",

@@ -146,7 +146,8 @@
     ],
     "meter": "3/4",
     "steps_per_bar": 12,
-    "bars": 2
+    "bars": 2,
+    "function": "variation_a"
   },
   "provenance": {
     "source": "factory",
