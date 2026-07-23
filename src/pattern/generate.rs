@@ -1,4 +1,4 @@
-use crate::music::scale::fold_to_scale;
+use crate::music::scale::{Scale, fold_to_scale};
 use crate::pattern::euclid::bjorklund;
 use crate::pattern::model::{
     DrumHit, Lane, MelodicNote, MelodicStep, Pattern, PatternData, TrigCond,
@@ -368,6 +368,55 @@ pub fn generate(params: &GenParams, source: &Pattern, lane: &Lane) -> Pattern {
 /// Offline arp generator. Stubbed in Task 1; implemented in Task 4.
 fn generate_arp(_params: &GenParams, source: &Pattern, _lane: &Lane) -> Pattern {
     source.clone()
+}
+
+impl ArpChord {
+    /// Indices into `Scale::degrees()` for non-chromatic scales.
+    fn degree_indices(self) -> &'static [usize] {
+        match self {
+            ArpChord::Power => &[0, 4],
+            ArpChord::Triad => &[0, 2, 4],
+            ArpChord::Seventh => &[0, 2, 4, 6],
+            ArpChord::Octaves => &[0],
+        }
+    }
+
+    /// Fixed semitone intervals used when the lane scale is Chromatic
+    /// (where degree indexing would not yield a real chord).
+    fn chromatic_intervals(self) -> &'static [i32] {
+        match self {
+            ArpChord::Power => &[0, 7],
+            ArpChord::Triad => &[0, 4, 7],
+            ArpChord::Seventh => &[0, 4, 7, 11],
+            ArpChord::Octaves => &[0],
+        }
+    }
+}
+
+/// Build the ascending semitone pool for one arp: resolve chord degrees through
+/// the lane scale (fixed intervals for Chromatic), then stack across `octaves`
+/// registers (+12 each). No preset includes the octave, so endpoints never
+/// duplicate across registers. A final `fold_to_scale` guards edge cases.
+fn arp_pool(chord: ArpChord, octaves: u8, scale: Scale) -> Vec<i32> {
+    let base: Vec<i32> = if scale == Scale::Chromatic {
+        chord.chromatic_intervals().to_vec()
+    } else {
+        let degs = scale.degrees();
+        chord
+            .degree_indices()
+            .iter()
+            .filter_map(|&i| degs.get(i).map(|&s| s as i32))
+            .collect()
+    };
+
+    let octaves = octaves.max(1) as i32;
+    let mut pool = Vec::with_capacity(base.len() * octaves as usize);
+    for r in 0..octaves {
+        for &interval in &base {
+            pool.push(fold_to_scale(interval + 12 * r, scale));
+        }
+    }
+    pool
 }
 
 #[cfg(test)]
@@ -1120,5 +1169,47 @@ mod gen_core_tests {
         assert_eq!(p.arp_shape, ArpShape::UpDown);
         assert!((p.arp_gate - 0.5).abs() < f32::EPSILON);
         assert_eq!(p.arp_vel_var, 20);
+    }
+
+    // ── Task 2: arp_pool construction ────────────────────────────────────────
+
+    #[test]
+    fn arp_pool_octaves_stacks_root_per_register() {
+        use crate::music::scale::Scale;
+        // Octaves preset = root only; 2 registers => [0, 12], NOT [0,12,24].
+        assert_eq!(arp_pool(ArpChord::Octaves, 2, Scale::Major), vec![0, 12]);
+        assert_eq!(arp_pool(ArpChord::Octaves, 1, Scale::Major), vec![0]);
+    }
+
+    #[test]
+    fn arp_pool_triad_major_two_registers() {
+        use crate::music::scale::Scale;
+        // Major degrees [0,2,4,5,7,9,11]; triad indices 0,2,4 => [0,4,7].
+        assert_eq!(
+            arp_pool(ArpChord::Triad, 2, Scale::Major),
+            vec![0, 4, 7, 12, 16, 19]
+        );
+    }
+
+    #[test]
+    fn arp_pool_chromatic_uses_fixed_chord_intervals() {
+        use crate::music::scale::Scale;
+        // Under Chromatic, degrees()==0..11, so scale-index would not be a chord.
+        // Use fixed intervals instead.
+        assert_eq!(arp_pool(ArpChord::Triad, 1, Scale::Chromatic), vec![0, 4, 7]);
+        assert_eq!(arp_pool(ArpChord::Seventh, 1, Scale::Chromatic), vec![0, 4, 7, 11]);
+        assert_eq!(arp_pool(ArpChord::Power, 1, Scale::Chromatic), vec![0, 7]);
+        assert_eq!(arp_pool(ArpChord::Octaves, 1, Scale::Chromatic), vec![0]);
+    }
+
+    #[test]
+    fn arp_pool_skips_missing_degrees_on_pentatonic() {
+        use crate::music::scale::Scale;
+        // MajorPentatonic degrees [0,2,4,7,9] (5 entries); Seventh wants indices
+        // 0,2,4,6 — index 6 does not exist and is skipped.
+        assert_eq!(
+            arp_pool(ArpChord::Seventh, 1, Scale::MajorPentatonic),
+            vec![0, 4, 9]
+        );
     }
 }
