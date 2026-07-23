@@ -111,8 +111,9 @@
   }
   .toolbar {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 12px;
+    gap: 6px 10px;
     padding: 6px 10px;
     background: var(--panel);
     border-bottom: var(--border);
@@ -157,7 +158,10 @@
     text-align: center;
   }
   .spacer {
-    flex: 1;
+    /* Force a wrap so the action buttons (save / generate / clear) sit on their
+       own row; the parameter groups above wrap freely to fit any width. */
+    flex-basis: 100%;
+    height: 0;
   }
   .clr {
     padding: 2px 6px;

@@ -28,10 +28,16 @@
 </script>
 
 <aside class="inspector">
-  <h2>Step {sel.col + 1}</h2>
+  <div class="ihead">
+    <h2>Step inspector</h2>
+    <span class="stepno mono">step {sel.col + 1}</span>
+  </div>
 
   {#if !insp.present}
-    <p class="empty muted">Empty step. Click a cell in the grid to place a trig.</p>
+    <p class="empty muted">
+      Nothing on step {sel.col + 1}. Click a cell in the grid to place a step, then edit its
+      velocity, probability, ratchet, length, microtiming, trig condition and CC here.
+    </p>
   {:else}
     {#if insp.pitch !== null && insp.kind === "melodic"}
       <div class="param">
@@ -146,15 +152,27 @@
     overflow-y: auto;
     height: 100%;
   }
+  .ihead {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 4px;
+  }
   h2 {
-    margin: 0 0 4px;
+    margin: 0;
     font-size: 12px;
     letter-spacing: 0.06em;
     text-transform: uppercase;
     color: var(--ember);
   }
+  .stepno {
+    font-size: 11px;
+    color: var(--fg-dim);
+  }
   .empty {
     font-size: 12px;
+    line-height: 1.5;
   }
   .param {
     display: grid;
