@@ -417,9 +417,10 @@ pub struct ChainEntry {
 }
 
 impl ChainEntry {
-    /// Total steps this entry occupies (4/4, 16 steps/bar).
-    pub fn dwell_steps(&self) -> u64 {
-        self.bars as u64 * self.repeats as u64 * 16
+    /// Total steps this entry occupies, given the set's global `steps_per_bar`
+    /// (16 = 4/4). Passing 16 reproduces the pre-Phase-9 4/4 behaviour exactly.
+    pub fn dwell_steps(&self, steps_per_bar: usize) -> u64 {
+        self.bars as u64 * self.repeats as u64 * steps_per_bar as u64
     }
 }
 
@@ -445,9 +446,12 @@ impl Chain {
         }
     }
 
-    /// Sum of all entry dwell steps.
-    pub fn total_steps(&self) -> u64 {
-        self.entries.iter().map(|e| e.dwell_steps()).sum()
+    /// Sum of all entry dwell steps, given the set's global `steps_per_bar`.
+    pub fn total_steps(&self, steps_per_bar: usize) -> u64 {
+        self.entries
+            .iter()
+            .map(|e| e.dwell_steps(steps_per_bar))
+            .sum()
     }
 }
 
@@ -462,7 +466,8 @@ mod chain_model_tests {
             repeats: 2,
             bars: 4,
         };
-        assert_eq!(e.dwell_steps(), 2 * 4 * 16); // 128 steps
+        assert_eq!(e.dwell_steps(16), 2 * 4 * 16); // 128 steps at 4/4
+        assert_eq!(e.dwell_steps(12), 2 * 4 * 12); // 96 steps at 3/4
     }
 
     #[test]
@@ -500,7 +505,7 @@ mod chain_model_tests {
             repeats: 3,
             bars: 1,
         }); // 48
-        assert_eq!(c.total_steps(), 80);
+        assert_eq!(c.total_steps(16), 80);
     }
 }
 
@@ -518,6 +523,18 @@ pub struct Set {
     /// MIDI input port to receive clock from (M10). `None` = no clock-in selected.
     /// Defaults to `None` so old set files (pre-v4) load unchanged.
     pub clock_in_port: Option<PortRef>,
+    /// Steps per bar for the GLOBAL transport grid (Phase 9). 16 = 4/4 (four
+    /// 16th-note beats). 12 = 3/4 or 6/8, 20 = 5/4, etc. Governs bar-quantized
+    /// launch, Ableton Link `quantum`, and chain dwell. Defaults to 16 so every
+    /// existing set is byte-identical and all 4/4 behaviour is unchanged. Patterns
+    /// keep any `length` (1..=64) and wrap per-lane regardless (polymeter).
+    pub steps_per_bar: usize,
+}
+
+/// Default global grid: 16 sixteenth-steps per bar (4/4). Used as the serde default
+/// so pre-Phase-9 set files load unchanged.
+pub fn default_steps_per_bar() -> usize {
+    16
 }
 
 impl Set {
@@ -563,6 +580,7 @@ impl Set {
             scenes: Vec::new(),
             chains: Vec::new(),
             clock_in_port: None,
+            steps_per_bar: default_steps_per_bar(),
         }
     }
 

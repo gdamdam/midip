@@ -112,7 +112,11 @@ fn build_preview_lines(pattern: &Pattern, width: usize, max_height: usize) -> Ve
                     .unwrap_or(usize::MAX)
             });
 
-            let strip_len = pattern.length.min(16);
+            // Show as many steps as the preview width allows (label takes 3 cols),
+            // not a hardcoded 16 — long/odd patterns (17–64, 12/20) preview fully or
+            // with a '›' overflow marker instead of silently truncating at 16.
+            let strip_len = pattern.length.min(w.saturating_sub(4)).max(1);
+            let overflow = pattern.length > strip_len;
             // Cap voice rows to available height (leave room for name/desc/len lines already added).
             let rows_remaining = max_height.saturating_sub(lines.len());
             for note in seen_notes.iter().take(rows_remaining) {
@@ -128,6 +132,9 @@ fn build_preview_lines(pattern: &Pattern, width: usize, max_height: usize) -> Ve
                         strip.push('·');
                     }
                 }
+                if overflow {
+                    strip.push('›');
+                }
                 lines.push(Line::from(Span::raw(format!(
                     "{:<3}{}",
                     truncate(&label, 3),
@@ -136,8 +143,9 @@ fn build_preview_lines(pattern: &Pattern, width: usize, max_height: usize) -> Ve
             }
         }
         PatternData::Melodic(steps) => {
-            // On/off+slide strip.
-            let strip_len = pattern.length.min(16);
+            // On/off+slide strip — width-aware (not a hardcoded 16) with a '›'
+            // overflow marker for patterns longer than the preview can show.
+            let strip_len = pattern.length.min(w).max(1);
             let mut strip = String::new();
             for i in 0..strip_len {
                 // Mono preview: read the step's primary note for the on/off+slide strip.
@@ -146,6 +154,9 @@ fn build_preview_lines(pattern: &Pattern, width: usize, max_height: usize) -> Ve
                     Some(_) => strip.push('●'),
                     _ => strip.push('·'),
                 }
+            }
+            if pattern.length > strip_len {
+                strip.push('›');
             }
             lines.push(Line::from(Span::raw(strip)));
 

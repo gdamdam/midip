@@ -100,6 +100,7 @@ fn three_lane_set() -> Set {
         scenes: Vec::new(),
         chains: Vec::new(),
         clock_in_port: None,
+        steps_per_bar: 16,
     }
 }
 
@@ -542,6 +543,7 @@ fn setset_releases_held_notes_and_adopts_new_bpm() {
         scenes: Vec::new(),
         chains: Vec::new(),
         clock_in_port: None,
+        steps_per_bar: 16,
     };
 
     // Second set: a different BPM and a note on every step so timing is observable.
@@ -555,6 +557,7 @@ fn setset_releases_held_notes_and_adopts_new_bpm() {
         scenes: Vec::new(),
         chains: Vec::new(),
         clock_in_port: None,
+        steps_per_bar: 16,
     };
 
     let mut link = FakeLink::new();
@@ -997,6 +1000,7 @@ fn chord_survives_save_load_and_plays_with_clean_release() {
         scenes: Vec::new(),
         chains: Vec::new(),
         clock_in_port: None,
+        steps_per_bar: 16,
     };
 
     // ── 2. Save → load round-trip ──
@@ -1155,6 +1159,7 @@ fn generative_preview_commit_undo_roundtrip() {
         scenes: Vec::new(),
         chains: Vec::new(),
         clock_in_port: None,
+        steps_per_bar: 16,
     };
 
     let mut app = App::new(set, test_library());
@@ -1321,6 +1326,7 @@ fn generative_vary_identity_and_mutation() {
             scenes: Vec::new(),
             chains: Vec::new(),
             clock_in_port: None,
+            steps_per_bar: 16,
         };
         let mut a = App::new(set, test_library());
         a.apply(Action::FocusLane(0));
@@ -1429,6 +1435,7 @@ fn scene_capture_save_load_recall_roundtrip() {
         scenes: Vec::new(),
         chains: Vec::new(),
         clock_in_port: None,
+        steps_per_bar: 16,
     };
 
     // Give each lane a DISTINCT non-default performance state.
@@ -1668,6 +1675,7 @@ fn chain_roundtrip_create_save_load_play_advance() {
         scenes: Vec::new(),
         chains: Vec::new(),
         clock_in_port: None,
+        steps_per_bar: 16,
     };
     set.ensure_id();
 
@@ -2006,6 +2014,7 @@ fn m8_per_step_cc_microtiming_cond_clock_div_roundtrip() {
         scenes: Vec::new(),
         chains: Vec::new(),
         clock_in_port: None,
+        steps_per_bar: 16,
     };
 
     // ── (a) Persistence: save → load; assert M8 fields survive and version=3 ──

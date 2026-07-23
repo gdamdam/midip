@@ -1,0 +1,219 @@
+{
+  "schema": "midip.pattern",
+  "version": 2,
+  "factory_id": "drums.reggaeton.perreo-two-bar",
+  "role": "drums",
+  "kind": "drums",
+  "genre": "reggaeton",
+  "name": "Perreo Two-Bar",
+  "desc": "Two-bar reggaeton with a bar-2 perreo roll.",
+  "length": 32,
+  "steps": [
+    [
+      {
+        "note": 36,
+        "vel": 118
+      }
+    ],
+    [],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 38,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 36,
+        "vel": 102
+      }
+    ],
+    [],
+    [
+      {
+        "note": 38,
+        "vel": 118
+      },
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [],
+    [
+      {
+        "note": 36,
+        "vel": 118
+      }
+    ],
+    [],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 38,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 36,
+        "vel": 102
+      }
+    ],
+    [],
+    [
+      {
+        "note": 38,
+        "vel": 118
+      },
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [],
+    [
+      {
+        "note": 36,
+        "vel": 118
+      }
+    ],
+    [],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 38,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 36,
+        "vel": 102
+      }
+    ],
+    [],
+    [
+      {
+        "note": 38,
+        "vel": 118
+      },
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [],
+    [
+      {
+        "note": 36,
+        "vel": 118
+      }
+    ],
+    [],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      },
+      {
+        "note": 47,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 38,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 36,
+        "vel": 102
+      },
+      {
+        "note": 38,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 38,
+        "vel": 102,
+        "ratchet": 2
+      }
+    ],
+    [
+      {
+        "note": 38,
+        "vel": 102,
+        "ratchet": 3
+      },
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 38,
+        "vel": 102,
+        "ratchet": 4
+      }
+    ]
+  ],
+  "metadata": {
+    "bpm_min": 88,
+    "bpm_max": 100,
+    "feel": "",
+    "timing": "straight",
+    "energy": "mid",
+    "density": "dense",
+    "tags": [
+      "reggaeton",
+      "two-bar",
+      "4/4"
+    ],
+    "harmonic": null,
+    "chord_poly": "none",
+    "subgenre": "reggaeton",
+    "compatible_devices": [
+      "t8-drums",
+      "rd-8",
+      "drumbrute-impact",
+      "circuit-drums",
+      "generic-gm-drums"
+    ],
+    "meter": "4/4",
+    "steps_per_bar": 16,
+    "bars": 2
+  },
+  "provenance": {
+    "source": "factory",
+    "author": "midip factory",
+    "pack": "multi-bar",
+    "license": "original generic groove (no copyrighted material)",
+    "references": [
+      "Magenta Groove MIDI Dataset",
+      "documented genre groove references",
+      "standard meter/subdivision theory (3/4, 6/8, 5/4)"
+    ]
+  }
+}

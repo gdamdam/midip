@@ -1,0 +1,103 @@
+{
+  "schema": "midip.pattern",
+  "version": 2,
+  "factory_id": "drums.six-eight.6-8-open",
+  "role": "drums",
+  "kind": "drums",
+  "genre": "six-eight",
+  "name": "6/8 Open",
+  "desc": "6/8 with open-hat accents on each group head.",
+  "length": 12,
+  "steps": [
+    [
+      {
+        "note": 36,
+        "vel": 118
+      },
+      {
+        "note": 46,
+        "vel": 102
+      }
+    ],
+    [],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [],
+    [
+      {
+        "note": 36,
+        "vel": 102
+      },
+      {
+        "note": 38,
+        "vel": 118
+      },
+      {
+        "note": 46,
+        "vel": 102
+      }
+    ],
+    [],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    []
+  ],
+  "metadata": {
+    "bpm_min": 60,
+    "bpm_max": 100,
+    "feel": "",
+    "timing": "straight",
+    "energy": "mid",
+    "density": "sparse",
+    "tags": [
+      "six-eight",
+      "6/8"
+    ],
+    "harmonic": null,
+    "chord_poly": "none",
+    "subgenre": "six-eight",
+    "compatible_devices": [
+      "t8-drums",
+      "rd-8",
+      "drumbrute-impact",
+      "circuit-drums",
+      "generic-gm-drums"
+    ],
+    "meter": "6/8",
+    "steps_per_bar": 12,
+    "bars": 1
+  },
+  "provenance": {
+    "source": "factory",
+    "author": "midip factory",
+    "pack": "multi-bar",
+    "license": "original generic groove (no copyrighted material)",
+    "references": [
+      "Magenta Groove MIDI Dataset",
+      "documented genre groove references",
+      "standard meter/subdivision theory (3/4, 6/8, 5/4)"
+    ]
+  }
+}

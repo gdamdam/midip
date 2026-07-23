@@ -6,9 +6,10 @@ from packs_16 import pack_hiphop, pack_club
 from packs_23 import pack_funk_disco, pack_reggae_dancehall
 from packs_45 import pack_afro_amapiano, pack_reggaeton_baile
 from packs_timing import pack_timing
+from packs_meter import pack_meter
 
 for fn in (pack_hiphop, pack_club, pack_funk_disco, pack_reggae_dancehall,
-           pack_afro_amapiano, pack_reggaeton_baile, pack_timing):
+           pack_afro_amapiano, pack_reggaeton_baile, pack_timing, pack_meter):
     fn()
 
 nf, nfam = write_all()

@@ -178,7 +178,11 @@ def write_all():
     # merge families into catalog.json (idempotent: drop families whose genre is ours)
     cat_path=os.path.join(REPO,"assets/patterns/catalog.json")
     cat=json.load(open(cat_path))
-    base=[fm for fm in cat.get("families",[]) if fm["genre"] not in NEW_GENRES]
+    # Idempotent by family ID (not genre): drop only the families THIS generator
+    # produces, so re-runs replace our families while preserving any authored
+    # elsewhere (e.g. the Phase-3 families in genres we also add patterns to).
+    our_ids={f["id"] for f in FAMILIES}
+    base=[fm for fm in cat.get("families",[]) if fm["id"] not in our_ids]
     cat["families"]=base+FAMILIES
     json.dump(cat, open(cat_path,"w"), ensure_ascii=True, separators=(",",":"))
     return len(FILES), len(FAMILIES)

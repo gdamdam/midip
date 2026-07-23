@@ -1347,11 +1347,12 @@ impl App {
 
     /// The next bar boundary at or after `step` (absolute 16th grid). When `step` is itself
     /// a boundary it is returned unchanged (a recall queued there lands on it).
-    fn next_bar_boundary(step: u64) -> u64 {
-        if step.is_multiple_of(16) {
+    fn next_bar_boundary(step: u64, steps_per_bar: u64) -> u64 {
+        let spb = steps_per_bar.max(1);
+        if step.is_multiple_of(spb) {
             step
         } else {
-            (step / 16 + 1) * 16
+            (step / spb + 1) * spb
         }
     }
 
@@ -1409,8 +1410,9 @@ impl App {
             return vec![UiCommand::Stop];
         };
         let decision = {
+            let spb = self.set.steps_per_bar;
             let chain = &self.set.chains[chain_idx];
-            crate::pattern::chain::chain_decision(chain, entry_idx, entry_start_step, now_step)
+            crate::pattern::chain::chain_decision(chain, entry_idx, entry_start_step, now_step, spb)
         };
         use crate::pattern::chain::ChainStep;
         let next = match decision {
@@ -2819,7 +2821,10 @@ impl App {
                         // M4: when stopped the engine restarts at absolute step 0 on Play,
                         // so anchoring at the stale playhead would idle entry 0 for bars.
                         let anchor = if self.playing {
-                            Self::next_bar_boundary(self.playhead as u64)
+                            Self::next_bar_boundary(
+                                self.playhead as u64,
+                                self.set.steps_per_bar as u64,
+                            )
                         } else {
                             0
                         };
@@ -2856,7 +2861,10 @@ impl App {
                     let chain_id = pb.chain_id.clone();
                     if let Some(chain_idx) = self.set.chains.iter().position(|c| c.id == chain_id) {
                         if idx < self.set.chains[chain_idx].entries.len() {
-                            let anchor = Self::next_bar_boundary(self.playhead as u64);
+                            let anchor = Self::next_bar_boundary(
+                                self.playhead as u64,
+                                self.set.steps_per_bar as u64,
+                            );
                             if let Some(pb) = self.chain_playback.as_mut() {
                                 pb.entry_idx = idx;
                                 pb.entry_start_step = anchor;

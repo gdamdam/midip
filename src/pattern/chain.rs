@@ -24,12 +24,13 @@ pub fn chain_decision(
     entry_idx: usize,
     entry_start_step: u64,
     now_step: u64,
+    steps_per_bar: usize,
 ) -> ChainStep {
     let Some(entry) = chain.entries.get(entry_idx) else {
         return ChainStep::Stop;
     };
     let elapsed = now_step.saturating_sub(entry_start_step);
-    if elapsed < entry.dwell_steps() {
+    if elapsed < entry.dwell_steps(steps_per_bar) {
         return ChainStep::Hold;
     }
     let next = entry_idx + 1;
@@ -327,40 +328,40 @@ mod chain_transport_tests {
     #[test]
     fn holds_before_dwell_elapses() {
         let c = make_chain(&[(1, 1)], false); // dwell = 16 steps
-        assert_eq!(chain_decision(&c, 0, 0, 8), ChainStep::Hold);
-        assert_eq!(chain_decision(&c, 0, 0, 15), ChainStep::Hold);
+        assert_eq!(chain_decision(&c, 0, 0, 8, 16), ChainStep::Hold);
+        assert_eq!(chain_decision(&c, 0, 0, 15, 16), ChainStep::Hold);
     }
 
     #[test]
     fn advances_at_dwell_boundary() {
         let c = make_chain(&[(1, 1), (1, 1)], false); // each 16 steps
-        assert_eq!(chain_decision(&c, 0, 0, 16), ChainStep::Advance(1));
+        assert_eq!(chain_decision(&c, 0, 0, 16, 16), ChainStep::Advance(1));
     }
 
     #[test]
     fn stops_after_last_entry_when_not_looped() {
         let c = make_chain(&[(1, 1)], false);
-        assert_eq!(chain_decision(&c, 0, 0, 16), ChainStep::Stop);
+        assert_eq!(chain_decision(&c, 0, 0, 16, 16), ChainStep::Stop);
     }
 
     #[test]
     fn loops_after_last_entry_when_looped() {
         let c = make_chain(&[(1, 1)], true);
-        assert_eq!(chain_decision(&c, 0, 0, 16), ChainStep::LoopWrap);
+        assert_eq!(chain_decision(&c, 0, 0, 16, 16), ChainStep::LoopWrap);
     }
 
     #[test]
     fn respects_repeats_in_dwell() {
         let c = make_chain(&[(1, 3), (1, 1)], false); // entry0 dwell = 48 steps
-        assert_eq!(chain_decision(&c, 0, 0, 32), ChainStep::Hold);
-        assert_eq!(chain_decision(&c, 0, 0, 48), ChainStep::Advance(1));
+        assert_eq!(chain_decision(&c, 0, 0, 32, 16), ChainStep::Hold);
+        assert_eq!(chain_decision(&c, 0, 0, 48, 16), ChainStep::Advance(1));
     }
 
     #[test]
     fn anchored_to_entry_start_step_not_zero() {
         let c = make_chain(&[(1, 1), (1, 1)], false);
         // entry 1 started at step 16; advance/stop at 32
-        assert_eq!(chain_decision(&c, 1, 16, 24), ChainStep::Hold);
-        assert_eq!(chain_decision(&c, 1, 16, 32), ChainStep::Stop);
+        assert_eq!(chain_decision(&c, 1, 16, 24, 16), ChainStep::Hold);
+        assert_eq!(chain_decision(&c, 1, 16, 32, 16), ChainStep::Stop);
     }
 }

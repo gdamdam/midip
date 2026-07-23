@@ -38,7 +38,7 @@ def _timing(genre, timing):
 
 
 def drums(genre, name, function, grids, *, desc, bpm, feel, energy, density, tags,
-          prov, ratch=None, prob=None, cc=None, length=16, timing=None):
+          prov, ratch=None, prob=None, cc=None, length=16, timing=None, meter=None, spb=16, bars=1):
     steps = drum_steps(length, grids, ratch, prob)
     tmg = _timing(genre, timing)
     bake_timing_into_steps(steps, "drums", tmg, SEED)
@@ -46,6 +46,9 @@ def drums(genre, name, function, grids, *, desc, bpm, feel, energy, density, tag
                 feel=(FEEL[tmg] if tmg != "straight" else feel), timing=tmg,
                 energy=energy, density=density, tags=tags, harmonic=None,
                 chord_poly="none", subgenre=genre, compatible_devices=DRUM_DEVICES)
+    if meter:
+        meta["meter"]=meter; meta["steps_per_bar"]=spb; meta["bars"]=bars
+        meta["tags"]=list(meta["tags"])+[meter]
     emit("drums", genre, name, function, steps, "drums", length, meta, prov,
          cc=cc_slots(length, cc) if cc else None)
     return name
@@ -56,7 +59,7 @@ def _poly(steps):
 
 
 def bass(genre, name, function, notes, *, desc, bpm, feel, energy, density, tags,
-         prov, harmonic=None, cc=None, length=16, timing=None):
+         prov, harmonic=None, cc=None, length=16, timing=None, meter=None, spb=16, bars=1):
     steps = mel_steps(length, notes)
     tmg = _timing(genre, timing)
     bake_timing_into_steps(steps, "melodic", tmg, SEED)
@@ -64,13 +67,16 @@ def bass(genre, name, function, notes, *, desc, bpm, feel, energy, density, tags
                 feel=(FEEL[tmg] if tmg != "straight" else feel), timing=tmg,
                 energy=energy, density=density, tags=tags, harmonic=harmonic,
                 chord_poly=_poly(steps), subgenre=genre, compatible_devices=BASS_DEVICES)
+    if meter:
+        meta["meter"]=meter; meta["steps_per_bar"]=spb; meta["bars"]=bars
+        meta["tags"]=list(meta["tags"])+[meter]
     emit("bass", genre, name, function, steps, "melodic", length, meta, prov,
          cc=cc_slots(length, cc) if cc else None)
     return name
 
 
 def synth(genre, name, function, notes, *, desc, bpm, feel, energy, density, tags,
-          prov, harmonic=None, cc=None, length=16, timing=None):
+          prov, harmonic=None, cc=None, length=16, timing=None, meter=None, spb=16, bars=1):
     steps = mel_steps(length, notes)
     tmg = _timing(genre, timing)
     bake_timing_into_steps(steps, "melodic", tmg, SEED)
@@ -78,6 +84,9 @@ def synth(genre, name, function, notes, *, desc, bpm, feel, energy, density, tag
                 feel=(FEEL[tmg] if tmg != "straight" else feel), timing=tmg,
                 energy=energy, density=density, tags=tags, harmonic=harmonic,
                 chord_poly=_poly(steps), subgenre=genre, compatible_devices=SYNTH_DEVICES)
+    if meter:
+        meta["meter"]=meter; meta["steps_per_bar"]=spb; meta["bars"]=bars
+        meta["tags"]=list(meta["tags"])+[meter]
     emit("synth", genre, name, function, steps, "melodic", length, meta, prov,
          cc=cc_slots(length, cc) if cc else None)
     return name

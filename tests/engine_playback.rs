@@ -139,6 +139,7 @@ fn three_lane_set() -> Set {
         scenes: Vec::new(),
         chains: Vec::new(),
         clock_in_port: None,
+        steps_per_bar: 16,
     }
 }
 

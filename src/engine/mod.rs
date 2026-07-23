@@ -316,11 +316,12 @@ fn apply_command(
                 // join at the next bar — sending another start would remap the beat
                 // under the peers' feet and echo back as a redundant transition.
                 if !link.is_playing() {
-                    link.request_start(now, 4.0);
+                    link.request_start(now, st.seq.link_quantum());
                 }
                 st.clock.start(now);
                 st.armed = true;
-                st.armed_at_bar = bar_index(link.beat_at(now, 4.0), 4.0);
+                let q = st.seq.link_quantum();
+                st.armed_at_bar = bar_index(link.beat_at(now, q), q);
                 // Record that the session is (about to be) playing on our account so
                 // step_engine's transition check does not re-follow our own start.
                 st.link_playing = true;
@@ -749,7 +750,8 @@ fn step_engine(
                 // issue our own start — the session is already running.
                 if !st.seq.is_playing() && !st.armed {
                     st.armed = true;
-                    st.armed_at_bar = bar_index(link.beat_at(now, 4.0), 4.0);
+                    let q = st.seq.link_quantum();
+                    st.armed_at_bar = bar_index(link.beat_at(now, q), q);
                     st.clock.start(now);
                     events.push(EngineEvent::Armed);
                 }
@@ -771,7 +773,10 @@ fn step_engine(
     // LATER than the one captured when we armed. This single test covers the local
     // count-in (request_start runs beats up from negative to 0 at the next bar) and
     // a remote join (start on the next bar after connecting mid-phrase).
-    if st.armed && st.link_enabled && bar_index(link.beat_at(now, 4.0), 4.0) > st.armed_at_bar {
+    if st.armed && st.link_enabled && {
+        let q = st.seq.link_quantum();
+        bar_index(link.beat_at(now, q), q) > st.armed_at_bar
+    } {
         // H4: if a run was somehow still playing when the armed-start fires, release its
         // sounding notes before `play` clears the registry (play emits no NoteOffs).
         if st.seq.is_playing() {
@@ -783,7 +788,7 @@ fn step_engine(
     }
 
     if st.link_enabled {
-        let beat = link.beat_at(now, 4.0);
+        let beat = link.beat_at(now, st.seq.link_quantum());
         st.seq.sync_to_beat(beat, bpm, now);
     }
 

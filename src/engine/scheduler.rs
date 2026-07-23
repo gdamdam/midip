@@ -19,19 +19,21 @@ pub enum NoteDomain {
 }
 
 /// Quantization grid for a queued per-lane launch (design §1: launch grid = the
-/// GLOBAL 4/4 bar of 16 sixteenth steps). `NextBar` launches on a bar boundary
-/// (absolute step % 16 == 0); `NextBeat` on a beat boundary (% 4 == 0).
+/// GLOBAL bar). `NextBar` launches on a bar boundary (absolute step %
+/// `steps_per_bar` == 0); `NextBeat` on a beat boundary (% 4 == 0, i.e. one
+/// quarter-note = four 16ths, universal across x/4 meters).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Quant {
     NextBar,
     NextBeat,
 }
 
-/// True when absolute `step` lands on quant `q`'s grid. Both grids are true at
-/// step 0 (a queue placed before play would launch on the very first step — fine).
-pub fn is_boundary(step: usize, q: Quant) -> bool {
+/// True when absolute `step` lands on quant `q`'s grid for a transport of
+/// `steps_per_bar` steps per bar (16 = 4/4). Both grids are true at step 0.
+/// Passing `steps_per_bar = 16` reproduces the pre-Phase-9 4/4 behaviour exactly.
+pub fn is_boundary(step: usize, q: Quant, steps_per_bar: usize) -> bool {
     match q {
-        Quant::NextBar => step.is_multiple_of(16),
+        Quant::NextBar => step.is_multiple_of(steps_per_bar.max(1)),
         Quant::NextBeat => step.is_multiple_of(4),
     }
 }
@@ -509,6 +511,17 @@ impl Sequencer {
         self.playing
     }
 
+    /// Global transport steps-per-bar (16 = 4/4). Phase 9.
+    pub fn steps_per_bar(&self) -> usize {
+        self.set.steps_per_bar.max(1)
+    }
+
+    /// Ableton Link `quantum` (beats per bar) derived from the meter: a beat is
+    /// four 16th-steps, so quantum = steps_per_bar / 4. 4/4 → 4.0 (unchanged).
+    pub fn link_quantum(&self) -> f64 {
+        (self.steps_per_bar() as f64 / 4.0).max(1.0)
+    }
+
     /// The ABSOLUTE 16th-step counter since play (monotonic, never wrapped).
     pub fn current_step(&self) -> usize {
         self.current
@@ -786,7 +799,8 @@ impl Sequencer {
         // holding a borrow of `self.queued` across the &mut self release/update calls.
         let mut due: Vec<(usize, Pattern, Option<LaunchState>)> = Vec::new();
         for (lane, slot) in self.queued.iter_mut().enumerate() {
-            let fire = matches!(slot, Some((_, q, _)) if is_boundary(step, *q));
+            let fire =
+                matches!(slot, Some((_, q, _)) if is_boundary(step, *q, self.set.steps_per_bar));
             if fire {
                 // take() leaves None → exactly-once (the slot is cleared on apply).
                 if let Some((pattern, _, state)) = slot.take() {
@@ -1698,6 +1712,7 @@ mod sequencer_tests {
             scenes: Vec::new(),
             chains: Vec::new(),
             clock_in_port: None,
+            steps_per_bar: 16,
         }
     }
 
@@ -3269,18 +3284,26 @@ mod sequencer_tests {
 
     #[test]
     fn is_boundary_matches_bar_and_beat_grids() {
-        // NextBar: multiples of 16. NextBeat: multiples of 4. Both true at 0.
-        assert!(is_boundary(0, Quant::NextBar));
-        assert!(is_boundary(16, Quant::NextBar));
-        assert!(is_boundary(32, Quant::NextBar));
-        assert!(!is_boundary(4, Quant::NextBar));
-        assert!(!is_boundary(15, Quant::NextBar));
+        // 4/4 (steps_per_bar=16): NextBar multiples of 16, NextBeat multiples of 4.
+        assert!(is_boundary(0, Quant::NextBar, 16));
+        assert!(is_boundary(16, Quant::NextBar, 16));
+        assert!(is_boundary(32, Quant::NextBar, 16));
+        assert!(!is_boundary(4, Quant::NextBar, 16));
+        assert!(!is_boundary(15, Quant::NextBar, 16));
 
-        assert!(is_boundary(0, Quant::NextBeat));
-        assert!(is_boundary(4, Quant::NextBeat));
-        assert!(is_boundary(8, Quant::NextBeat));
-        assert!(!is_boundary(3, Quant::NextBeat));
-        assert!(!is_boundary(5, Quant::NextBeat));
+        assert!(is_boundary(0, Quant::NextBeat, 16));
+        assert!(is_boundary(4, Quant::NextBeat, 16));
+        assert!(is_boundary(8, Quant::NextBeat, 16));
+        assert!(!is_boundary(3, Quant::NextBeat, 16));
+        assert!(!is_boundary(5, Quant::NextBeat, 16));
+
+        // 3/4 (steps_per_bar=12): bar boundary every 12 steps; beat unchanged.
+        assert!(is_boundary(12, Quant::NextBar, 12));
+        assert!(is_boundary(24, Quant::NextBar, 12));
+        assert!(!is_boundary(16, Quant::NextBar, 12));
+        // 5/4 (steps_per_bar=20).
+        assert!(is_boundary(20, Quant::NextBar, 20));
+        assert!(!is_boundary(16, Quant::NextBar, 20));
     }
 
     #[test]
@@ -3350,6 +3373,50 @@ mod sequencer_tests {
             launched.contains(&0),
             "lane 0 must be reported as launched; got {launched:?}"
         );
+    }
+
+    #[test]
+    fn launch_next_bar_uses_steps_per_bar_meter() {
+        // 3/4 transport (steps_per_bar = 12): NextBar must fire at global step 12,
+        // not the 4/4 step 16. Proves the meter threads into launch quantization.
+        let dur = step_dur_micros(120.0);
+        let mut set = set_with(vec![drum_lane_step0_note(36)]);
+        set.steps_per_bar = 12;
+        let mut seq = Sequencer::new(set);
+        let mut sink = RecordingSink::new();
+        seq.play(0);
+        let mut now = 0u64;
+        while now <= 14 * dur {
+            if now == 2 * dur {
+                seq.queue_launch(0, drum_pattern_step0_note(50), Quant::NextBar);
+            }
+            seq.tick(now, &mut sink);
+            now += 1_000;
+        }
+        let new_ons = kick_note_on_abs_steps(&sink, 50, dur);
+        assert!(
+            new_ons.contains(&12),
+            "3/4 NextBar must launch at global step 12; got {new_ons:?}"
+        );
+        assert!(
+            !new_ons.contains(&16),
+            "must NOT launch on the 4/4 bar (step 16) in 3/4"
+        );
+    }
+
+    #[test]
+    fn link_quantum_follows_meter() {
+        let mut s12 = set_with(vec![drum_lane_step0_note(36)]);
+        s12.steps_per_bar = 12;
+        let seq12 = Sequencer::new(s12);
+        assert_eq!(seq12.steps_per_bar(), 12);
+        assert_eq!(seq12.link_quantum(), 3.0); // 3/4 → 3 beats/bar
+        let mut s16 = set_with(vec![drum_lane_step0_note(36)]);
+        s16.steps_per_bar = 16;
+        assert_eq!(Sequencer::new(s16).link_quantum(), 4.0); // 4/4 unchanged
+        let mut s20 = set_with(vec![drum_lane_step0_note(36)]);
+        s20.steps_per_bar = 20;
+        assert_eq!(Sequencer::new(s20).link_quantum(), 5.0); // 5/4
     }
 
     #[test]
@@ -5559,6 +5626,7 @@ mod sequencer_tests {
             scenes: Vec::new(),
             chains: Vec::new(),
             clock_in_port: None,
+            steps_per_bar: 16,
         };
         let mut seq = Sequencer::new(set);
         let mut sink = RecordingSink::new();

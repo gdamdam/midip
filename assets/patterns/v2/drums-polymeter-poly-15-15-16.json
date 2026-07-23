@@ -1,0 +1,161 @@
+{
+  "schema": "midip.pattern",
+  "version": 2,
+  "factory_id": "drums.polymeter.poly-15-15-16",
+  "role": "drums",
+  "kind": "drums",
+  "genre": "polymeter",
+  "name": "Poly 15 (15:16)",
+  "desc": "15-step motif with a slow 15:16 drift against 4/4 (240-step cycle).",
+  "length": 15,
+  "steps": [
+    [
+      {
+        "note": 37,
+        "vel": 118
+      },
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 37,
+        "vel": 102
+      },
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      },
+      {
+        "note": 47,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 37,
+        "vel": 102
+      },
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      },
+      {
+        "note": 47,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ]
+  ],
+  "metadata": {
+    "bpm_min": 120,
+    "bpm_max": 140,
+    "feel": "",
+    "timing": "straight",
+    "energy": "mid",
+    "density": "core",
+    "tags": [
+      "polymeter",
+      "15:16",
+      "poly"
+    ],
+    "harmonic": null,
+    "chord_poly": "none",
+    "subgenre": "polymeter",
+    "compatible_devices": [
+      "t8-drums",
+      "rd-8",
+      "drumbrute-impact",
+      "circuit-drums",
+      "generic-gm-drums"
+    ],
+    "meter": "poly",
+    "steps_per_bar": 15,
+    "bars": 1
+  },
+  "provenance": {
+    "source": "factory",
+    "author": "midip factory",
+    "pack": "multi-bar",
+    "license": "original generic groove (no copyrighted material)",
+    "references": [
+      "Magenta Groove MIDI Dataset",
+      "documented genre groove references",
+      "standard meter/subdivision theory (3/4, 6/8, 5/4)",
+      "intentional polymeter (loop length \u2260 4/4 multiple)"
+    ]
+  }
+}

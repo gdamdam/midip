@@ -1,0 +1,331 @@
+{
+  "schema": "midip.pattern",
+  "version": 2,
+  "factory_id": "drums.amapiano.log-bed-two-bar",
+  "role": "drums",
+  "kind": "drums",
+  "genre": "amapiano",
+  "name": "Log Bed Two-Bar",
+  "desc": "Two-bar amapiano bed for the log drum, bar-2 percussion shift.",
+  "length": 32,
+  "steps": [
+    [
+      {
+        "note": 36,
+        "vel": 118
+      },
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102,
+        "micro": 160
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102,
+        "micro": 160
+      }
+    ],
+    [
+      {
+        "note": 36,
+        "vel": 118
+      },
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102,
+        "micro": 160
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      },
+      {
+        "note": 46,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102,
+        "micro": 160
+      }
+    ],
+    [
+      {
+        "note": 36,
+        "vel": 118
+      },
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102,
+        "micro": 160
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102,
+        "micro": 160
+      }
+    ],
+    [
+      {
+        "note": 36,
+        "vel": 118
+      },
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102,
+        "micro": 160
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      },
+      {
+        "note": 46,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102,
+        "micro": 160
+      }
+    ],
+    [
+      {
+        "note": 36,
+        "vel": 118
+      },
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102,
+        "micro": 160
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102,
+        "micro": 160
+      }
+    ],
+    [
+      {
+        "note": 36,
+        "vel": 118
+      },
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102,
+        "micro": 160
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      },
+      {
+        "note": 46,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102,
+        "micro": 160
+      }
+    ],
+    [
+      {
+        "note": 36,
+        "vel": 118
+      },
+      {
+        "note": 42,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102,
+        "micro": 160
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      },
+      {
+        "note": 47,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102,
+        "micro": 160
+      }
+    ],
+    [
+      {
+        "note": 36,
+        "vel": 118
+      },
+      {
+        "note": 42,
+        "vel": 102
+      },
+      {
+        "note": 38,
+        "vel": 102
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102,
+        "micro": 160
+      },
+      {
+        "note": 38,
+        "vel": 102,
+        "ratchet": 2,
+        "micro": 160
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102
+      },
+      {
+        "note": 46,
+        "vel": 102
+      },
+      {
+        "note": 38,
+        "vel": 102,
+        "ratchet": 3
+      }
+    ],
+    [
+      {
+        "note": 42,
+        "vel": 102,
+        "micro": 160
+      },
+      {
+        "note": 38,
+        "vel": 102,
+        "ratchet": 4,
+        "micro": 160
+      }
+    ]
+  ],
+  "metadata": {
+    "bpm_min": 108,
+    "bpm_max": 118,
+    "feel": "swung-16 (mpc 58%)",
+    "timing": "mpc-swing",
+    "energy": "mid",
+    "density": "dense",
+    "tags": [
+      "amapiano",
+      "two-bar",
+      "4/4"
+    ],
+    "harmonic": null,
+    "chord_poly": "none",
+    "subgenre": "amapiano",
+    "compatible_devices": [
+      "t8-drums",
+      "rd-8",
+      "drumbrute-impact",
+      "circuit-drums",
+      "generic-gm-drums"
+    ],
+    "meter": "4/4",
+    "steps_per_bar": 16,
+    "bars": 2
+  },
+  "provenance": {
+    "source": "factory",
+    "author": "midip factory",
+    "pack": "multi-bar",
+    "license": "original generic groove (no copyrighted material)",
+    "references": [
+      "Magenta Groove MIDI Dataset",
+      "documented genre groove references",
+      "standard meter/subdivision theory (3/4, 6/8, 5/4)"
+    ]
+  }
+}
