@@ -7,6 +7,29 @@ feature milestone is a minor bump).
 
 ## [Unreleased]
 
+## [1.8.2] — 2026-07-23 — S-1 chords & note lengths (pattern library Phase 2)
+
+### Added
+- **Polyphonic chords and real note lengths in the S-1 factory patterns.** The
+  melodic factory loader now accepts — in addition to the legacy `null`/single-note
+  shapes — a JSON array of notes per step (a chord) and an optional per-note `len`
+  (length in steps). 45 S-1 patterns across dub-techno, house, deep-house, garage,
+  lo-fi, trance, synthwave and ambient were upgraded to real chord stabs, Rhodes /
+  7th / 9th voicings, trance gates, pads and drones — built on each pattern's
+  existing pitches (voice-led) and rhythm, with descriptions updated to match.
+  Reuses the existing `MelodicStep`/`MelodicNote` model (no competing runtime type).
+
+### Changed
+- The catalog lint (`tests/library_lint.rs`) chord/duration checks are now
+  content-aware: a description may say "chord"/"triad"/"sustain"/"drone" when the
+  pattern data actually contains a multi-note step or a note longer than the gate.
+
+### Notes
+- Exact backward compatibility preserved: all pre-existing factory files and saved
+  user/set data load unchanged — a note without `len` still uses the profile gate;
+  legacy single-note and `null` steps are byte-for-byte unaffected. No drum or bass
+  factory data was modified.
+
 ## [1.8.1] — 2026-07-23 — Pattern-catalog audit & lint
 
 ### Fixed

@@ -35,38 +35,69 @@ const ROLES: [(&str, LibRole); 3] = [
 /// Substrings (lowercased) that claim a feature the vendored data cannot encode.
 const BANNED_CLAIMS: &[&str] = &[
     // simultaneity — melodic data is monophonic
-    "chord", "triad", "voicing", "dyad",
+    "chord",
+    "triad",
+    "voicing",
+    "dyad",
     // duration — note length is a fixed authoring gate
-    "sustain", "drone", "whole note", "pedal tone",
+    "sustain",
+    "drone",
+    "whole note",
+    "pedal tone",
     // timing — the grid is straight 16ths
-    "swing", "swung", "shuffle", "microtim", "behind the beat", "ahead of the beat",
+    "swing",
+    "swung",
+    "shuffle",
+    "microtim",
+    "behind the beat",
+    "ahead of the beat",
     // subdivision — no triplets/polyrhythm
-    "triplet", "polyrhythm", "polymeter",
+    "triplet",
+    "polyrhythm",
+    "polymeter",
     // non-determinism — patterns are fixed
-    "probab", "random", "generative", "unpredictab", "stochastic",
+    "probab",
+    "random",
+    "generative",
+    "unpredictab",
+    "stochastic",
     // sub-step retrigger — no ratchet/stutter/flam
-    "stutter", "ratchet", "machine-gun", "retrigger", "flam",
+    "stutter",
+    "ratchet",
+    "machine-gun",
+    "retrigger",
+    "flam",
     // parameter automation — no CC/LFO
-    "lfo", "filter sweep", "automat", "morph",
+    "lfo",
+    "filter sweep",
+    "automat",
+    "morph",
 ];
 
-/// (role, genre, name) whose description contains a banned substring but is in
-/// fact representable — arpeggiated/sequential chord tones, single-note basslines
-/// that walk chord tones, and one description that explicitly *negates* swing.
+/// Chord- and duration-family terms are checked against the DATA (see below): a
+/// description may use them when the pattern actually contains a chord step / a
+/// sustained note. All other banned terms are never representable.
+const CHORD_TERMS: &[&str] = &["chord", "triad", "voicing", "dyad"];
+const DURATION_TERMS: &[&str] = &["sustain", "drone", "whole note", "pedal tone"];
+
+/// (role, genre, name) whose description contains a chord/duration term but is
+/// MONO/short in the data yet still musically accurate — arpeggiated/sequential
+/// chord tones and single-note basslines that walk chord tones, plus one
+/// description that explicitly *negates* swing. (Patterns upgraded to real chords
+/// in Phase 2 are NOT listed here — they pass via the content-aware check.)
 const ALLOW_CLAIM: &[(&str, &str, &str)] = &[
-    ("synth", "acid-techno", "303 Minor"),      // "minor triad arpeggio" (sequential)
-    ("synth", "dub-techno", "Dub Minor"),       // chord-symbol progression, single notes
-    ("synth", "edm", "Chord Pluck"),            // "arpeggiated chord tones"
-    ("synth", "dubstep", "Broken Chords"),      // "arpeggiated minor triad"
-    ("synth", "lo-fi", "Simple Triad"),         // "basic chord tones" (sequential)
-    ("synth", "synthwave", "Triad Arp"),        // arpeggiated triad
-    ("synth", "psytrance", "Triad Arp"),        // arpeggiated triad
-    ("drums", "electro", "Robot"),              // "zero swing, pure grid" (negation)
-    ("bass", "dubstep", "Minor Movement"),      // single-note bassline over chord tones
-    ("bass", "lo-fi", "Root and Third"),        // chord-tone bass (sequential)
-    ("bass", "synthwave", "Chord Tones"),       // chord-tone bass (sequential)
-    ("bass", "deep-house", "Simple Move"),      // chord movement, single notes
-    ("bass", "psytrance", "Chord Tone Roll"),   // rolling single-note chord tones
+    ("synth", "acid-techno", "303 Minor"), // "minor triad arpeggio" (sequential)
+    ("synth", "dub-techno", "Dub Minor"),  // chord-symbol progression, single notes
+    ("synth", "edm", "Chord Pluck"),       // "arpeggiated chord tones"
+    ("synth", "dubstep", "Broken Chords"), // "arpeggiated minor triad"
+    ("synth", "synthwave", "Triad Arp"),   // arpeggiated triad
+    ("synth", "psytrance", "Triad Arp"),   // arpeggiated triad
+    ("drums", "electro", "Robot"),         // "zero swing, pure grid" (negation)
+    ("bass", "dubstep", "Minor Movement"), // single-note bassline over chord tones
+    ("bass", "lo-fi", "Root and Third"),   // chord-tone bass (sequential)
+    ("bass", "synthwave", "Chord Tones"),  // chord-tone bass (sequential)
+    ("bass", "deep-house", "Simple Move"), // chord movement, single notes
+    ("bass", "psytrance", "Chord Tone Roll"), // rolling single-note chord tones
 ];
 
 /// (role, genre, name) whose content is byte-identical to an earlier pattern in
@@ -232,15 +263,29 @@ fn vendored_catalog_lint() {
                     v.push(format!("[{role}] {genre}/{name}: empty description"));
                 }
 
-                // (4) unrepresentable feature claims
+                // (4) feature claims — CONTENT-AWARE. Chord terms are allowed when
+                // the pattern has a step with >=2 simultaneous notes; duration terms
+                // when a note is longer than the gate (len >= 2 steps). Timing /
+                // subdivision / non-determinism / automation terms are never
+                // representable. `ALLOW_CLAIM` covers mono-but-accurate legacy uses.
                 let low = desc.to_lowercase();
                 if !allow_claim.contains(&(role, genre.as_str(), name)) {
+                    let (has_chord, has_sustain) = match &pat.data {
+                        PatternData::Melodic(steps) => (
+                            steps.iter().any(|s| s.len() >= 2),
+                            steps.iter().flat_map(|s| s.iter()).any(|n| n.len >= 2.0),
+                        ),
+                        PatternData::Drums(_) => (false, false),
+                    };
                     for term in BANNED_CLAIMS {
                         if low.contains(term) {
-                            v.push(format!(
-                                "[{role}] {genre}/{name}: desc claims '{term}' (not representable): {desc:?}"
-                            ));
-                            break;
+                            let backed = (CHORD_TERMS.contains(term) && has_chord)
+                                || (DURATION_TERMS.contains(term) && has_sustain);
+                            if !backed {
+                                v.push(format!(
+                                    "[{role}] {genre}/{name}: desc claims '{term}' not backed by data: {desc:?}"
+                                ));
+                            }
                         }
                     }
                 }
@@ -259,12 +304,19 @@ fn vendored_catalog_lint() {
 
                 // (7) value ranges + (8) length/data consistency
                 if pat.length != 16 {
-                    v.push(format!("[{role}] {genre}/{name}: length {} != 16", pat.length));
+                    v.push(format!(
+                        "[{role}] {genre}/{name}: length {} != 16",
+                        pat.length
+                    ));
                 }
                 match &pat.data {
                     PatternData::Drums(steps) => {
                         if steps.len() != pat.length {
-                            v.push(format!("[{role}] {genre}/{name}: steps {} != length {}", steps.len(), pat.length));
+                            v.push(format!(
+                                "[{role}] {genre}/{name}: steps {} != length {}",
+                                steps.len(),
+                                pat.length
+                            ));
                         }
                         for h in steps.iter().flatten() {
                             if h.note == 0 || h.vel == 0 {
@@ -274,14 +326,24 @@ fn vendored_catalog_lint() {
                     }
                     PatternData::Melodic(steps) => {
                         if steps.len() != pat.length {
-                            v.push(format!("[{role}] {genre}/{name}: steps {} != length {}", steps.len(), pat.length));
+                            v.push(format!(
+                                "[{role}] {genre}/{name}: steps {} != length {}",
+                                steps.len(),
+                                pat.length
+                            ));
                         }
                         for n in steps.iter().flat_map(|s| s.iter()) {
                             if !(-24..=36).contains(&(n.semi as i32)) {
-                                v.push(format!("[{role}] {genre}/{name}: semi {} out of range", n.semi));
+                                v.push(format!(
+                                    "[{role}] {genre}/{name}: semi {} out of range",
+                                    n.semi
+                                ));
                             }
                             if !(0.5..=1.3).contains(&n.vel) {
-                                v.push(format!("[{role}] {genre}/{name}: vel {} out of [0.5,1.3]", n.vel));
+                                v.push(format!(
+                                    "[{role}] {genre}/{name}: vel {} out of [0.5,1.3]",
+                                    n.vel
+                                ));
                             }
                         }
                     }
@@ -319,7 +381,9 @@ fn vendored_catalog_lint() {
 #[test]
 fn banned_claim_terms_detect_unrepresentable_features() {
     // A representative slice of the banned vocabulary must be recognised.
-    for term in ["chord", "swing", "triplet", "stutter", "random", "lfo", "sustain"] {
+    for term in [
+        "chord", "swing", "triplet", "stutter", "random", "lfo", "sustain",
+    ] {
         assert!(
             BANNED_CLAIMS.contains(&term),
             "'{term}' should be a banned unrepresentable-feature term"

@@ -36,13 +36,47 @@ struct RawDrumHit {
 struct RawMelodicNote {
     semi: i8,
     vel: f32,
+    // Legacy files always carry `slide`; default keeps newer hand-authored notes terse.
+    #[serde(default)]
     slide: bool,
+    // Phase 2: optional explicit note length in steps. Absent → the profile gate
+    // (preserving exact legacy behaviour for all old factory files).
+    #[serde(default)]
+    len: Option<f32>,
+}
+
+/// A melodic step in a factory file. Backward-compatible superset (Phase 2):
+///   - `null`                    → rest (handled by the surrounding `Option`)
+///   - `{semi,vel,slide?,len?}`  → one note (legacy mono shape)
+///   - `[ {..}, {..}, ... ]`     → simultaneous notes (a chord)
+/// Untagged: `Many` (array) is listed before `One` so `[..]` is never misread as
+/// a single struct note.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum RawMelodicStep {
+    Many(Vec<RawMelodicNote>),
+    One(RawMelodicNote),
 }
 
 // Drums file: { genre: [ pattern[ step[ {note,vel} ] ] ] }
 type RawDrumFile = IndexMap<String, Vec<Vec<Vec<RawDrumHit>>>>;
-// Melodic file: { genre: [ pattern[ step: null | {semi,vel,slide} ] ] }
-type RawMelodicFile = IndexMap<String, Vec<Vec<Option<RawMelodicNote>>>>;
+// Melodic file: { genre: [ pattern[ step: null | {..} | [ {..}, .. ] ] ] }
+type RawMelodicFile = IndexMap<String, Vec<Vec<Option<RawMelodicStep>>>>;
+
+/// Build a runtime `MelodicNote` from a factory note, applying the profile gate
+/// when no explicit length was authored.
+fn mk_melodic_note(n: RawMelodicNote, gate_fraction: f32) -> MelodicNote {
+    MelodicNote {
+        semi: n.semi,
+        vel: n.vel,
+        slide: n.slide,
+        len: n.len.unwrap_or(gate_fraction),
+        prob: 1.0,
+        ratchet: 1,
+        micro: 0,
+        cond: TrigCond::Always,
+    }
+}
 
 /// Parse a drums library JSON into a GenreMap. Steps are lists of `{note,vel}` hits.
 pub fn parse_drum_file(json: &str) -> anyhow::Result<GenreMap> {
@@ -90,25 +124,20 @@ pub fn parse_melodic_file(json: &str, gate_fraction: f32) -> anyhow::Result<Genr
         let mut parsed = Vec::with_capacity(patterns.len());
         for (idx, steps) in patterns.into_iter().enumerate() {
             let length = steps.len();
-            // Old per-step shape: `null` (rest) -> empty step; an object -> one-note step
-            // (mono). Multi-note steps come from set/user JSON via the deserialize shim.
+            // Per-step shape: `null` -> rest; a single object -> mono; an array ->
+            // a chord (Phase 2). Each note's `len` is its explicit value or the gate.
             let data = steps
                 .into_iter()
                 .map(|step| {
-                    MelodicStep::from(
-                        step.map(|n| MelodicNote {
-                            semi: n.semi,
-                            vel: n.vel,
-                            slide: n.slide,
-                            len: gate_fraction,
-                            prob: 1.0,
-                            ratchet: 1,
-                            micro: 0,
-                            cond: TrigCond::Always,
-                        })
-                        .into_iter()
-                        .collect::<Vec<_>>(),
-                    )
+                    let notes: Vec<MelodicNote> = match step {
+                        None => Vec::new(),
+                        Some(RawMelodicStep::One(n)) => vec![mk_melodic_note(n, gate_fraction)],
+                        Some(RawMelodicStep::Many(v)) => v
+                            .into_iter()
+                            .map(|n| mk_melodic_note(n, gate_fraction))
+                            .collect(),
+                    };
+                    MelodicStep::from(notes)
                 })
                 .collect();
             parsed.push(Pattern {
@@ -388,6 +417,43 @@ mod tests {
     }
 
     #[test]
+    fn parse_melodic_file_accepts_chords_and_explicit_len() {
+        // Step 0: rest. Step 1: legacy single object (no len). Step 2: a 3-note
+        // chord array. Step 3: a single note with an explicit len.
+        let json = r#"{
+            "house": [
+                [ null,
+                  {"semi": 0, "vel": 1.0, "slide": false},
+                  [ {"semi": 0, "vel": 1.0, "slide": false},
+                    {"semi": 3, "vel": 1.0, "slide": false},
+                    {"semi": 7, "vel": 1.0, "slide": false, "len": 2.0} ],
+                  {"semi": -5, "vel": 0.9, "slide": false, "len": 8.0} ]
+            ]
+        }"#;
+        let map = parse_melodic_file(json, S1.gate_fraction).unwrap();
+        let p = &map["house"][0];
+        assert_eq!(p.length, 4);
+        match &p.data {
+            PatternData::Melodic(steps) => {
+                assert!(steps[0].is_empty(), "rest");
+                // legacy single object -> one note, len == gate
+                assert_eq!(steps[1].len(), 1);
+                assert_eq!(steps[1][0].len, S1.gate_fraction);
+                // chord array -> 3 simultaneous notes
+                assert_eq!(steps[2].len(), 3, "chord step has 3 notes");
+                assert_eq!(steps[2][0].semi, 0);
+                assert_eq!(steps[2][1].semi, 3);
+                assert_eq!(steps[2][2].semi, 7);
+                // explicit len survives (both in the chord and the mono note)
+                assert_eq!(steps[2][2].len, 2.0);
+                assert_eq!(steps[3].len(), 1);
+                assert_eq!(steps[3][0].len, 8.0);
+            }
+            _ => panic!("expected melodic"),
+        }
+    }
+
+    #[test]
     fn parse_catalog_extracts_entries_by_role() {
         let json = r#"{
             "s1": { "genres": [
@@ -475,6 +541,70 @@ mod tests {
         assert_eq!(bpats.len(), 20);
         assert_eq!(bpats[0].length, 16);
         assert_eq!(bpats[0].kind(), LaneKind::Melodic);
+    }
+
+    #[test]
+    fn factory_s1_upgrades_have_real_chords_and_lengths() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/patterns");
+        let lib = Library::load(&dir).unwrap();
+
+        // A step somewhere in `p` is exactly the (sorted) voicing `want`.
+        let has_chord = |p: &Pattern, want: &[i8]| -> bool {
+            match &p.data {
+                PatternData::Melodic(steps) => steps.iter().any(|s| {
+                    if s.len() < 2 {
+                        return false;
+                    }
+                    let mut v: Vec<i8> = s.iter().map(|n| n.semi).collect();
+                    v.sort_unstable();
+                    v == want
+                }),
+                _ => false,
+            }
+        };
+        let has_len = |p: &Pattern, min: f32| -> bool {
+            match &p.data {
+                PatternData::Melodic(steps) => {
+                    steps.iter().flat_map(|s| s.iter()).any(|n| n.len >= min)
+                }
+                _ => false,
+            }
+        };
+
+        // deep-house "Rhodes": held maj7 voicing.
+        let rhodes = lib.find("synth", "deep-house", "Rhodes").unwrap();
+        assert!(has_chord(rhodes, &[0, 4, 7, 11]), "Rhodes maj7 chord");
+        assert!(has_len(rhodes, 4.0), "Rhodes is held");
+        // lo-fi "Jazz Chord": maj7.
+        assert!(has_chord(
+            lib.find("synth", "lo-fi", "Jazz Chord").unwrap(),
+            &[0, 4, 7, 11]
+        ));
+        // garage "R&B Chord": m7 stab.
+        assert!(has_chord(
+            lib.find("synth", "garage", "R&B Chord").unwrap(),
+            &[0, 3, 7, 10]
+        ));
+        // ambient "Long Tone": open-fifth drone sustained a whole bar.
+        let lt = lib.find("synth", "ambient", "Long Tone").unwrap();
+        assert!(has_chord(lt, &[0, 7]), "open fifth");
+        assert!(has_len(lt, 16.0), "whole-bar drone");
+
+        // Legacy mono pattern is untouched: monophonic and at the profile gate length.
+        let iron = lib.find("synth", "techno", "Iron Grid").unwrap();
+        match &iron.data {
+            PatternData::Melodic(steps) => {
+                assert!(steps.iter().all(|s| s.len() <= 1), "legacy stays mono");
+                assert!(
+                    steps
+                        .iter()
+                        .flat_map(|s| s.iter())
+                        .all(|n| (n.len - S1.gate_fraction).abs() < 1e-6),
+                    "legacy note length == profile gate"
+                );
+            }
+            _ => panic!("expected melodic"),
+        }
     }
 
     #[test]
