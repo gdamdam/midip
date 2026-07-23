@@ -1,8 +1,10 @@
 <script lang="ts">
-  import { app, loadPattern } from "../lib/store.svelte";
+  import { app, loadPattern, audition, endAudition, favorite } from "../lib/store.svelte";
 
   let role = $state("drums");
   let query = $state("");
+  let favOnly = $state(false);
+  let auditioning = $state<string | null>(null);
 
   const roleData = $derived(app.library?.roles.find((r) => r.role === role) ?? null);
 
@@ -12,14 +14,23 @@
     return roleData.genres
       .map((g) => ({
         name: g.name,
-        patterns: q
-          ? g.patterns.filter(
-              (p) => p.name.toLowerCase().includes(q) || g.name.toLowerCase().includes(q),
-            )
-          : g.patterns,
+        patterns: g.patterns.filter(
+          (p) =>
+            (!favOnly || p.favorite) &&
+            (!q || p.name.toLowerCase().includes(q) || g.name.toLowerCase().includes(q)),
+        ),
       }))
       .filter((g) => g.patterns.length > 0);
   });
+
+  async function doAudition(genre: string, name: string) {
+    auditioning = `${genre}/${name}`;
+    await audition(role, genre, name);
+  }
+  async function doStop() {
+    auditioning = null;
+    await endAudition();
+  }
 </script>
 
 <section class="library">
@@ -29,33 +40,59 @@
         <button class="role" class:active={role === r} onclick={() => (role = r)}>{r}</button>
       {/each}
     </div>
-    <input class="search" placeholder="filter patterns…" bind:value={query} />
+    <div class="filters">
+      <input class="search" placeholder="filter patterns…" bind:value={query} />
+      <button class="fav-filter" class:on={favOnly} onclick={() => (favOnly = !favOnly)} title="Favorites only">
+        ★
+      </button>
+    </div>
   </div>
+
+  {#if auditioning}
+    <div class="audition-bar">
+      <span class="mono">♪ auditioning {auditioning}</span>
+      <button onclick={doStop}>Stop</button>
+    </div>
+  {/if}
 
   {#if !app.library}
     <p class="muted pad">Loading library…</p>
   {:else if filtered.length === 0}
-    <p class="muted pad">No patterns{query ? " match your filter" : " in this role"}.</p>
+    <p class="muted pad">No patterns{favOnly ? " favorited" : query ? " match your filter" : " in this role"}.</p>
   {:else}
     <div class="list">
       {#each filtered as genre (genre.name)}
         <div class="genre">
           <div class="gname">{genre.name}</div>
           {#each genre.patterns as p (p.name)}
-            <button
-              class="pat"
-              onclick={() => loadPattern(role, genre.name, p.name)}
-              title="Load / queue into the {role} lane"
-            >
-              <span class="pn">{p.name}</span>
-              <span class="meta mono">{p.length}</span>
-            </button>
+            <div class="pat">
+              <button
+                class="star"
+                class:on={p.favorite}
+                onclick={() => favorite(role, genre.name, p.name)}
+                aria-label={p.favorite ? "Unfavorite" : "Favorite"}
+              >{p.favorite ? "★" : "☆"}</button>
+              <button
+                class="load"
+                onclick={() => loadPattern(role, genre.name, p.name)}
+                title="Load / queue into the {role} lane"
+              >
+                <span class="pn">{p.name}</span>
+                <span class="meta mono">{p.length}</span>
+              </button>
+              <button
+                class="aud"
+                onclick={() => doAudition(genre.name, p.name)}
+                title="Audition (preview without committing)"
+                aria-label="Audition {p.name}"
+              >♪</button>
+            </div>
           {/each}
         </div>
       {/each}
     </div>
   {/if}
-  <p class="hint muted">Loads into the role's lane — queued at the next bar while playing.</p>
+  <p class="hint muted">Load queues at the next bar while playing · ♪ auditions on a muted/stopped lane.</p>
 </section>
 
 <style>
@@ -86,8 +123,31 @@
     border-color: var(--fg-dim);
     background: var(--panel-2);
   }
+  .filters {
+    display: flex;
+    gap: 6px;
+  }
   .search {
-    width: 100%;
+    flex: 1;
+  }
+  .fav-filter {
+    color: var(--dim);
+    min-width: 32px;
+  }
+  .fav-filter.on {
+    color: var(--warn);
+    border-color: var(--warn);
+  }
+  .audition-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 5px 8px;
+    background: var(--panel-2);
+    border-bottom: var(--border);
+    color: var(--pink);
+    font-size: 11px;
   }
   .list {
     overflow-y: auto;
@@ -109,17 +169,38 @@
   }
   .pat {
     display: flex;
-    justify-content: space-between;
+    align-items: center;
+    gap: 2px;
     width: 100%;
-    text-align: left;
-    background: transparent;
     border: 1px solid transparent;
-    padding: 4px 6px;
     border-radius: var(--radius);
   }
   .pat:hover {
     background: var(--panel-2);
     border-color: var(--dim);
+  }
+  .star,
+  .aud {
+    background: transparent;
+    border: none;
+    color: var(--dim);
+    padding: 4px 6px;
+  }
+  .star.on {
+    color: var(--warn);
+  }
+  .star:hover,
+  .aud:hover {
+    color: var(--fg);
+  }
+  .load {
+    flex: 1;
+    display: flex;
+    justify-content: space-between;
+    text-align: left;
+    background: transparent;
+    border: none;
+    padding: 4px 4px;
   }
   .pn {
     overflow: hidden;

@@ -142,6 +142,7 @@ export interface LibPattern {
   name: string;
   length: number;
   kind: "drums" | "melodic";
+  favorite: boolean;
 }
 export interface LibGenre {
   name: string;

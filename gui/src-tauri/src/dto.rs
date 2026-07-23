@@ -8,6 +8,8 @@ use midip::app::App;
 use midip::devices::profiles;
 use midip::pattern::library::{GenreMap, Library};
 use midip::pattern::model::{CcLock, DrumHit, LaneKind, PatternData, TrigCond};
+use midip::pattern::refs::PatternRef;
+use midip::pattern::store::Favorites;
 use serde::Serialize;
 
 #[derive(Serialize, Clone)]
@@ -273,33 +275,42 @@ pub struct LibPatternDto {
     pub length: usize,
     /// "drums" | "melodic"
     pub kind: String,
+    pub favorite: bool,
 }
 
 impl LibraryDto {
-    pub fn build(lib: &Library) -> LibraryDto {
+    pub fn build(lib: &Library, favs: &Favorites) -> LibraryDto {
         LibraryDto {
             roles: vec![
-                role_dto("drums", &lib.drums),
-                role_dto("bass", &lib.bass),
-                role_dto("synth", &lib.synth),
+                role_dto("drums", &lib.drums, favs),
+                role_dto("bass", &lib.bass, favs),
+                role_dto("synth", &lib.synth, favs),
             ],
         }
     }
 }
 
-fn role_dto(role: &str, genres: &GenreMap) -> LibRoleDto {
+fn role_dto(role: &str, genres: &GenreMap, favs: &Favorites) -> LibRoleDto {
     LibRoleDto {
         role: role.to_string(),
         genres: genres
             .iter()
-            .map(|(name, pats)| LibGenreDto {
-                name: name.clone(),
+            .map(|(genre, pats)| LibGenreDto {
+                name: genre.clone(),
                 patterns: pats
                     .iter()
-                    .map(|p| LibPatternDto {
-                        name: p.name.clone(),
-                        length: p.length,
-                        kind: kind_str(p.kind()),
+                    .map(|p| {
+                        let pref = PatternRef::Vendored {
+                            role: role.to_string(),
+                            genre: genre.clone(),
+                            name: p.name.clone(),
+                        };
+                        LibPatternDto {
+                            name: p.name.clone(),
+                            length: p.length,
+                            kind: kind_str(p.kind()),
+                            favorite: favs.contains(&pref),
+                        }
                     })
                     .collect(),
             })

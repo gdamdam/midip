@@ -2,6 +2,7 @@
 // listings. All UI reads from `state`; all mutations go out through `send`.
 
 import {
+  auditionPattern,
   dispatch as bridgeDispatch,
   getLibrary,
   getSetList,
@@ -9,6 +10,8 @@ import {
   loadLibraryPattern,
   onSnapshot,
   onTransport,
+  stopAudition,
+  toggleFavorite,
 } from "./bridge";
 import type { GuiCommand, LibraryData, SetEntry, Snapshot } from "./types";
 
@@ -61,6 +64,38 @@ export async function loadPattern(
 ): Promise<void> {
   try {
     app.snap = await loadLibraryPattern(role, genre, name);
+  } catch (e) {
+    app.error = String(e);
+  }
+}
+
+export async function audition(
+  role: string,
+  genre: string,
+  name: string,
+): Promise<void> {
+  try {
+    app.snap = await auditionPattern(role, genre, name);
+  } catch (e) {
+    app.error = String(e);
+  }
+}
+
+export async function endAudition(): Promise<void> {
+  try {
+    app.snap = await stopAudition();
+  } catch (e) {
+    app.error = String(e);
+  }
+}
+
+export async function favorite(
+  role: string,
+  genre: string,
+  name: string,
+): Promise<void> {
+  try {
+    app.library = await toggleFavorite(role, genre, name);
   } catch (e) {
     app.error = String(e);
   }

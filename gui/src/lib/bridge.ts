@@ -24,6 +24,20 @@ export const loadLibraryPattern = (
   name: string,
 ): Promise<Snapshot> => invoke("gui_load_pattern", { role, genre, name });
 
+export const auditionPattern = (
+  role: string,
+  genre: string,
+  name: string,
+): Promise<Snapshot> => invoke("gui_audition", { role, genre, name });
+
+export const stopAudition = (): Promise<Snapshot> => invoke("gui_stop_audition");
+
+export const toggleFavorite = (
+  role: string,
+  genre: string,
+  name: string,
+): Promise<LibraryData> => invoke("gui_toggle_favorite", { role, genre, name });
+
 export const getSetList = (): Promise<SetEntry[]> => invoke("gui_set_list");
 
 export const getOutputPorts = (): Promise<string[]> => invoke("gui_output_ports");

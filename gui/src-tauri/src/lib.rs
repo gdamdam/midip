@@ -125,6 +125,59 @@ impl Core {
         self.forward(cmds);
     }
 
+    /// Cue a library pattern as an isolated preview on its role's lane WITHOUT
+    /// mutating the committed set. Mirrors `Action::Audition` (which is bound to
+    /// the TUI's lib-selection cursor) using the public `AuditionPreview`.
+    pub fn audition(&mut self, role: String, genre: String, name: String) {
+        let pref = PatternRef::Vendored {
+            role: role.clone(),
+            genre: genre.clone(),
+            name: name.clone(),
+        };
+        let Some(lane) = pref.role_lane_hint() else {
+            return;
+        };
+        if lane >= self.app.set.lanes.len() {
+            return;
+        }
+        let Some(pat) = self.app.library.find(&role, &genre, &name).cloned() else {
+            self.app.set_status("pattern not found");
+            return;
+        };
+        // Gate: don't collide with a live (playing, unmuted) lane.
+        if self.app.engine_playing && !self.app.set.lanes[lane].mute {
+            self.app.set_status("Mute lane to audition (it's live)");
+            return;
+        }
+        self.app.set_status(format!("Auditioning {name}"));
+        self.app.audition = Some(midip::app::AuditionPreview {
+            lane,
+            pattern: pat.clone(),
+        });
+        self.forward(vec![UiCommand::LoadPattern { lane, pattern: pat }]);
+    }
+
+    /// End any active audition, reverting the previewed lane to its committed pattern.
+    pub fn stop_audition(&mut self) {
+        if let Some(prev) = self.app.audition.take() {
+            let pat = self.app.set.lanes[prev.lane].pattern.clone();
+            self.forward(vec![UiCommand::LoadPattern {
+                lane: prev.lane,
+                pattern: pat,
+            }]);
+            self.app.set_status("Audition stopped");
+        }
+    }
+
+    /// Toggle a library pattern's favorite flag and persist the favorites file.
+    pub fn toggle_favorite(&mut self, role: String, genre: String, name: String) {
+        let pref = PatternRef::Vendored { role, genre, name };
+        let now = self.app.favorites.toggle(pref);
+        let _ = midip::pattern::store::save_favorites(&self.data_dir, &self.app.favorites);
+        self.app
+            .set_status(if now { "Favorited" } else { "Unfavorited" });
+    }
+
     pub fn on_engine_event(&mut self, ev: EngineEvent) {
         let cmds = self.app.on_engine_event(ev);
         self.forward(cmds);
@@ -135,7 +188,7 @@ impl Core {
     }
 
     pub fn library(&self) -> LibraryDto {
-        LibraryDto::build(&self.app.library)
+        LibraryDto::build(&self.app.library, &self.app.favorites)
     }
 }
 
@@ -188,6 +241,37 @@ fn gui_dispatch(cmd: GuiCommand, state: tauri::State<GuiState>) -> Snapshot {
 #[tauri::command]
 fn gui_library(state: tauri::State<GuiState>) -> LibraryDto {
     state.core.lock().unwrap().library()
+}
+
+#[tauri::command]
+fn gui_audition(
+    role: String,
+    genre: String,
+    name: String,
+    state: tauri::State<GuiState>,
+) -> Snapshot {
+    let mut core = state.core.lock().unwrap();
+    core.audition(role, genre, name);
+    core.snapshot()
+}
+
+#[tauri::command]
+fn gui_stop_audition(state: tauri::State<GuiState>) -> Snapshot {
+    let mut core = state.core.lock().unwrap();
+    core.stop_audition();
+    core.snapshot()
+}
+
+#[tauri::command]
+fn gui_toggle_favorite(
+    role: String,
+    genre: String,
+    name: String,
+    state: tauri::State<GuiState>,
+) -> LibraryDto {
+    let mut core = state.core.lock().unwrap();
+    core.toggle_favorite(role, genre, name);
+    core.library()
 }
 
 #[tauri::command]
@@ -314,6 +398,9 @@ pub fn run() {
             gui_dispatch,
             gui_library,
             gui_load_pattern,
+            gui_audition,
+            gui_stop_audition,
+            gui_toggle_favorite,
             gui_set_list,
             gui_output_ports,
         ])
