@@ -4,6 +4,7 @@
 import {
   auditionPattern,
   dispatch as bridgeDispatch,
+  getAppVersion,
   getLibrary,
   getSetList,
   getSnapshot,
@@ -20,6 +21,7 @@ interface AppState {
   snap: Snapshot | null;
   library: LibraryData | null;
   sets: SetEntry[];
+  version: string;
   ready: boolean;
   error: string | null;
 }
@@ -28,6 +30,7 @@ export const app = $state<AppState>({
   snap: null,
   library: null,
   sets: [],
+  version: "",
   ready: false,
   error: null,
 });
@@ -45,6 +48,11 @@ export async function init(): Promise<void> {
     });
     app.library = await getLibrary();
     app.sets = await getSetList();
+    try {
+      app.version = await getAppVersion();
+    } catch {
+      // Version is cosmetic; ignore if the app plugin isn't reachable.
+    }
   } catch (e) {
     app.error = String(e);
   }

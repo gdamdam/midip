@@ -117,6 +117,10 @@
         <SetupPanel />
       {/if}
     </main>
+
+    {#if app.version}
+      <footer class="version mono" aria-label="version">midip v{app.version}</footer>
+    {/if}
   </div>
 {/if}
 
@@ -165,6 +169,16 @@
   .content {
     flex: 1;
     min-height: 0;
+  }
+  .version {
+    position: fixed;
+    right: 8px;
+    bottom: 5px;
+    font-size: 10px;
+    color: var(--dim);
+    pointer-events: none;
+    z-index: 50;
+    letter-spacing: 0.03em;
   }
   .three,
   .two {

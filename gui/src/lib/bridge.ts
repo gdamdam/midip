@@ -2,6 +2,7 @@
 // that talks to the backend; everything else goes through these functions.
 
 import { invoke } from "@tauri-apps/api/core";
+import { getVersion } from "@tauri-apps/api/app";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   GuiCommand,
@@ -10,6 +11,8 @@ import type {
   Snapshot,
   Transport,
 } from "./types";
+
+export const getAppVersion = (): Promise<string> => getVersion();
 
 export const getSnapshot = (): Promise<Snapshot> => invoke("gui_snapshot");
 
