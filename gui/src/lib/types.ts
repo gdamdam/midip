@@ -148,6 +148,20 @@ export interface Song {
   playing_chain: number | null;
 }
 
+export interface Gen {
+  active: boolean;
+  mode: "generate" | "vary" | "arp";
+  density: number;
+  range: number;
+  mutate: number;
+  arp_chord: "power" | "triad" | "seventh" | "octaves";
+  arp_octaves: number;
+  arp_shape: "up" | "down" | "updown" | "random";
+  arp_gate: number;
+  arp_vel_var: number;
+  melodic: boolean;
+}
+
 export interface Snapshot {
   transport: Transport;
   lanes: Lane[];
@@ -156,6 +170,7 @@ export interface Snapshot {
   selection: Selection;
   inspector: Inspector;
   song: Song;
+  gen: Gen;
   status: string;
 }
 
@@ -232,6 +247,12 @@ export type GuiCommand =
   | { type: "captureScene" }
   | { type: "playChain"; args: number }
   | { type: "stopChain" }
+  | { type: "openGenerative" }
+  | { type: "genSetMode"; args: string }
+  | { type: "genAdjust"; args: { field: string; delta: number } }
+  | { type: "genReroll" }
+  | { type: "genCommit" }
+  | { type: "genCancel" }
   | { type: "undo" }
   | { type: "redo" }
   | { type: "save" }

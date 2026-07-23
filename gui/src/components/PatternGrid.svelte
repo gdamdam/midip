@@ -41,6 +41,7 @@
     {/if}
 
     <div class="spacer"></div>
+    <button class="gen" onclick={() => send({ type: "openGenerative" })} title="Generate / vary / arpeggiate this lane">⚡ Generate</button>
     <button class="danger" onclick={() => send({ type: "clearPattern", args: lane })}>clear</button>
   </div>
 
@@ -109,6 +110,15 @@
   }
   .spacer {
     flex: 1;
+  }
+  .gen {
+    color: var(--ember);
+    border-color: var(--dim-2);
+    font-size: 11px;
+    font-weight: 700;
+  }
+  .gen:hover {
+    border-color: var(--ember);
   }
   .danger {
     color: var(--err);

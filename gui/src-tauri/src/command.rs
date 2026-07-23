@@ -7,7 +7,8 @@
 //! cursor (clamped) before applying the edit `Action`, so all editing reuses the
 //! engine's own `App::apply` logic — nothing is reimplemented here.
 
-use midip::app::Action;
+use midip::app::{Action, GenField};
+use midip::pattern::generate::GenMode;
 use serde::Deserialize;
 
 #[derive(Deserialize, Debug, Clone)]
@@ -177,6 +178,17 @@ pub enum GuiCommand {
     PlayChain(usize),
     StopChain,
 
+    // --- generative tool (operates on the focused lane; live preview) ---
+    OpenGenerative,
+    GenSetMode(String),
+    GenAdjust {
+        field: String,
+        delta: i32,
+    },
+    GenReroll,
+    GenCommit,
+    GenCancel,
+
     // --- history ---
     Undo,
     Redo,
@@ -282,6 +294,21 @@ pub fn gui_to_actions(cmd: &GuiCommand) -> Vec<Action> {
         G::PlayChain(i) => vec![Action::PlayChain(i)],
         G::StopChain => vec![Action::StopChain],
 
+        // generative — all no-ops unless the preview is active (App guards on
+        // temp_transform); unknown mode/field strings translate to nothing.
+        G::OpenGenerative => vec![Action::OpenGenerative],
+        G::GenSetMode(ref m) => match gen_mode(m) {
+            Some(mode) => vec![Action::GenSetMode(mode)],
+            None => vec![],
+        },
+        G::GenAdjust { ref field, delta } => match gen_field(field) {
+            Some(f) => vec![Action::GenAdjust { field: f, delta }],
+            None => vec![],
+        },
+        G::GenReroll => vec![Action::GenReroll],
+        G::GenCommit => vec![Action::GenCommit],
+        G::GenCancel => vec![Action::GenCancel],
+
         // persistence — the engine's own actions self-resolve the data dir,
         // mark dirty, set status and manage recovery, so we simply forward them.
         G::Save => vec![Action::Save],
@@ -359,6 +386,29 @@ pub fn gui_to_actions(cmd: &GuiCommand) -> Vec<Action> {
 /// GUI deltas arrive as `i32`; engine adjust-actions take `i8`. Saturate.
 fn clamp_i8(v: i32) -> i8 {
     v.clamp(i8::MIN as i32, i8::MAX as i32) as i8
+}
+
+fn gen_mode(s: &str) -> Option<GenMode> {
+    match s {
+        "generate" => Some(GenMode::Generate),
+        "vary" => Some(GenMode::Vary),
+        "arp" => Some(GenMode::Arp),
+        _ => None,
+    }
+}
+
+fn gen_field(s: &str) -> Option<GenField> {
+    match s {
+        "density" => Some(GenField::Density),
+        "range" => Some(GenField::Range),
+        "mutate" => Some(GenField::Mutate),
+        "chord" => Some(GenField::Chord),
+        "octaves" => Some(GenField::Octaves),
+        "shape" => Some(GenField::Shape),
+        "gate" => Some(GenField::Gate),
+        "velvar" => Some(GenField::VelVar),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -487,6 +537,43 @@ mod tests {
         // Song commands are global (no lane / no cell targeting).
         assert_eq!(command_lane(&GuiCommand::PlayChain(1)), None);
         assert_eq!(target_cell(&GuiCommand::RecallScene(0)), None);
+    }
+
+    #[test]
+    fn generative_translation() {
+        assert_eq!(
+            gui_to_actions(&GuiCommand::OpenGenerative),
+            vec![Action::OpenGenerative]
+        );
+        assert_eq!(
+            gui_to_actions(&GuiCommand::GenReroll),
+            vec![Action::GenReroll]
+        );
+        assert_eq!(
+            gui_to_actions(&GuiCommand::GenCommit),
+            vec![Action::GenCommit]
+        );
+        assert_eq!(
+            gui_to_actions(&GuiCommand::GenSetMode("arp".into())),
+            vec![Action::GenSetMode(GenMode::Arp)]
+        );
+        assert_eq!(
+            gui_to_actions(&GuiCommand::GenAdjust {
+                field: "density".into(),
+                delta: 5
+            }),
+            vec![Action::GenAdjust {
+                field: GenField::Density,
+                delta: 5
+            }]
+        );
+        // Unknown mode/field strings translate to a no-op (not a panic/bad action).
+        assert!(gui_to_actions(&GuiCommand::GenSetMode("bogus".into())).is_empty());
+        assert!(gui_to_actions(&GuiCommand::GenAdjust {
+            field: "bogus".into(),
+            delta: 1
+        })
+        .is_empty());
     }
 
     #[test]

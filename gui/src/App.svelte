@@ -7,6 +7,7 @@
   import PatternLibrary from "./components/PatternLibrary.svelte";
   import SongPanel from "./components/SongPanel.svelte";
   import SetupPanel from "./components/SetupPanel.svelte";
+  import GeneratePanel from "./components/GeneratePanel.svelte";
   import StatusToast from "./components/StatusToast.svelte";
 
   type Tab = "perform" | "pattern" | "library" | "song" | "setup";
@@ -66,6 +67,7 @@
 <svelte:window onkeydown={onKey} />
 
 <StatusToast />
+<GeneratePanel />
 
 {#if !app.ready}
   <div class="boot">

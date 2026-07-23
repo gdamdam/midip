@@ -4,8 +4,9 @@
 //! `CcLock`, `TrigCond`) are reused verbatim so the wire format never drifts
 //! from the engine's own representation.
 
-use midip::app::App;
+use midip::app::{App, Overlay};
 use midip::devices::profiles;
+use midip::pattern::generate::{ArpChord, ArpShape, GenMode};
 use midip::pattern::library::{GenreMap, Library};
 use midip::pattern::model::{CcLock, DrumHit, LaneKind, PatternData, TrigCond};
 use midip::pattern::refs::PatternRef;
@@ -21,7 +22,70 @@ pub struct Snapshot {
     pub selection: SelectionDto,
     pub inspector: InspectorDto,
     pub song: SongDto,
+    pub gen: GenDto,
     pub status: String,
+}
+
+// --- Generative tool ----------------------------------------------------
+
+#[derive(Serialize, Clone)]
+pub struct GenDto {
+    /// True while the generative preview is live (Commit/Cancel pending).
+    pub active: bool,
+    /// "generate" | "vary" | "arp"
+    pub mode: String,
+    pub density: u8,
+    pub range: u8,
+    pub mutate: u8,
+    /// "power" | "triad" | "seventh" | "octaves"
+    pub arp_chord: String,
+    pub arp_octaves: u8,
+    /// "up" | "down" | "updown" | "random"
+    pub arp_shape: String,
+    pub arp_gate: f32,
+    pub arp_vel_var: u8,
+    /// Whether the focused lane is melodic (Arp mode is melodic-only).
+    pub melodic: bool,
+}
+
+fn build_gen(app: &App) -> GenDto {
+    let p = &app.gen_params;
+    let melodic = app
+        .set
+        .lanes
+        .get(app.focus)
+        .map(|l| l.pattern.kind() == LaneKind::Melodic)
+        .unwrap_or(false);
+    GenDto {
+        active: app.overlay == Some(Overlay::Generative),
+        mode: match p.mode {
+            GenMode::Generate => "generate",
+            GenMode::Vary => "vary",
+            GenMode::Arp => "arp",
+        }
+        .into(),
+        density: p.density,
+        range: p.range,
+        mutate: p.mutate,
+        arp_chord: match p.arp_chord {
+            ArpChord::Power => "power",
+            ArpChord::Triad => "triad",
+            ArpChord::Seventh => "seventh",
+            ArpChord::Octaves => "octaves",
+        }
+        .into(),
+        arp_octaves: p.arp_octaves,
+        arp_shape: match p.arp_shape {
+            ArpShape::Up => "up",
+            ArpShape::Down => "down",
+            ArpShape::UpDown => "updown",
+            ArpShape::Random => "random",
+        }
+        .into(),
+        arp_gate: p.arp_gate,
+        arp_vel_var: p.arp_vel_var,
+        melodic,
+    }
 }
 
 // --- Song (scenes + chains) --------------------------------------------
@@ -271,6 +335,7 @@ impl Snapshot {
         };
         let inspector = build_inspector(app);
         let song = build_song(app);
+        let gen = build_gen(app);
 
         Snapshot {
             transport,
@@ -280,6 +345,7 @@ impl Snapshot {
             selection,
             inspector,
             song,
+            gen,
             status: app.status.clone(),
         }
     }
