@@ -425,6 +425,75 @@ fn arp_pool(chord: ArpChord, octaves: u8, scale: Scale) -> Vec<i32> {
     pool
 }
 
+/// In-place Fisher–Yates shuffle using the shared xorshift stream.
+#[allow(dead_code)]
+// Wired into generate_arp in Task 4; remove this allow then.
+fn shuffle_in_place(v: &mut [i32], rng: &mut u64) {
+    if v.len() < 2 {
+        return;
+    }
+    for i in (1..v.len()).rev() {
+        let j = (next_rng(rng) % (i as u64 + 1)) as usize;
+        v.swap(i, j);
+    }
+}
+
+/// UpDown cycle for an ascending pool: ascend then descend the interior only,
+/// so top/bottom are not repeated back-to-back. [a,b,c] -> [a,b,c,b] (len 2n-2).
+#[allow(dead_code)]
+// Wired into generate_arp in Task 4; remove this allow then.
+fn updown_cycle(pool: &[i32]) -> Vec<i32> {
+    if pool.len() < 2 {
+        return pool.to_vec();
+    }
+    let mut c = pool.to_vec();
+    for i in (1..pool.len() - 1).rev() {
+        c.push(pool[i]);
+    }
+    c
+}
+
+/// Produce exactly `count` pitches by walking `pool` in `shape` order, repeating
+/// the cycle as needed. Random reshuffles the whole pool each cycle (arp-like,
+/// avoids accidental in-cycle repeats).
+#[allow(dead_code)]
+// Wired into generate_arp in Task 4; remove this allow then.
+fn arp_sequence(pool: &[i32], shape: ArpShape, count: usize, rng: &mut u64) -> Vec<i32> {
+    let mut seq = Vec::with_capacity(count);
+    if pool.is_empty() || count == 0 {
+        return seq;
+    }
+    match shape {
+        ArpShape::Up => {
+            while seq.len() < count {
+                seq.extend_from_slice(pool);
+            }
+        }
+        ArpShape::Down => {
+            let mut d = pool.to_vec();
+            d.reverse();
+            while seq.len() < count {
+                seq.extend_from_slice(&d);
+            }
+        }
+        ArpShape::UpDown => {
+            let ud = updown_cycle(pool);
+            while seq.len() < count {
+                seq.extend_from_slice(&ud);
+            }
+        }
+        ArpShape::Random => {
+            while seq.len() < count {
+                let mut s = pool.to_vec();
+                shuffle_in_place(&mut s, rng);
+                seq.extend_from_slice(&s);
+            }
+        }
+    }
+    seq.truncate(count);
+    seq
+}
+
 #[cfg(test)]
 mod gen_core_tests {
     use super::*;
@@ -1216,6 +1285,53 @@ mod gen_core_tests {
         assert_eq!(
             arp_pool(ArpChord::Seventh, 1, Scale::MajorPentatonic),
             vec![0, 4, 9]
+        );
+    }
+
+    // ── Task 3: arp_sequence with shape ordering ────────────────────────────────
+
+    #[test]
+    fn arp_sequence_updown_no_repeated_endpoints() {
+        let mut rng = 1u64;
+        // Pool [10,20,30] UpDown cycle is 10,20,30,20 (length 2n-2), then repeats.
+        let seq = arp_sequence(&[10, 20, 30], ArpShape::UpDown, 8, &mut rng);
+        assert_eq!(seq, vec![10, 20, 30, 20, 10, 20, 30, 20]);
+    }
+
+    #[test]
+    fn arp_sequence_up_and_down_cycle() {
+        let mut rng = 1u64;
+        assert_eq!(
+            arp_sequence(&[1, 2, 3], ArpShape::Up, 5, &mut rng),
+            vec![1, 2, 3, 1, 2]
+        );
+        let mut rng2 = 1u64;
+        assert_eq!(
+            arp_sequence(&[1, 2, 3], ArpShape::Down, 5, &mut rng2),
+            vec![3, 2, 1, 3, 2]
+        );
+    }
+
+    #[test]
+    fn arp_sequence_random_is_deterministic_and_covers_pool() {
+        // Same seed => identical sequence.
+        let mut a = 42u64;
+        let mut b = 42u64;
+        let sa = arp_sequence(&[1, 2, 3, 4], ArpShape::Random, 4, &mut a);
+        let sb = arp_sequence(&[1, 2, 3, 4], ArpShape::Random, 4, &mut b);
+        assert_eq!(sa, sb, "Random must be deterministic per seed");
+        // One full cycle (count == pool.len()) is a permutation — every pitch once.
+        let mut sorted = sa.clone();
+        sorted.sort_unstable();
+        assert_eq!(sorted, vec![1, 2, 3, 4], "a shuffled cycle covers the whole pool");
+    }
+
+    #[test]
+    fn arp_sequence_single_note_pool() {
+        let mut rng = 1u64;
+        assert_eq!(
+            arp_sequence(&[7], ArpShape::UpDown, 3, &mut rng),
+            vec![7, 7, 7]
         );
     }
 }
