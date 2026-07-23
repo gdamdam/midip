@@ -248,6 +248,7 @@ export type GuiCommand =
   | { type: "conformToScale"; args: number }
   | { type: "toggleFill"; args: number }
   | { type: "commitTransform"; args: number }
+  | { type: "setClockIn"; args: number }
   | { type: "renameSet"; args: string }
   | { type: "duplicateSet" }
   | { type: "deleteSet"; args: string }

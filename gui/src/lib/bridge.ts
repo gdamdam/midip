@@ -51,6 +51,8 @@ export const getSetList = (): Promise<SetEntry[]> => invoke("gui_set_list");
 
 export const getOutputPorts = (): Promise<string[]> => invoke("gui_output_ports");
 
+export const getInputPorts = (): Promise<string[]> => invoke("gui_input_ports");
+
 export const onSnapshot = (cb: (s: Snapshot) => void): Promise<UnlistenFn> =>
   listen<Snapshot>("snapshot", (e) => cb(e.payload));
 

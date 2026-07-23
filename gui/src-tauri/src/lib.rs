@@ -107,6 +107,11 @@ impl Core {
                 self.app.route_editor_ports = midip::midi::ports::list_output_ports();
             }
         }
+        // Clock-in selection reads clock_in_sel against a fresh input-port list.
+        if let Some(idx) = command::clockin_prep(&cmd) {
+            self.app.clock_in_ports = midip::midi::ports::list_input_ports();
+            self.app.clock_in_sel = idx;
+        }
         if let Some((lane, row, col)) = target_cell(&cmd) {
             self.place_cursor(lane, row, col);
         }
@@ -349,6 +354,11 @@ fn gui_output_ports() -> Vec<String> {
     midip::midi::ports::list_output_ports()
 }
 
+#[tauri::command]
+fn gui_input_ports() -> Vec<String> {
+    midip::midi::ports::list_input_ports()
+}
+
 // --- Event pump ----------------------------------------------------------
 
 /// Drain engine events on a dedicated thread. Per event: acquire the `core`
@@ -439,6 +449,7 @@ pub fn run() {
             gui_toggle_favorite,
             gui_set_list,
             gui_output_ports,
+            gui_input_ports,
         ])
         .setup(move |app| {
             let handle = app.handle().clone();

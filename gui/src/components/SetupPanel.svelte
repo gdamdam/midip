@@ -1,8 +1,20 @@
 <script lang="ts">
+  import { onMount } from "svelte";
   import { app, send, refreshSets } from "../lib/store.svelte";
+  import { getInputPorts } from "../lib/bridge";
 
   const t = $derived(app.snap!.transport);
   const lanes = $derived(app.snap!.lanes);
+
+  let inputPorts = $state<string[]>([]);
+  onMount(async () => {
+    try {
+      inputPorts = await getInputPorts();
+    } catch {
+      /* no MIDI inputs available */
+    }
+  });
+  const clockPort = $derived(t.clock_in?.port ?? null);
 
   let saveAsName = $state("");
   let showSaveAs = $state(false);
@@ -134,6 +146,25 @@
       <button class="toggle" class:on={t.mirror} onclick={() => send({ type: "toggleMirror" })}>
         {t.mirror ? "ON" : "off"}
       </button>
+    </div>
+
+    <h3>Clock-in (external MIDI clock)</h3>
+    {#if t.clock_in}
+      <p class="muted small">
+        Following <span class="mono">{t.clock_in.port}</span> —
+        {t.clock_in.locked ? `locked @ ${Math.round(t.clock_in.tempo)} BPM` : "waiting for ticks"}
+      </p>
+    {/if}
+    <div class="clocklist">
+      <button class="clockrow" class:sel={clockPort === null} onclick={() => send({ type: "setClockIn", args: 0 })}>
+        (none — manual/Link tempo)
+      </button>
+      {#each inputPorts as p, i (p)}
+        <button class="clockrow" class:sel={clockPort === p} onclick={() => send({ type: "setClockIn", args: i + 1 })}>{p}</button>
+      {/each}
+      {#if inputPorts.length === 0}
+        <span class="muted small">no MIDI input ports found</span>
+      {/if}
     </div>
   </div>
 </section>
@@ -290,6 +321,23 @@
   .toggle.on {
     color: var(--ok);
     border-color: var(--ok);
+  }
+  .clocklist {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .clockrow {
+    text-align: left;
+    background: transparent;
+    color: var(--fg-dim);
+  }
+  .clockrow:hover {
+    background: var(--panel-2);
+  }
+  .clockrow.sel {
+    color: var(--aqua);
+    border-color: var(--aqua);
   }
   .small {
     font-size: 11px;

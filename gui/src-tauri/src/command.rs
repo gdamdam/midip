@@ -180,6 +180,9 @@ pub enum GuiCommand {
     ToggleFill(usize),
     CommitTransform(usize),
 
+    // --- clock-in (external MIDI clock): 0 = clear, 1..=n = input-port index+1 ---
+    SetClockIn(usize),
+
     // --- per-lane melodic params ---
     CycleScale {
         lane: usize,
@@ -282,6 +285,16 @@ pub fn command_lane(cmd: &GuiCommand) -> Option<usize> {
         | CycleRoutePort { lane, .. }
         | AdjustRouteChannel { lane, .. }
         | AdjustLaneSwing { lane, .. } => Some(lane),
+        _ => None,
+    }
+}
+
+/// Clock-in selection reads `App::clock_in_sel` (against a refreshed
+/// `clock_in_ports`); the dispatcher primes both before applying `ClockInConfirm`.
+/// Returns the target selection index (0 = clear, 1..=n = port).
+pub fn clockin_prep(cmd: &GuiCommand) -> Option<usize> {
+    match *cmd {
+        GuiCommand::SetClockIn(idx) => Some(idx),
         _ => None,
     }
 }
@@ -400,6 +413,9 @@ pub fn gui_to_actions(cmd: &GuiCommand) -> Vec<Action> {
         G::ConformToScale(l) => vec![Action::FocusLane(l), Action::ConformToScale],
         G::ToggleFill(l) => vec![Action::FocusLane(l), Action::ToggleFill],
         G::CommitTransform(l) => vec![Action::FocusLane(l), Action::CommitTransform],
+
+        // clock-in — selection primed by the dispatcher, then confirmed
+        G::SetClockIn(_) => vec![Action::ClockInConfirm],
 
         // per-lane melodic params — focus then act
         G::CycleScale { lane, delta } => {
