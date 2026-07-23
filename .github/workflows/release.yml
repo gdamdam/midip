@@ -143,17 +143,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - target: aarch64-apple-darwin
+          # One universal (arm64 + x86_64) macOS .dmg via lipo.
+          - target: universal-apple-darwin
             os: macos-latest
-            bundles: dmg
-          - target: x86_64-apple-darwin
-            os: macos-latest
+            rust_targets: aarch64-apple-darwin,x86_64-apple-darwin
             bundles: dmg
           - target: x86_64-pc-windows-msvc
             os: windows-latest
+            rust_targets: x86_64-pc-windows-msvc
             bundles: nsis,msi
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
+            rust_targets: x86_64-unknown-linux-gnu
             bundles: deb,appimage
 
     steps:
@@ -164,7 +165,8 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          # Universal needs BOTH arches installed; tauri lipo-combines them.
+          targets: ${{ matrix.rust_targets }}
 
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
