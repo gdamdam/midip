@@ -1,0 +1,28 @@
+[package]
+name = "midip-gui"
+version = "1.7.0"
+edition = "2021"
+description = "Desktop GUI for midip — a Tauri frontend over the midip sequencing engine"
+license = "AGPL-3.0-or-later"
+
+[lib]
+# Tauri wants the app logic in a lib so the mobile/desktop entrypoints can share it.
+name = "midip_gui_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# The existing engine, reused as a path dependency (no workspace conversion).
+midip = { path = "../.." }
+
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+crossbeam-channel = "0.5"
+anyhow = "1"
+
+[features]
+# Kept for parity with the Tauri template; no custom-protocol toggles needed yet.
+default = []

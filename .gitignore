@@ -5,3 +5,9 @@
 
 # internal SDD artifacts (never track)
 .superpowers-dist-report.md
+
+# midip-gui (Tauri) build artifacts
+/gui/node_modules
+/gui/dist
+/gui/src-tauri/target
+/gui/src-tauri/gen
