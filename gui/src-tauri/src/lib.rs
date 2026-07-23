@@ -99,6 +99,14 @@ impl Core {
                 return;
             }
         }
+        // Routing commands read `route_editor_lane` (+ the port list for port
+        // cycling); prime that state the same way `OpenRouteEditor` would.
+        if let Some((lane, needs_ports)) = command::route_prep(&cmd) {
+            self.app.route_editor_lane = lane;
+            if needs_ports {
+                self.app.route_editor_ports = midip::midi::ports::list_output_ports();
+            }
+        }
         if let Some((lane, row, col)) = target_cell(&cmd) {
             self.place_cursor(lane, row, col);
         }
@@ -217,6 +225,11 @@ pub struct SetEntry {
     pub path: String,
 }
 
+#[tauri::command]
+fn gui_output_ports() -> Vec<String> {
+    midip::midi::ports::list_output_ports()
+}
+
 // --- Event pump ----------------------------------------------------------
 
 /// Drain engine events on a dedicated thread. Per event: acquire the `core`
@@ -302,6 +315,7 @@ pub fn run() {
             gui_library,
             gui_load_pattern,
             gui_set_list,
+            gui_output_ports,
         ])
         .setup(move |app| {
             let handle = app.handle().clone();

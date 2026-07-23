@@ -80,6 +80,9 @@ export interface Lane {
   transpose: number;
   octave: number;
   focused: boolean;
+  route_port: string;
+  route_default: boolean;
+  clock_out: boolean;
 }
 
 export interface Voice {
@@ -195,6 +198,9 @@ export type GuiCommand =
   | { type: "ccAdd"; args: { lane: number; row: number; col: number } }
   | { type: "ccRemove"; args: { lane: number; row: number; col: number } }
   | { type: "adjustCcVal"; args: { lane: number; row: number; col: number; delta: number } }
+  | { type: "cycleRoutePort"; args: { lane: number; delta: number } }
+  | { type: "adjustRouteChannel"; args: { lane: number; delta: number } }
+  | { type: "toggleClockOut"; args: number }
   | { type: "cycleScale"; args: { lane: number; delta: number } }
   | { type: "adjustRoot"; args: { lane: number; delta: number } }
   | { type: "adjustOctave"; args: { lane: number; delta: number } }

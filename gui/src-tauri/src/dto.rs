@@ -75,6 +75,12 @@ pub struct LaneDto {
     pub transpose: i8,
     pub octave: i8,
     pub focused: bool,
+    /// Effective output-port name (explicit route, or the profile default).
+    pub route_port: String,
+    /// True when the lane uses its profile default route (no explicit override).
+    pub route_default: bool,
+    /// Whether MIDI clock is sent to this lane's port.
+    pub clock_out: bool,
 }
 
 #[derive(Serialize, Clone)]
@@ -214,6 +220,9 @@ impl Snapshot {
                     transpose: lane.transpose,
                     octave: lane.octave,
                     focused: i == app.focus,
+                    route_port: lane.effective_route().port.name,
+                    route_default: lane.route.is_none(),
+                    clock_out: lane.effective_route().clock_out,
                 }
             })
             .collect();

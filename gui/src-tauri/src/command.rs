@@ -146,6 +146,17 @@ pub enum GuiCommand {
         delta: i32,
     },
 
+    // --- routing (per lane) ---
+    CycleRoutePort {
+        lane: usize,
+        delta: i32,
+    },
+    AdjustRouteChannel {
+        lane: usize,
+        delta: i32,
+    },
+    ToggleClockOut(usize),
+
     // --- per-lane melodic params ---
     CycleScale {
         lane: usize,
@@ -214,11 +225,26 @@ pub fn command_lane(cmd: &GuiCommand) -> Option<usize> {
     }
     match *cmd {
         FocusLane(l) | ToggleMute(l) | ToggleSolo(l) | CancelQueue(l) | ClearPattern(l)
-        | DoubleLength(l) => Some(l),
+        | DoubleLength(l) | ToggleClockOut(l) => Some(l),
         AdjustPatternLen { lane, .. }
         | CycleScale { lane, .. }
         | AdjustRoot { lane, .. }
-        | AdjustOctave { lane, .. } => Some(lane),
+        | AdjustOctave { lane, .. }
+        | CycleRoutePort { lane, .. }
+        | AdjustRouteChannel { lane, .. } => Some(lane),
+        _ => None,
+    }
+}
+
+/// Routing commands drive the engine's route-editor actions, which read
+/// `App::route_editor_lane` (and `route_editor_ports` for port cycling). The
+/// dispatcher must set those up first. Returns `(lane, needs_port_list)`.
+pub fn route_prep(cmd: &GuiCommand) -> Option<(usize, bool)> {
+    use GuiCommand::*;
+    match *cmd {
+        CycleRoutePort { lane, .. } => Some((lane, true)),
+        AdjustRouteChannel { lane, .. } => Some((lane, false)),
+        ToggleClockOut(lane) => Some((lane, false)),
         _ => None,
     }
 }
@@ -274,6 +300,11 @@ pub fn gui_to_actions(cmd: &GuiCommand) -> Vec<Action> {
         }
         G::ClearPattern(l) => vec![Action::FocusLane(l), Action::ClearPattern],
         G::DoubleLength(l) => vec![Action::FocusLane(l), Action::DoubleLength],
+
+        // routing — route_editor_lane/ports are set up by the dispatcher
+        G::CycleRoutePort { delta, .. } => vec![Action::RouteCyclePort(delta)],
+        G::AdjustRouteChannel { delta, .. } => vec![Action::RouteAdjustChannel(delta)],
+        G::ToggleClockOut(_) => vec![Action::RouteToggleClockOut],
 
         // per-lane melodic params — focus then act
         G::CycleScale { lane, delta } => {
@@ -392,6 +423,35 @@ mod tests {
             }),
             vec![Action::AdjustVel(127)]
         );
+    }
+
+    #[test]
+    fn routing_translation_and_prep() {
+        assert_eq!(
+            gui_to_actions(&GuiCommand::CycleRoutePort { lane: 1, delta: 1 }),
+            vec![Action::RouteCyclePort(1)]
+        );
+        assert_eq!(
+            gui_to_actions(&GuiCommand::AdjustRouteChannel { lane: 2, delta: -1 }),
+            vec![Action::RouteAdjustChannel(-1)]
+        );
+        assert_eq!(
+            gui_to_actions(&GuiCommand::ToggleClockOut(0)),
+            vec![Action::RouteToggleClockOut]
+        );
+        // Port cycling needs the port list refreshed; channel/clock-out don't.
+        assert_eq!(
+            route_prep(&GuiCommand::CycleRoutePort { lane: 1, delta: 1 }),
+            Some((1, true))
+        );
+        assert_eq!(
+            route_prep(&GuiCommand::AdjustRouteChannel { lane: 2, delta: 1 }),
+            Some((2, false))
+        );
+        assert_eq!(route_prep(&GuiCommand::ToggleClockOut(0)), Some((0, false)));
+        assert_eq!(route_prep(&GuiCommand::TogglePlay), None);
+        // Routing commands are lane-bounds-checked.
+        assert_eq!(command_lane(&GuiCommand::ToggleClockOut(2)), Some(2));
     }
 
     #[test]

@@ -61,21 +61,36 @@
 
   <div class="col">
     <h2>Routing</h2>
-    <table class="routes">
-      <thead>
-        <tr><th>Lane</th><th>Device / Port</th><th>Ch</th><th>Conn</th></tr>
-      </thead>
-      <tbody>
-        {#each lanes as l (l.index)}
-          <tr>
-            <td class="lb">{l.label}</td>
-            <td class="dev" title={l.device}>{l.device}</td>
-            <td class="mono">{l.channel}</td>
-            <td class="conn" class:ok={l.connected}>{l.connected ? "●" : "○"}</td>
-          </tr>
-        {/each}
-      </tbody>
-    </table>
+    <div class="routes">
+      {#each lanes as l (l.index)}
+        <div class="route">
+          <div class="rhead">
+            <span class="lb">{l.label}</span>
+            <span class="conn" class:ok={l.connected} title={l.connected ? "connected" : "not found"}>
+              {l.connected ? "●" : "○"}
+            </span>
+          </div>
+          <div class="rctl">
+            <span class="rk">Port</span>
+            <button onclick={() => send({ type: "cycleRoutePort", args: { lane: l.index, delta: -1 } })} aria-label="Previous port">‹</button>
+            <span class="port" class:def={l.route_default} title={l.route_port}>
+              {l.route_default ? `${l.route_port} (default)` : l.route_port}
+            </span>
+            <button onclick={() => send({ type: "cycleRoutePort", args: { lane: l.index, delta: 1 } })} aria-label="Next port">›</button>
+          </div>
+          <div class="rctl">
+            <span class="rk">Channel</span>
+            <button onclick={() => send({ type: "adjustRouteChannel", args: { lane: l.index, delta: -1 } })} aria-label="Channel down">−</button>
+            <span class="v mono">{l.channel}</span>
+            <button onclick={() => send({ type: "adjustRouteChannel", args: { lane: l.index, delta: 1 } })} aria-label="Channel up">+</button>
+            <span class="rk clk">Clock</span>
+            <button class="toggle" class:on={l.clock_out} onclick={() => send({ type: "toggleClockOut", args: l.index })}>
+              {l.clock_out ? "ON" : "off"}
+            </button>
+          </div>
+        </div>
+      {/each}
+    </div>
 
     <div class="row toggles">
       <span>Virtual-port mirror</span>
@@ -83,11 +98,6 @@
         {t.mirror ? "ON" : "off"}
       </button>
     </div>
-
-    <p class="muted small note">
-      Per-lane output port, channel and clock-out editing are handled by the engine's
-      route editor and will surface here in a later GUI milestone.
-    </p>
   </div>
 </section>
 
@@ -158,33 +168,60 @@
     background: var(--panel-2);
   }
   .routes {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
   }
-  .routes th {
-    text-align: left;
-    color: var(--fg-dim);
-    font-weight: 400;
+  .route {
+    border: var(--border);
+    border-radius: var(--radius);
+    padding: 8px;
+    background: var(--panel);
+  }
+  .rhead {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 6px;
+  }
+  .rctl {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 4px;
+  }
+  .rk {
     font-size: 10px;
     text-transform: uppercase;
-    border-bottom: var(--border);
-    padding: 4px;
+    color: var(--fg-dim);
+    min-width: 48px;
   }
-  .routes td {
-    padding: 5px 4px;
-    border-bottom: 1px solid var(--panel-2);
+  .rk.clk {
+    min-width: 0;
+    margin-left: 10px;
+  }
+  .rctl button {
+    padding: 2px 8px;
+    min-width: 24px;
+  }
+  .port {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 12px;
+    color: var(--aqua);
+  }
+  .port.def {
+    color: var(--fg-dim);
+  }
+  .v {
+    min-width: 26px;
+    text-align: center;
   }
   .lb {
     color: var(--fg);
     font-weight: 700;
-  }
-  .dev {
-    color: var(--fg-dim);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    max-width: 160px;
-    white-space: nowrap;
   }
   .conn {
     color: var(--dim);
@@ -194,6 +231,9 @@
   }
   .toggles {
     margin-top: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
   }
   .toggle.on {
     color: var(--ok);
@@ -201,9 +241,5 @@
   }
   .small {
     font-size: 11px;
-  }
-  .note {
-    margin-top: 12px;
-    line-height: 1.5;
   }
 </style>
