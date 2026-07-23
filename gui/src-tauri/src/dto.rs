@@ -181,6 +181,10 @@ pub struct LaneDto {
     pub route_default: bool,
     /// Whether MIDI clock is sent to this lane's port.
     pub clock_out: bool,
+    /// Per-lane swing override (0..1), or null when it inherits the set swing.
+    pub swing: Option<f32>,
+    /// Per-lane clock division, or null when it inherits the default.
+    pub clock_div: Option<u8>,
 }
 
 #[derive(Serialize, Clone)]
@@ -323,6 +327,8 @@ impl Snapshot {
                     route_port: lane.effective_route().port.name,
                     route_default: lane.route.is_none(),
                     clock_out: lane.effective_route().clock_out,
+                    swing: lane.swing,
+                    clock_div: lane.clock_div,
                 }
             })
             .collect();

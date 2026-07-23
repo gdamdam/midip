@@ -50,6 +50,7 @@
       </button>
     {/if}
     <button class="nudge" onclick={() => send({ type: "adjustBpm", args: 1 })} aria-label="BPM up">+</button>
+    <button class="tap" onclick={() => send({ type: "tap" })} title="Tap tempo">TAP</button>
   </div>
 
   <div class="group">
@@ -79,6 +80,11 @@
   </div>
 
   <div class="spacer"></div>
+
+  <div class="group">
+    <button class="hist" onclick={() => send({ type: "undo" })} title="Undo (⌘Z)" aria-label="Undo">↶</button>
+    <button class="hist" onclick={() => send({ type: "redo" })} title="Redo (⌘⇧Z)" aria-label="Redo">↷</button>
+  </div>
 
   <button class="mirror" class:on={t.mirror} onclick={() => send({ type: "toggleMirror" })}>MIR</button>
 
@@ -128,6 +134,16 @@
   .nudge {
     padding: 3px 8px;
     min-width: 26px;
+  }
+  .tap {
+    padding: 3px 8px;
+    font-size: 11px;
+    color: var(--fg-dim);
+  }
+  .hist {
+    padding: 3px 9px;
+    font-size: 14px;
+    color: var(--fg-dim);
   }
   .bpm-val {
     min-width: 74px;

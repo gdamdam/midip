@@ -158,6 +158,14 @@ pub enum GuiCommand {
     },
     ToggleClockOut(usize),
 
+    // --- per-lane params ---
+    AdjustLaneSwing {
+        lane: usize,
+        delta: i32,
+    },
+    ClearLaneSwing(usize),
+    CycleClockDiv(usize),
+
     // --- per-lane melodic params ---
     CycleScale {
         lane: usize,
@@ -198,6 +206,9 @@ pub enum GuiCommand {
     SaveSetAs(String),
     NewSet,
     LoadSet(String),
+    RenameSet(String),
+    DuplicateSet,
+    DeleteSet(String),
     LoadUserPattern(String),
     SaveLanePattern(String),
 }
@@ -244,12 +255,14 @@ pub fn command_lane(cmd: &GuiCommand) -> Option<usize> {
     match *cmd {
         FocusLane(l) | ToggleMute(l) | ToggleSolo(l) | CancelQueue(l) | ClearPattern(l)
         | DoubleLength(l) | ToggleClockOut(l) => Some(l),
+        ClearLaneSwing(l) | CycleClockDiv(l) => Some(l),
         AdjustPatternLen { lane, .. }
         | CycleScale { lane, .. }
         | AdjustRoot { lane, .. }
         | AdjustOctave { lane, .. }
         | CycleRoutePort { lane, .. }
-        | AdjustRouteChannel { lane, .. } => Some(lane),
+        | AdjustRouteChannel { lane, .. }
+        | AdjustLaneSwing { lane, .. } => Some(lane),
         _ => None,
     }
 }
@@ -315,6 +328,9 @@ pub fn gui_to_actions(cmd: &GuiCommand) -> Vec<Action> {
         G::SaveSetAs(ref name) => vec![Action::SaveSetAs(name.clone())],
         G::NewSet => vec![Action::NewSet],
         G::LoadSet(ref path) => vec![Action::DoLoadSet(std::path::PathBuf::from(path))],
+        G::RenameSet(ref name) => vec![Action::RenameSet(name.clone())],
+        G::DuplicateSet => vec![Action::DuplicateSet],
+        G::DeleteSet(ref path) => vec![Action::DeleteSet(std::path::PathBuf::from(path))],
         G::LoadUserPattern(ref path) => {
             vec![Action::LoadUserPattern(std::path::PathBuf::from(path))]
         }
@@ -344,6 +360,16 @@ pub fn gui_to_actions(cmd: &GuiCommand) -> Vec<Action> {
         G::CycleRoutePort { delta, .. } => vec![Action::RouteCyclePort(delta)],
         G::AdjustRouteChannel { delta, .. } => vec![Action::RouteAdjustChannel(delta)],
         G::ToggleClockOut(_) => vec![Action::RouteToggleClockOut],
+
+        // per-lane params — focus then act
+        G::AdjustLaneSwing { lane, delta } => {
+            vec![
+                Action::FocusLane(lane),
+                Action::AdjustLaneSwing(clamp_i8(delta)),
+            ]
+        }
+        G::ClearLaneSwing(l) => vec![Action::FocusLane(l), Action::ClearLaneSwing],
+        G::CycleClockDiv(l) => vec![Action::FocusLane(l), Action::CycleClockDiv],
 
         // per-lane melodic params — focus then act
         G::CycleScale { lane, delta } => {

@@ -5,6 +5,7 @@
 
   const pat = $derived(app.snap!.focused_pattern);
   const lane = $derived(app.snap!.focused_lane);
+  const laneInfo = $derived(app.snap!.lanes[lane]);
 </script>
 
 <section class="patwrap">
@@ -39,6 +40,20 @@
         <button onclick={() => send({ type: "adjustOctave", args: { lane, delta: 1 } })}>+</button>
       </div>
     {/if}
+
+    <div class="ctl">
+      <span class="lbl">swing</span>
+      <button onclick={() => send({ type: "adjustLaneSwing", args: { lane, delta: -5 } })}>−</button>
+      <span class="val mono">{laneInfo.swing === null ? "set" : Math.round(laneInfo.swing * 100) + "%"}</span>
+      <button onclick={() => send({ type: "adjustLaneSwing", args: { lane, delta: 5 } })}>+</button>
+      {#if laneInfo.swing !== null}
+        <button class="clr" onclick={() => send({ type: "clearLaneSwing", args: lane })} title="Clear override">×</button>
+      {/if}
+    </div>
+    <div class="ctl">
+      <span class="lbl">div</span>
+      <button onclick={() => send({ type: "cycleClockDiv", args: lane })}>{laneInfo.clock_div ?? "1"}×</button>
+    </div>
 
     <div class="spacer"></div>
     <button class="gen" onclick={() => send({ type: "openGenerative" })} title="Generate / vary / arpeggiate this lane">⚡ Generate</button>
@@ -110,6 +125,10 @@
   }
   .spacer {
     flex: 1;
+  }
+  .clr {
+    padding: 2px 6px;
+    color: var(--fg-dim);
   }
   .gen {
     color: var(--ember);

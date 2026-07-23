@@ -83,6 +83,8 @@ export interface Lane {
   route_port: string;
   route_default: boolean;
   clock_out: boolean;
+  swing: number | null;
+  clock_div: number | null;
 }
 
 export interface Voice {
@@ -237,6 +239,12 @@ export type GuiCommand =
   | { type: "ccAdd"; args: { lane: number; row: number; col: number } }
   | { type: "ccRemove"; args: { lane: number; row: number; col: number } }
   | { type: "adjustCcVal"; args: { lane: number; row: number; col: number; delta: number } }
+  | { type: "adjustLaneSwing"; args: { lane: number; delta: number } }
+  | { type: "clearLaneSwing"; args: number }
+  | { type: "cycleClockDiv"; args: number }
+  | { type: "renameSet"; args: string }
+  | { type: "duplicateSet" }
+  | { type: "deleteSet"; args: string }
   | { type: "cycleRoutePort"; args: { lane: number; delta: number } }
   | { type: "adjustRouteChannel"; args: { lane: number; delta: number } }
   | { type: "toggleClockOut"; args: number }

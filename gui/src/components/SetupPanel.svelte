@@ -6,6 +6,9 @@
 
   let saveAsName = $state("");
   let showSaveAs = $state(false);
+  let renameName = $state("");
+  let showRename = $state(false);
+  let confirmDelete = $state<string | null>(null);
 
   async function doSave() {
     await send({ type: "save" });
@@ -17,6 +20,23 @@
     await send({ type: "saveSetAs", args: n });
     showSaveAs = false;
     saveAsName = "";
+    await refreshSets();
+  }
+  async function doRename() {
+    const n = renameName.trim();
+    if (!n) return;
+    await send({ type: "renameSet", args: n });
+    showRename = false;
+    renameName = "";
+    await refreshSets();
+  }
+  async function doDuplicate() {
+    await send({ type: "duplicateSet" });
+    await refreshSets();
+  }
+  async function doDelete(path: string) {
+    await send({ type: "deleteSet", args: path });
+    confirmDelete = null;
     await refreshSets();
   }
   async function loadSet(path: string) {
@@ -37,6 +57,8 @@
     <div class="actions">
       <button onclick={doSave}>Save</button>
       <button onclick={() => (showSaveAs = !showSaveAs)}>Save As…</button>
+      <button onclick={() => { showRename = !showRename; renameName = t.set_name; }}>Rename</button>
+      <button onclick={doDuplicate}>Duplicate</button>
       <button onclick={newSet}>New</button>
     </div>
     {#if showSaveAs}
@@ -46,6 +68,13 @@
         <button onclick={doSaveAs}>OK</button>
       </div>
     {/if}
+    {#if showRename}
+      <div class="saveas">
+        <input placeholder="rename set" bind:value={renameName}
+          onkeydown={(e) => e.key === "Enter" && doRename()} />
+        <button onclick={doRename}>OK</button>
+      </div>
+    {/if}
 
     <h3>Saved sets</h3>
     <div class="sets">
@@ -53,7 +82,15 @@
         <span class="muted small">none yet</span>
       {:else}
         {#each app.sets as s (s.path)}
-          <button class="setrow" onclick={() => loadSet(s.path)}>{s.name}</button>
+          <div class="setrow">
+            <button class="setload" onclick={() => loadSet(s.path)}>{s.name}</button>
+            {#if confirmDelete === s.path}
+              <button class="del confirm" onclick={() => doDelete(s.path)} title="Confirm delete">sure?</button>
+              <button class="del" onclick={() => (confirmDelete = null)}>×</button>
+            {:else}
+              <button class="del" onclick={() => (confirmDelete = s.path)} title="Delete set" aria-label="Delete {s.name}">🗑</button>
+            {/if}
+          </div>
         {/each}
       {/if}
     </div>
@@ -161,11 +198,26 @@
     gap: 4px;
   }
   .setrow {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .setload {
+    flex: 1;
     text-align: left;
     background: transparent;
   }
-  .setrow:hover {
+  .setload:hover {
     background: var(--panel-2);
+  }
+  .del {
+    padding: 3px 7px;
+    color: var(--fg-dim);
+    background: transparent;
+  }
+  .del.confirm {
+    color: var(--err);
+    border-color: var(--err);
   }
   .routes {
     display: flex;
