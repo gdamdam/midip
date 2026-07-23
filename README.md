@@ -5,9 +5,9 @@
 **A terminal MIDI sequencer & live groovebox — built‑in profiles for the Roland AIRA Compact T‑8 & S‑1, plus a device library for any class‑compliant USB‑MIDI gear**
 
 [![License](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.8.0-success.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.9.0-success.svg)](CHANGELOG.md)
 [![Rust](https://img.shields.io/badge/rust-2021%20edition-orange.svg)](https://www.rust-lang.org)
-[![Tests](https://img.shields.io/badge/tests-1010%20passing-brightgreen.svg)](CHANGELOG.md)
+[![Tests](https://img.shields.io/badge/tests-1206%20passing-brightgreen.svg)](CHANGELOG.md)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey.svg)](#build--run)
 [![Built with ratatui](https://img.shields.io/badge/TUI-ratatui-blueviolet.svg)](https://ratatui.rs)
 
@@ -458,6 +458,20 @@ mirrors the full output stream additively; it does not double-send a lane alread
   ratchets, microtiming, trig conditions, per-step CC locks, a stable `factory_id`, and
   provenance. See [`docs/pattern-format-v2.md`](docs/pattern-format-v2.md). Legacy files and
   saved references keep working unchanged.
+- **Genre packs** — hip-hop/trap, funk/disco, reggae/dancehall, afro-house/amapiano,
+  reggaeton/dembow/baile-funk and modern club (tech-house, melodic-techno, hard-techno,
+  footwork), plus alternate-meter and multi-bar material. Original generic grooves within the
+  T-8 voice set. See [`docs/genre-packs.md`](docs/genre-packs.md).
+- **Performance families** group patterns by function (Core / Variation / Fill / Breakdown /
+  Peak); a family badge shows in the preview.
+- **Real timing** — patterns carry BPM-scaled per-note microtiming from documented templates
+  (swing / laid-back / pushed / triplet-shuffle / humanized); the preview flags authored feel
+  distinct from global lane swing. See [`docs/timing.md`](docs/timing.md).
+- **Search & filter** — a shared engine (TUI + GUI) searches name/description/tags and filters
+  by role, genre, function, feel, energy, density, chord/mono, length and favorites.
+  See [`docs/library-search.md`](docs/library-search.md).
+- **Meters** — multi-bar phrases (2–4 bars), 3/4, 6/8, 5/4 and intentional polymeters; a global
+  steps-per-bar drives launch quantization, Ableton Link and chains. See [`docs/meters.md`](docs/meters.md).
 - **Audition** (`a`) previews a library pattern without committing (only when the lane is
   stopped or muted); focus change or Esc reverts. **Enter** commits.
 - **Quantized launch**: committing a pattern while playing queues it (`QUEUED⟶`) for the next

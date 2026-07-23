@@ -7,6 +7,45 @@ feature milestone is a minor bump).
 
 ## [Unreleased]
 
+## [1.9.0] — 2026-07-23 — Pattern library: v2 format, genre packs, real timing, search, meters
+
+A large pattern-library expansion built on a documented, versioned factory format.
+
+### Added
+- **Performance families** — patterns grouped by function (Core / Variation A·B /
+  Fill / Breakdown / Peak) within a role+genre, surfaced in the TUI and GUI previews.
+- **Factory pattern format v2** (`docs/pattern-format-v2.md`) — a documented,
+  versioned JSON envelope that represents the full runtime `Pattern` model (chords,
+  note length, slide, probability, ratchets, microtiming, trig conditions, per-step
+  CC locks, a stable name-independent `factory_id`, and provenance). Loads additively
+  alongside the legacy "mpump" files; a stable-id + alias registry keeps existing
+  `role+genre+name` references resolving. Deterministic legacy→v2 conversion.
+- **Six curated genre packs** — hip-hop/trap, funk/disco, reggae/dancehall,
+  afro-house/amapiano, reggaeton/dembow/baile-funk, and modern club (tech-house,
+  melodic-techno, hard-techno, footwork). Original generic grooves; T-8 voice limits
+  honored (no faked instruments). See `docs/genre-packs.md`.
+- **Real, BPM-scaled microtiming** — the per-note `micro` field is now permille of a
+  step, combined with swing under a ±½-step clamp; documented timing templates
+  (straight / light·mpc·hard swing / triplet-shuffle / laid-back / pushed / humanized)
+  baked into swing-dependent packs, with a lint that verifies every timing claim
+  against the encoded data (`docs/timing.md`).
+- **Shared library search/filter engine** — one Rust engine over a flat index of
+  every pattern, used by both the TUI and GUI (no frontend divergence). Free-text
+  search plus role / genre / function / feel / energy / density / chord-poly / length
+  / favorites filters; deterministic ordering + stable selection (`docs/library-search.md`).
+- **Multi-bar, alternate meters & polymeter** — a global `Set.steps_per_bar` (3/4,
+  6/8, 5/4, …) threaded into launch quantization, Ableton Link `quantum`, and chain
+  dwell; 2–4-bar phrases and intentional 12/15/20-step polymetric loops. Library
+  preview no longer truncates long patterns (`docs/meters.md`).
+- **CI quality gates** (`tests/quality_gates.rs`) — every factory v2 pattern must
+  have a unique/valid id, complete metadata, provenance, an assigned function, and no
+  exact structural duplicate. Coverage-driven family completion (`docs/coverage.md`).
+
+### Notes
+- Backward compatible: legacy factory files, saved sets and user patterns load
+  unchanged; 4/4 playback and launch quantization are bit-identical (`steps_per_bar`
+  and `micro` unit changes default to the prior behavior via serde defaults).
+
 ## [1.8.2] — 2026-07-23 — S-1 chords & note lengths (pattern library Phase 2)
 
 ### Added

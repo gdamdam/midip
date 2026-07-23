@@ -1937,7 +1937,7 @@ dependencies = [
 
 [[package]]
 name = "midip"
-version = "1.8.2"
+version = "1.9.0"
 dependencies = [
  "anyhow",
  "crossbeam-channel",
@@ -1952,7 +1952,7 @@ dependencies = [
 
 [[package]]
 name = "midip-gui"
-version = "1.8.2"
+version = "1.9.0"
 dependencies = [
  "anyhow",
  "crossbeam-channel",
