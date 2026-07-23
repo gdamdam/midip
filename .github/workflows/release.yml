@@ -24,17 +24,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - target: aarch64-apple-darwin
+          # One universal (arm64 + x86_64) macOS binary via lipo.
+          - target: universal-apple-darwin
             os: macos-latest
-            archive_ext: tar.gz
-          - target: x86_64-apple-darwin
-            os: macos-latest
+            rust_targets: aarch64-apple-darwin,x86_64-apple-darwin
             archive_ext: tar.gz
           - target: x86_64-pc-windows-msvc
             os: windows-latest
+            rust_targets: x86_64-pc-windows-msvc
             archive_ext: zip
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
+            rust_targets: x86_64-unknown-linux-gnu
             archive_ext: tar.gz
 
     steps:
@@ -45,7 +46,7 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          targets: ${{ matrix.rust_targets }}
 
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
@@ -57,7 +58,20 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev
 
       - name: Build release binary
+        if: matrix.target != 'universal-apple-darwin'
         run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Build universal macOS binary (lipo)
+        if: matrix.target == 'universal-apple-darwin'
+        shell: bash
+        run: |
+          cargo build --release --target aarch64-apple-darwin
+          cargo build --release --target x86_64-apple-darwin
+          mkdir -p target/universal-apple-darwin/release
+          lipo -create -output target/universal-apple-darwin/release/midip \
+            target/aarch64-apple-darwin/release/midip \
+            target/x86_64-apple-darwin/release/midip
+          lipo -info target/universal-apple-darwin/release/midip
 
       - name: Determine binary name and staging dir
         id: vars
