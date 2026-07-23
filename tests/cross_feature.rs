@@ -213,6 +213,7 @@ fn test_library() -> Library {
         vec![melodic_pattern("lib-synth", &[(0, 7, 0.5)])],
     );
     Library {
+        records: Vec::new(),
         drums,
         bass,
         synth,

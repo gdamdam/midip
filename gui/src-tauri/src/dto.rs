@@ -7,11 +7,12 @@
 use midip::app::{App, Overlay};
 use midip::devices::profiles;
 use midip::pattern::generate::{ArpChord, ArpShape, GenMode};
-use midip::pattern::library::{GenreMap, LibRole, Library};
+use midip::pattern::index::{self, Density, Energy, Feel, Poly, Query};
+use midip::pattern::library::{GenreMap, LibRole, Library, PatternFunction};
 use midip::pattern::model::{CcLock, DrumHit, LaneKind, PatternData, TrigCond};
 use midip::pattern::refs::PatternRef;
 use midip::pattern::store::Favorites;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Clone)]
 pub struct Snapshot {
@@ -729,6 +730,142 @@ fn build_inspector(app: &App) -> InspectorDto {
     }
 }
 
+// ── Phase 8: shared library query (one engine, both frontends) ──────────────
+
+/// A filtered library record for the GUI. Mirrors `index::Record` plus favorite +
+/// family_id (resolved from the library), reusing the same identity the rest of the
+/// GUI keys on (role+genre+name).
+#[derive(Serialize, Clone)]
+pub struct RecordDto {
+    pub role: String,
+    pub genre: String,
+    pub name: String,
+    pub kind: String,
+    pub length: usize,
+    pub favorite: bool,
+    pub family: Option<String>,
+    pub family_id: Option<String>,
+    pub function: Option<String>,
+    pub feel: String,
+    pub energy: String,
+    pub density: String,
+    pub poly: String,
+    pub bpm_min: Option<u16>,
+    pub bpm_max: Option<u16>,
+    pub subgenre: Option<String>,
+    pub harmonic: Option<String>,
+    pub tags: Vec<String>,
+    pub author: Option<String>,
+    pub source: Option<String>,
+    pub factory_id: Option<String>,
+}
+
+/// Query parameters from the front-end (all optional; omitted = no constraint).
+#[derive(Deserialize, Default)]
+#[serde(default)]
+pub struct QueryDto {
+    pub text: String,
+    pub role: Option<String>,
+    pub genre: Option<String>,
+    pub function: Option<String>,
+    pub feel: Option<String>,
+    pub energy: Option<String>,
+    pub density: Option<String>,
+    pub poly: Option<String>,
+    pub length_min: Option<usize>,
+    pub length_max: Option<usize>,
+    pub favorites_only: bool,
+}
+
+fn parse_role(s: &str) -> Option<LibRole> {
+    match s {
+        "drums" => Some(LibRole::Drums),
+        "bass" => Some(LibRole::Bass),
+        "synth" => Some(LibRole::Synth),
+        _ => None,
+    }
+}
+
+fn parse_function(s: &str) -> Option<PatternFunction> {
+    match s {
+        "core" => Some(PatternFunction::Core),
+        "variation_a" => Some(PatternFunction::VariationA),
+        "variation_b" => Some(PatternFunction::VariationB),
+        "fill" => Some(PatternFunction::Fill),
+        "breakdown" => Some(PatternFunction::Breakdown),
+        "peak" => Some(PatternFunction::Peak),
+        _ => None,
+    }
+}
+
+impl QueryDto {
+    fn to_query(&self) -> Query {
+        let mut q = Query::default().with_text(&self.text);
+        q.role = self.role.as_deref().and_then(parse_role);
+        q.genre = self.genre.clone().filter(|s| !s.is_empty());
+        q.function = self.function.as_deref().and_then(parse_function);
+        q.feel = self.feel.as_deref().map(Feel::parse).filter(|f| *f != Feel::Unknown);
+        q.energy = self.energy.as_deref().map(Energy::parse).filter(|e| *e != Energy::Unknown);
+        q.density = self.density.as_deref().map(Density::parse).filter(|d| *d != Density::Unknown);
+        q.poly = self.poly.as_deref().and_then(|s| match s {
+            "mono" => Some(Poly::Mono),
+            "poly" => Some(Poly::Poly),
+            _ => None,
+        });
+        q.length = match (self.length_min, self.length_max) {
+            (None, None) => None,
+            (lo, hi) => Some((lo.unwrap_or(1), hi.unwrap_or(usize::MAX))),
+        };
+        q.favorites_only = self.favorites_only;
+        q
+    }
+}
+
+/// Run a query against the library and project the matches to `RecordDto`.
+pub fn library_query(lib: &Library, favs: &Favorites, qdto: &QueryDto) -> Vec<RecordDto> {
+    let q = qdto.to_query();
+    index::filter(lib.records(), &q, favs)
+        .into_iter()
+        .map(|i| {
+            let r = &lib.records()[i];
+            let role = match r.role {
+                LibRole::Drums => "drums",
+                LibRole::Bass => "bass",
+                LibRole::Synth => "synth",
+            };
+            let fam_id = lib
+                .family_of(r.role, &r.genre, &r.name)
+                .map(|(f, _)| f.id.clone());
+            RecordDto {
+                role: role.to_string(),
+                genre: r.genre.clone(),
+                name: r.name.clone(),
+                kind: kind_str(r.kind),
+                length: r.length,
+                favorite: favs.contains(&r.pattern_ref()),
+                family: r.family.clone(),
+                family_id: fam_id,
+                function: r.function.map(|f| f.label().to_string()),
+                feel: r.feel.label().to_string(),
+                energy: r.energy.label().to_string(),
+                density: r.density.label().to_string(),
+                poly: match r.poly {
+                    Poly::Mono => "mono".into(),
+                    Poly::Poly => "poly".into(),
+                },
+                bpm_min: r.bpm.map(|b| b.0),
+                bpm_max: r.bpm.map(|b| b.1),
+                subgenre: r.subgenre.clone(),
+                harmonic: r.harmonic.clone(),
+                tags: r.tags.clone(),
+                author: r.author.clone(),
+                source: r.source.clone(),
+                factory_id: r.factory_id.clone(),
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -765,5 +902,34 @@ mod tests {
         assert!(json.contains("\"family\":\"Warehouse Techno\""));
         assert!(json.contains("\"family_id\":\"techno-drive-drums\""));
         assert!(json.contains("\"function\":\"Core\""));
+    }
+
+    #[test]
+    fn library_query_projects_filtered_records() {
+        let lib = Library::load(&midip::config::patterns_dir()).expect("load library");
+        let favs = Favorites::default();
+
+        // Facet query: swung drums.
+        let q = QueryDto {
+            role: Some("drums".into()),
+            feel: Some("swing".into()),
+            ..Default::default()
+        };
+        let out = library_query(&lib, &favs, &q);
+        assert!(!out.is_empty());
+        assert!(out.iter().all(|r| r.role == "drums" && r.feel == "swing"));
+
+        // A v2 record carries projected metadata + resolves its family_id.
+        let bb = out.iter().find(|r| r.genre == "boom-bap");
+        if let Some(bb) = bb {
+            assert!(bb.bpm_min.is_some());
+            assert!(bb.family_id.is_some());
+            let json = serde_json::to_string(bb).unwrap();
+            assert!(json.contains("\"feel\":\"swing\""));
+        }
+
+        // Text query is case-insensitive and hits a known genre token.
+        let q = QueryDto { text: "TRAP".into(), ..Default::default() };
+        assert!(library_query(&lib, &favs, &q).iter().any(|r| r.genre == "trap"));
     }
 }

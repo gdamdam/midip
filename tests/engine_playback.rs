@@ -554,6 +554,7 @@ fn status_string_appears_in_transport() {
 
     fn empty_library() -> Library {
         Library {
+            records: Vec::new(),
             drums: GenreMap::new(),
             bass: GenreMap::new(),
             synth: GenreMap::new(),

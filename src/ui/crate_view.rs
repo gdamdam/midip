@@ -165,6 +165,7 @@ mod tests {
 
     fn empty_library() -> Library {
         Library {
+            records: Vec::new(),
             v2_index: Default::default(),
             families: Vec::new(),
             drums: GenreMap::new(),

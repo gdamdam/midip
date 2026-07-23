@@ -848,6 +848,10 @@ pub struct App {
     pub favorites: Favorites,
     /// When true, the library browser shows only favorited patterns.
     pub fav_filter: bool,
+    /// Free-text library search (name/desc/tags), matched via the shared filter
+    /// engine (`pattern::index`) — the same engine the GUI uses. Set via
+    /// `set_lib_search`; the library list filters live through the engine.
+    pub lib_search: String,
 
     // --- M4a Task 4: crates ---
     /// Named, ordered collections of pattern refs; loaded at startup, persisted on mutation.
@@ -992,6 +996,7 @@ impl App {
             help_basic: true,
             favorites: Favorites::default(),
             fav_filter: false,
+            lib_search: String::new(),
             crates: CrateIndex::default(),
             crate_sel: 0,
             crate_entry_sel: 0,
@@ -5107,17 +5112,61 @@ impl App {
             Some(g) => g,
             None => return Vec::new(),
         };
+        // Fast path: no filter active → the whole genre, in file order.
+        if !self.fav_filter && self.lib_search.trim().is_empty() {
+            return patterns.iter().enumerate().collect();
+        }
+        let search = self.lib_search.trim().to_lowercase();
+        let terms: Vec<&str> = search.split_whitespace().collect();
+        // Preferred path: run the SHARED engine (identical matching/ordering to the
+        // GUI), scoped to this role+genre, then map surviving names back to the
+        // genre's patterns (keeping file order + original indices, which the renderer
+        // and all selection/actions index through).
+        if !self.library.records().is_empty() {
+            let q = crate::pattern::index::Query {
+                role: Some(self.lib_role),
+                genre: Some(genre.clone()),
+                favorites_only: self.fav_filter,
+                ..Default::default()
+            }
+            .with_text(self.lib_search.trim());
+            let matched: std::collections::HashSet<&str> =
+                crate::pattern::index::filter(self.library.records(), &q, &self.favorites)
+                    .into_iter()
+                    .map(|i| self.library.records()[i].name.as_str())
+                    .collect();
+            return patterns
+                .iter()
+                .enumerate()
+                .filter(|(_, p)| matched.contains(p.name.as_str()))
+                .collect();
+        }
+        // Fallback for a record-less library (synthetic/test): apply the same
+        // predicates inline — favorites + name/desc substring — so behaviour matches.
         patterns
             .iter()
             .enumerate()
             .filter(|(_, p)| {
-                if self.fav_filter {
-                    self.favorites.contains(&self.pattern_ref_for(genre, p))
-                } else {
-                    true
+                if self.fav_filter && !self.favorites.contains(&self.pattern_ref_for(genre, p)) {
+                    return false;
                 }
+                let hay = format!("{} {}", p.name.to_lowercase(), p.desc.to_lowercase());
+                terms.iter().all(|t| hay.contains(t))
             })
             .collect()
+    }
+
+    /// Set the library text search and re-clamp the selection so it never dangles
+    /// past the (possibly shorter) filtered list. Filtering runs through the shared
+    /// `pattern::index` engine — identical matching to the GUI.
+    pub fn set_lib_search(&mut self, s: impl Into<String>) {
+        self.lib_search = s.into();
+        self.clamp_lib_selection();
+    }
+
+    /// True when any library filter (favorites or text) is narrowing the browse.
+    pub fn lib_filter_active(&self) -> bool {
+        self.fav_filter || !self.lib_search.trim().is_empty()
     }
 
     /// Clamp lib_genre and lib_pattern to valid indices so that toggling the
@@ -5371,6 +5420,7 @@ mod tests {
         );
 
         Library {
+            records: Vec::new(),
             v2_index: Default::default(),
             families: Vec::new(),
             drums,
@@ -6445,6 +6495,48 @@ mod tests {
         // If save failed (no fs), dirty remains true — that's correct behavior.
     }
 
+    // --- Phase 8: library text search via the shared engine ----------------
+
+    #[test]
+    fn lib_search_filters_visible_patterns_via_shared_engine() {
+        // Uses the REAL library so the shared record index is populated.
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/patterns");
+        let lib = crate::pattern::library::Library::load(&dir).unwrap();
+        let set = Set::default_set(crate::devices::profiles::default_profiles());
+        let mut app = App::new(set, lib);
+        app.apply(Action::OpenLibrary);
+        app.lib_role = LibRole::Drums;
+        // Point at the "techno" genre.
+        let techno_idx = app
+            .current_genre_map()
+            .keys()
+            .position(|g| g == "techno")
+            .expect("techno genre");
+        app.lib_genre = techno_idx;
+
+        let all = app.visible_lib_patterns().len();
+        assert!(all > 1, "techno has multiple drum patterns");
+
+        // A specific search narrows to matching patterns only.
+        app.set_lib_search("four on floor");
+        let hits = app.visible_lib_patterns();
+        assert!(!hits.is_empty(), "search should match 'Four on Floor'");
+        assert!(hits.len() < all, "search must narrow the list");
+        assert!(hits
+            .iter()
+            .all(|(_, p)| p.name.to_lowercase().contains("four")));
+
+        // Clearing restores the full list; selection stays in-bounds.
+        app.set_lib_search("");
+        assert_eq!(app.visible_lib_patterns().len(), all);
+        assert!(app.lib_pattern < all);
+
+        // A no-match search yields an empty list without panic; selection clamps.
+        app.set_lib_search("zzzz-nomatch");
+        assert!(app.visible_lib_patterns().is_empty());
+        assert!(!app.lib_filter_active() || app.lib_search == "zzzz-nomatch");
+    }
+
     // --- Task 1: Library column nav tests -----------------------------------
 
     #[test]
@@ -6671,6 +6763,7 @@ mod tests {
             ],
         );
         let library = Library {
+            records: Vec::new(),
             v2_index: Default::default(),
             families: Vec::new(),
             drums,
@@ -6834,6 +6927,7 @@ mod tests {
         };
         drums.insert("techno".into(), vec![pat_a, pat_b]);
         let library = Library {
+            records: Vec::new(),
             v2_index: Default::default(),
             families: Vec::new(),
             drums,
@@ -8792,6 +8886,7 @@ mod tests {
         drums.insert("User".to_string(), vec![user_pat]);
 
         let lib = Library {
+            records: Vec::new(),
             v2_index: Default::default(),
             families: Vec::new(),
             drums,
@@ -8927,6 +9022,7 @@ mod tests {
         let mut drums = GenreMap::new();
         drums.insert("techno".to_string(), vec![mk("A"), mk("B"), mk("C")]);
         let lib = Library {
+            records: Vec::new(),
             v2_index: Default::default(),
             families: Vec::new(),
             drums,
@@ -9220,6 +9316,7 @@ mod tests {
         };
         drums.insert("techno".to_string(), vec![pat]);
         let lib = Library {
+            records: Vec::new(),
             v2_index: Default::default(),
             families: Vec::new(),
             drums,
@@ -9274,6 +9371,7 @@ mod tests {
         };
         bass.insert("techno".to_string(), vec![pat]);
         let lib = Library {
+            records: Vec::new(),
             v2_index: Default::default(),
             families: Vec::new(),
             drums: GenreMap::new(),
@@ -9328,6 +9426,7 @@ mod tests {
         };
         synth.insert("techno".to_string(), vec![pat]);
         let lib = Library {
+            records: Vec::new(),
             v2_index: Default::default(),
             families: Vec::new(),
             drums: GenreMap::new(),
@@ -9381,6 +9480,7 @@ mod tests {
         };
         drums.insert("techno".to_string(), vec![pat]);
         let lib = Library {
+            records: Vec::new(),
             v2_index: Default::default(),
             families: Vec::new(),
             drums,

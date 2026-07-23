@@ -288,6 +288,13 @@ pub fn render_library(f: &mut Frame, area: Rect, app: &App) {
         pattern_title,
         Style::default().add_modifier(Modifier::BOLD),
     )));
+    // Active-filter indicator (Phase 8): show the live text search + a hint to clear.
+    if !app.lib_search.trim().is_empty() {
+        pattern_lines.push(Line::from(Span::styled(
+            format!("search: {}", truncate(app.lib_search.trim(), 22)),
+            Style::default().fg(theme::EMBER.warn),
+        )));
+    }
     for (display_i, (orig_i, p)) in visible_patterns
         .iter()
         .enumerate()
@@ -481,6 +488,7 @@ mod tests {
         };
         drums.insert("techno".to_string(), vec![pat]);
         Library {
+            records: Vec::new(),
             v2_index: Default::default(),
             families: Vec::new(),
             drums,
@@ -524,6 +532,7 @@ mod tests {
         };
         synth.insert("techno".to_string(), vec![pat]);
         Library {
+            records: Vec::new(),
             v2_index: Default::default(),
             families: Vec::new(),
             drums: GenreMap::new(),
@@ -732,6 +741,7 @@ mod tests {
         };
         drums.insert("techno".to_string(), vec![pat1, pat2]);
         let library = Library {
+            records: Vec::new(),
             v2_index: Default::default(),
             families: Vec::new(),
             drums,
@@ -799,6 +809,7 @@ mod tests {
         };
         drums.insert("techno".to_string(), vec![pat]);
         let library = Library {
+            records: Vec::new(),
             v2_index: Default::default(),
             families: Vec::new(),
             drums,

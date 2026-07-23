@@ -75,6 +75,9 @@ pub struct Library {
     /// Additive: `PatternRef` still resolves by role+genre+name; this index only
     /// adds id lookup and an alias fallback for renamed patterns.
     pub v2_index: V2Index,
+    /// Flat search/filter index over every pattern (legacy + v2), built once at
+    /// load (Phase 8). Additive — existing accessors are untouched.
+    pub records: Vec<crate::pattern::index::Record>,
 }
 
 /// One stable-id record: the pattern's `factory_id` mapped to its identity triple.
@@ -96,12 +99,30 @@ pub struct AliasEntry {
     pub canonical: String,
 }
 
+/// Retained v2 envelope metadata for one pattern, keyed by identity. Populated at
+/// merge time so the search index (Phase 8) can filter on it; empty for legacy.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct V2Meta {
+    pub subgenre: Option<String>,
+    pub bpm: Option<(u16, u16)>,
+    /// The timing-template name (Phase 7) or a free `feel` string.
+    pub feel: Option<String>,
+    pub energy: Option<String>,
+    pub density: Option<String>,
+    pub harmonic: Option<String>,
+    pub tags: Vec<String>,
+    pub author: Option<String>,
+    pub source: Option<String>,
+}
+
 /// Registry populated from v2 factory patterns. Empty when no v2 files are present,
 /// so it is inert for a purely-legacy library.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct V2Index {
     pub ids: Vec<FactoryIdEntry>,
     pub aliases: Vec<AliasEntry>,
+    /// Envelope metadata keyed by (role, genre, name).
+    pub meta: std::collections::HashMap<(LibRole, String, String), V2Meta>,
 }
 
 // --- raw JSON shapes (mpump format) ---------------------------------------
@@ -311,6 +332,47 @@ struct FamiliesRoot {
 /// Parse the optional top-level `families` array from catalog.json. Non-fatal:
 /// returns empty on any parse error or when the key is absent (families whose
 /// `role` is unknown are skipped).
+/// Parse the retained v2 envelope metadata (free-form JSON maps) into typed
+/// `V2Meta`. Missing/garbage keys degrade to None — never fails.
+fn v2meta_from(
+    md: &serde_json::Map<String, serde_json::Value>,
+    prov: &Option<serde_json::Map<String, serde_json::Value>>,
+) -> V2Meta {
+    let s = |k: &str| md.get(k).and_then(|v| v.as_str()).map(|s| s.to_string());
+    let u16v = |k: &str| md.get(k).and_then(|v| v.as_u64()).map(|n| n as u16);
+    let bpm = match (u16v("bpm_min"), u16v("bpm_max")) {
+        (Some(a), Some(b)) => Some((a, b)),
+        _ => None,
+    };
+    let tags = md
+        .get("tags")
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+    let pstr = |k: &str| {
+        prov.as_ref()
+            .and_then(|p| p.get(k))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+    };
+    V2Meta {
+        subgenre: s("subgenre"),
+        bpm,
+        // Prefer the timing-template name (Phase 7); fall back to a free feel string.
+        feel: s("timing").or_else(|| s("feel")),
+        energy: s("energy"),
+        density: s("density"),
+        harmonic: s("harmonic"),
+        tags,
+        author: pstr("author"),
+        source: pstr("source"),
+    }
+}
+
 pub fn parse_families(json: &str) -> Vec<Family> {
     let root: FamiliesRoot = match serde_json::from_str(json) {
         Ok(r) => r,
@@ -417,6 +479,7 @@ impl Library {
             synth,
             families,
             v2_index: V2Index::default(),
+            records: Vec::new(),
         };
 
         // v2 factory patterns (architecture phase) — optional, additive, non-fatal.
@@ -429,6 +492,10 @@ impl Library {
             eprintln!("midip: v2 pattern load: {w}");
         }
 
+        // Build the flat search/filter index (Phase 8) once, after all patterns are
+        // present. Purely additive — existing accessors are unaffected.
+        lib.records = lib.build_records();
+
         Ok(lib)
     }
 
@@ -440,6 +507,7 @@ impl Library {
             synth: GenreMap::new(),
             families: Vec::new(),
             v2_index: V2Index::default(),
+            records: Vec::new(),
         }
     }
 
@@ -470,6 +538,10 @@ impl Library {
                 continue;
             }
             bucket.push(item.pattern.clone());
+            self.v2_index.meta.insert(
+                (item.role, item.genre.clone(), item.pattern.name.clone()),
+                v2meta_from(&item.metadata, &item.provenance),
+            );
             self.v2_index.ids.push(FactoryIdEntry {
                 factory_id: item.factory_id,
                 role: item.role,
@@ -537,6 +609,102 @@ impl Library {
     /// All performance families.
     pub fn families(&self) -> &[Family] {
         &self.families
+    }
+
+    /// The flat search/filter index over every pattern (Phase 8).
+    pub fn records(&self) -> &[crate::pattern::index::Record] {
+        &self.records
+    }
+
+    /// Run a query against the index, returning the matching records (sorted).
+    pub fn query<'a>(
+        &'a self,
+        q: &crate::pattern::index::Query,
+        favs: &crate::pattern::store::Favorites,
+    ) -> Vec<&'a crate::pattern::index::Record> {
+        crate::pattern::index::filter(&self.records, q, favs)
+            .into_iter()
+            .map(|i| &self.records[i])
+            .collect()
+    }
+
+    /// Build the flat record index over all patterns. v2 patterns take their rich
+    /// metadata from the retained envelope; legacy patterns derive what they can and
+    /// leave the rest Unknown/None.
+    fn build_records(&self) -> Vec<crate::pattern::index::Record> {
+        use crate::pattern::index::{feel_from_data, make_record, poly_of, Density, Energy, Feel};
+        let mut out = Vec::new();
+        for (role, map) in [
+            (LibRole::Drums, &self.drums),
+            (LibRole::Bass, &self.bass),
+            (LibRole::Synth, &self.synth),
+        ] {
+            for (genre, pats) in map {
+                for p in pats {
+                    let fam = self.family_of(role, genre, &p.name);
+                    let m = self
+                        .v2_index
+                        .meta
+                        .get(&(role, genre.clone(), p.name.clone()));
+                    let fid = self
+                        .factory_id_of(role, genre, &p.name)
+                        .map(|s| s.to_string());
+                    let (feel, energy, density, bpm, harmonic, subgenre, tags, author, source) =
+                        match m {
+                            Some(m) => (
+                                m.feel.as_deref().map(Feel::parse).unwrap_or(Feel::Straight),
+                                m.energy
+                                    .as_deref()
+                                    .map(Energy::parse)
+                                    .unwrap_or(Energy::Unknown),
+                                m.density
+                                    .as_deref()
+                                    .map(Density::parse)
+                                    .unwrap_or(Density::Unknown),
+                                m.bpm,
+                                m.harmonic.clone(),
+                                m.subgenre.clone(),
+                                m.tags.clone(),
+                                m.author.clone(),
+                                m.source.clone(),
+                            ),
+                            None => (
+                                feel_from_data(&p.data),
+                                Energy::Unknown,
+                                Density::Unknown,
+                                None,
+                                None,
+                                None,
+                                Vec::new(),
+                                None,
+                                None,
+                            ),
+                        };
+                    out.push(make_record(
+                        role,
+                        genre.clone(),
+                        p.name.clone(),
+                        fid,
+                        p.kind(),
+                        p.length,
+                        fam.map(|(f, _)| f.label.clone()),
+                        fam.map(|(_, func)| func),
+                        feel,
+                        poly_of(&p.data),
+                        subgenre,
+                        bpm,
+                        energy,
+                        density,
+                        harmonic,
+                        tags,
+                        author,
+                        source,
+                        p.desc.clone(),
+                    ));
+                }
+            }
+        }
+        out
     }
 
     /// The family and function a given pattern belongs to, if any. Matches by

@@ -205,6 +205,46 @@ export interface LibGenre {
   name: string;
   patterns: LibPattern[];
 }
+
+/** Phase 8: a filtered library record from the shared engine (flat result). */
+export interface LibRecord {
+  role: string;
+  genre: string;
+  name: string;
+  kind: "drums" | "melodic";
+  length: number;
+  favorite: boolean;
+  family: string | null;
+  family_id: string | null;
+  function: string | null;
+  feel: string;
+  energy: string;
+  density: string;
+  poly: string;
+  bpm_min: number | null;
+  bpm_max: number | null;
+  subgenre: string | null;
+  harmonic: string | null;
+  tags: string[];
+  author: string | null;
+  source: string | null;
+  factory_id: string | null;
+}
+
+/** Phase 8: filter query sent to the shared engine (all optional). */
+export interface LibQuery {
+  text?: string;
+  role?: string | null;
+  genre?: string | null;
+  function?: string | null;
+  feel?: string | null;
+  energy?: string | null;
+  density?: string | null;
+  poly?: string | null;
+  length_min?: number | null;
+  length_max?: number | null;
+  favorites_only?: boolean;
+}
 export interface LibRole {
   role: string;
   genres: LibGenre[];
