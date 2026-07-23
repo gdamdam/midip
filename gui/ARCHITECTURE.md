@@ -71,21 +71,27 @@ a `$state` snapshot store updated by events + command returns.
 5. Step inspector + library + setup.
 6. Persistence (save / save-as / load) + undo/redo.
 
-## Implemented since the first slice
+## Feature parity with the TUI (all implemented)
 
-- **Routing** (Setup): per-lane output-port cycling, MIDI-channel adjust, clock-out
-  toggle — reuses the engine's route-editor actions via `route_editor_lane` +
-  `gui_output_ports`.
-- **Library**: audition (isolated preview, gated to muted/stopped lanes),
-  favorites (persisted), favorites-only filter.
-- **Song mode**: scene recall + capture, chain play/stop with a live current-entry
-  highlight (chain auto-advance flows through the event pump). `SongDto` in the snapshot.
-- **Chromatic note entry**: click any pitch row in the piano-roll to place that
-  (scale-folded) pitch via the note-input path; double-click removes; drag re-pitches.
+- **Routing** (Setup): per-lane output-port cycling, MIDI channel, clock-out toggle.
+- **Clock-in**: external-MIDI-clock port selector (`gui_input_ports` + `SetClockIn`).
+- **Library**: browse/filter, audition (gated), favorites, favorites filter.
+- **User patterns**: save lane→library, browse (injected "User" genre), load,
+  duplicate, delete.
+- **Crates**: create/rename/delete, add library patterns, remove/reorder/launch entries.
+- **Song**: scene recall/capture/rename/duplicate/delete; chain create/rename/delete/
+  loop, add-scene/remove/reorder entries, repeats/bars, play/stop/jump — live via `SongDto`.
+- **Generative**: Generate/Vary/Arp with live preview + all params (`GenDto`).
+- **Transforms**: euclid, rotate, conform-to-scale, fill + commit.
+- **Per-lane**: swing override, clock division (transpose has no engine action).
+- **Transport extras**: tap tempo, undo/redo buttons.
+- **Command palette** (⌘K), **Help** (?), **first-run onboarding**, **crash recovery**
+  (GUI autosaves while dirty, writes the clean-shutdown marker on quit, offers
+  Recover/Discard on an unclean prior shutdown).
 
-## Still TUI-only / next
+## Not done / verification notes
 
-- Scene/chain *editing* (create/reorder/delete entries) — playback + recall work in the GUI.
-- Crates, generative tools, command palette, onboarding/recovery.
-- Live GUI QA on a desktop session (window open, close-during-playback) — verified
-  logically via the headless engine boot/shutdown test, not run headlessly here.
+- Per-lane **transpose** has no engine `Action`, so it isn't exposed (octave/root are).
+- **Live GUI QA on a desktop** (window open, playhead, close-during-playback, the
+  crash-recovery prompt) is verified logically via the headless engine boot/shutdown
+  test and the pitch/translation unit tests — not exercised in a real window here.
