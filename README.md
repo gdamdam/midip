@@ -172,11 +172,17 @@ npx tauri dev          # launch the desktop app (compiles the Rust app on first 
 npx tauri build        # build an installable bundle (.dmg / .msi+.exe / .deb+.AppImage)
 ```
 
-It carries midip's "Ember" look and has full feature parity with the TUI: transport, three
+It carries midip's "Ember" look and has full feature parity with the TUI: transport, four
 lane strips, drum grid (click + drag-paint) and a melodic piano-roll, a step inspector,
 pattern library with audition/favorites/crates, Song mode (scenes + chains), routing &
 clock-in, the generative tool (Generate/Vary/Arp with live preview), a command palette
 (**⌘K**), help (**?**) and crash recovery. No MIDI hardware is required to open it.
+
+Two GUI-only chord helpers sit on top of that: the CHORDS lane shows a **♪ Chords…** button
+that opens a modal where you **type a progression** as chord names (e.g. `Dm7 G7 Cmaj7 A7`) —
+midip parses them, voices each to ≤4 notes (J‑6) with smart voice‑leading, and lays one
+sustained chord per beat into the lane's existing loop. The editor‑header **scale control is a
+dropdown** listing every scale, instead of only cycling with `‹ ›`.
 
 ## Quick start
 
@@ -568,6 +574,14 @@ lower‑polyphony device surfaces a capability hint. On a poly lane:
   scale, minor in a minor scale, and so on (in Chromatic, `j` stacks whole-tone intervals —
   pick a scale for tertian triads).
 - `J` removes the last note of a chord (down to a single note, then to a rest).
+
+Edits act on the **whole chord**: changing a step's length, slide or pitch (transpose) applies
+to every note in the step, so a chord lengthens, slides or moves as one unit.
+
+In the desktop GUI you can also **type a chord progression** — a `♪ Chords…` button on the
+CHORDS lane opens a modal where you enter chord names (e.g. `Dm7 G7 Cmaj7 A7`); each is voiced
+to ≤4 notes with voice‑leading and placed one sustained chord per beat, fitted to the lane's
+existing loop length. See [Desktop GUI](#desktop-gui-midip-gui).
 
 Chords are saved compatibly: a mono pattern still writes the legacy on-disk shape and loads
 in earlier builds; only patterns that actually contain a chord become this-version-only.
