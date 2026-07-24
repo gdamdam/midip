@@ -160,6 +160,8 @@ cargo test                   # run the test suite (1010 tests, no hardware neede
 
 ## Desktop GUI (midip-gui)
 
+![midip desktop GUI](midip-gui_screenshot.gif)
+
 midip also ships a **Tauri 2 + Svelte 5 desktop app** in `gui/` — a second frontend over the
 **same** Rust engine (the TUI is unchanged). It's a native window (OS webview, not Electron):
 the Rust core owns all sequencing, MIDI and timing; the UI only sends typed commands and
