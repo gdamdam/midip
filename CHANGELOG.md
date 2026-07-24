@@ -7,6 +7,15 @@ feature milestone is a minor bump).
 
 ## [Unreleased]
 
+## [1.9.1] — 2026-07-24 — GUI pattern library: sorted, collapsible genres
+
+### Changed
+- **GUI pattern library** — genres now list alphabetically with patterns sorted
+  A→Z within each genre. Genre headers are collapsible (multi-open accordion) and
+  start collapsed so every genre is scannable without scrolling; added
+  expand-all / collapse-all controls and per-genre pattern counts. An active
+  search auto-expands matching genres.
+
 ## [1.9.0] — 2026-07-23 — Pattern library: v2 format, genre packs, real timing, search, meters
 
 A large pattern-library expansion built on a documented, versioned factory format.

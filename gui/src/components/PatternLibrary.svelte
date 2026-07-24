@@ -49,6 +49,14 @@
     });
   });
 
+  // Genres A→Z, and patterns A→Z within each genre (case-insensitive).
+  const byName = (a: { name: string }, b: { name: string }) =>
+    a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+  const sortGroup = <T extends { name: string; patterns: { name: string }[] }>(g: T) => ({
+    ...g,
+    patterns: [...g.patterns].sort(byName),
+  });
+
   // Present both modes through one genre-grouped shape the template renders.
   const filtered = $derived.by(() => {
     if (queryActive) {
@@ -57,13 +65,32 @@
         if (!groups.has(r.genre)) groups.set(r.genre, []);
         groups.get(r.genre)!.push(r);
       }
-      return [...groups.entries()].map(([name, patterns]) => ({ name, patterns }));
+      return [...groups.entries()]
+        .map(([name, patterns]) => sortGroup({ name, patterns }))
+        .sort(byName);
     }
     if (!roleData) return [];
     return roleData.genres
-      .map((g) => ({ name: g.name, patterns: g.patterns }))
-      .filter((g) => g.patterns.length > 0);
+      .map((g) => sortGroup({ name: g.name, patterns: g.patterns }))
+      .filter((g) => g.patterns.length > 0)
+      .sort(byName);
   });
+
+  // Collapse state — genres are collapsed by default so all names are scannable.
+  // While a query is active, results auto-expand (they are already narrowed).
+  let expanded = $state<Set<string>>(new Set());
+  const isOpen = (name: string) => queryActive || expanded.has(name);
+  function toggleGenre(name: string) {
+    const next = new Set(expanded);
+    next.has(name) ? next.delete(name) : next.add(name);
+    expanded = next;
+  }
+  function expandAll() {
+    expanded = new Set(filtered.map((g) => g.name));
+  }
+  function collapseAll() {
+    expanded = new Set();
+  }
 
   const activeChips = $derived(
     [
@@ -160,9 +187,24 @@
     <p class="muted pad">No patterns{favOnly ? " favorited" : query ? " match your filter" : " in this role"}.</p>
   {:else}
     <div class="list">
+      {#if !queryActive && filtered.length > 1}
+        <div class="bulk">
+          <button class="bulk-btn" onclick={expandAll} title="Expand every genre">expand all</button>
+          <button class="bulk-btn" onclick={collapseAll} title="Collapse every genre">collapse all</button>
+        </div>
+      {/if}
       {#each filtered as genre (genre.name)}
         <div class="genre">
-          <div class="gname">{genre.name}</div>
+          <button
+            class="gname"
+            onclick={() => toggleGenre(genre.name)}
+            aria-expanded={isOpen(genre.name)}
+          >
+            <span class="caret">{isOpen(genre.name) ? "▾" : "▸"}</span>
+            <span class="gtext">{genre.name}</span>
+            <span class="gcount">{genre.patterns.length}</span>
+          </button>
+          {#if isOpen(genre.name)}
           {#each genre.patterns as p (p.name)}
             <div class="pat">
               <button
@@ -193,6 +235,7 @@
               {/if}
             </div>
           {/each}
+          {/if}
         </div>
       {/each}
     </div>
@@ -336,15 +379,55 @@
   .genre {
     margin-bottom: 10px;
   }
+  .bulk {
+    display: flex;
+    gap: 6px;
+    justify-content: flex-end;
+    margin-bottom: 6px;
+  }
+  .bulk-btn {
+    font-size: 10px;
+    color: var(--dim);
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    padding: 0 2px;
+  }
+  .bulk-btn:hover {
+    color: var(--fg);
+  }
   .gname {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    text-align: left;
     font-size: 10px;
     text-transform: uppercase;
     letter-spacing: 0.08em;
     color: var(--ember);
-    padding: 2px 4px;
+    padding: 3px 4px;
+    background: var(--bg);
+    border: none;
+    cursor: pointer;
     position: sticky;
     top: 0;
-    background: var(--bg);
+    z-index: 1;
+  }
+  .gname:hover {
+    background: var(--panel-2);
+  }
+  .caret {
+    color: var(--dim);
+    width: 10px;
+  }
+  .gtext {
+    flex: 1;
+  }
+  .gcount {
+    color: var(--dim);
+    font-size: 10px;
+    letter-spacing: 0;
   }
   .pat {
     display: flex;
