@@ -1,0 +1,172 @@
+{
+  "schema": "midip.pattern",
+  "version": 2,
+  "factory_id": "chords.dub.minor7-dub-stab",
+  "role": "chords",
+  "kind": "melodic",
+  "genre": "dub",
+  "name": "Minor7 Dub Stab",
+  "desc": "Off-beat minor-seventh dub stabs (i7 to bVII) with probabilistic echo repeats.",
+  "length": 16,
+  "steps": [
+    null,
+    null,
+    [
+      {
+        "semi": 0,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.5
+      },
+      {
+        "semi": 3,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.5
+      },
+      {
+        "semi": 7,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.5
+      },
+      {
+        "semi": 10,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.5
+      }
+    ],
+    null,
+    null,
+    null,
+    [
+      {
+        "semi": 0,
+        "vel": 0.82,
+        "slide": false,
+        "len": 0.5,
+        "prob": 0.85
+      },
+      {
+        "semi": 3,
+        "vel": 0.82,
+        "slide": false,
+        "len": 0.5,
+        "prob": 0.85
+      },
+      {
+        "semi": 7,
+        "vel": 0.82,
+        "slide": false,
+        "len": 0.5,
+        "prob": 0.85
+      },
+      {
+        "semi": 10,
+        "vel": 0.82,
+        "slide": false,
+        "len": 0.5,
+        "prob": 0.85
+      }
+    ],
+    null,
+    null,
+    null,
+    [
+      {
+        "semi": -2,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.5
+      },
+      {
+        "semi": 2,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.5
+      },
+      {
+        "semi": 5,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.5
+      },
+      {
+        "semi": 9,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.5
+      }
+    ],
+    null,
+    null,
+    null,
+    [
+      {
+        "semi": -2,
+        "vel": 0.82,
+        "slide": false,
+        "len": 0.5,
+        "prob": 0.7
+      },
+      {
+        "semi": 2,
+        "vel": 0.82,
+        "slide": false,
+        "len": 0.5,
+        "prob": 0.7
+      },
+      {
+        "semi": 5,
+        "vel": 0.82,
+        "slide": false,
+        "len": 0.5,
+        "prob": 0.7
+      },
+      {
+        "semi": 9,
+        "vel": 0.82,
+        "slide": false,
+        "len": 0.5,
+        "prob": 0.7
+      }
+    ],
+    null
+  ],
+  "metadata": {
+    "bpm_min": 70,
+    "bpm_max": 90,
+    "feel": "straight",
+    "timing": "straight",
+    "energy": "mid",
+    "density": "core",
+    "tags": [
+      "dub",
+      "stab",
+      "echo",
+      "min7",
+      "chords"
+    ],
+    "harmonic": "min7",
+    "chord_poly": "chord",
+    "subgenre": "dub",
+    "compatible_devices": [
+      "j-6",
+      "s1",
+      "minilogue-xd",
+      "microfreak",
+      "generic-poly-synth"
+    ],
+    "function": "core"
+  },
+  "provenance": {
+    "source": "midip factory",
+    "author": "midip",
+    "pack": "chords-v1",
+    "license": "CC0-1.0",
+    "references": [
+      "https://www.roland.com/GLOBAL/products/j-6/"
+    ]
+  }
+}

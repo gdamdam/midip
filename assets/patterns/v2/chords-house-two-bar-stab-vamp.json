@@ -1,0 +1,183 @@
+{
+  "schema": "midip.pattern",
+  "version": 2,
+  "factory_id": "chords.house.two-bar-stab-vamp",
+  "role": "chords",
+  "kind": "melodic",
+  "genre": "house",
+  "name": "Two-Bar Stab Vamp",
+  "desc": "Two-bar house chord-stab vamp alternating i7 and bVII.",
+  "length": 32,
+  "steps": [
+    null,
+    null,
+    [
+      {
+        "semi": 0,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.4
+      },
+      {
+        "semi": 3,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.4
+      },
+      {
+        "semi": 7,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.4
+      },
+      {
+        "semi": 10,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.4
+      }
+    ],
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    [
+      {
+        "semi": 0,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.4
+      },
+      {
+        "semi": 3,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.4
+      },
+      {
+        "semi": 7,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.4
+      },
+      {
+        "semi": 10,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.4
+      }
+    ],
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    [
+      {
+        "semi": -2,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.4
+      },
+      {
+        "semi": 2,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.4
+      },
+      {
+        "semi": 5,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.4
+      },
+      {
+        "semi": 9,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.4
+      }
+    ],
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    [
+      {
+        "semi": -2,
+        "vel": 1.15,
+        "slide": false,
+        "len": 0.4
+      },
+      {
+        "semi": 2,
+        "vel": 1.15,
+        "slide": false,
+        "len": 0.4
+      },
+      {
+        "semi": 5,
+        "vel": 1.15,
+        "slide": false,
+        "len": 0.4
+      },
+      {
+        "semi": 9,
+        "vel": 1.15,
+        "slide": false,
+        "len": 0.4
+      }
+    ],
+    null,
+    null,
+    null,
+    null,
+    null
+  ],
+  "metadata": {
+    "bpm_min": 120,
+    "bpm_max": 126,
+    "feel": "straight",
+    "timing": "straight",
+    "energy": "mid",
+    "density": "sparse",
+    "tags": [
+      "house",
+      "stab",
+      "min7",
+      "chords",
+      "2-bar"
+    ],
+    "harmonic": "min7",
+    "chord_poly": "chord",
+    "subgenre": "house",
+    "compatible_devices": [
+      "j-6",
+      "s1",
+      "minilogue-xd",
+      "microfreak",
+      "generic-poly-synth"
+    ],
+    "meter": "4/4",
+    "steps_per_bar": 16,
+    "bars": 2,
+    "function": "variation_a"
+  },
+  "provenance": {
+    "source": "midip factory",
+    "author": "midip",
+    "pack": "chords-v1",
+    "license": "CC0-1.0",
+    "references": [
+      "https://www.roland.com/GLOBAL/products/j-6/"
+    ]
+  }
+}

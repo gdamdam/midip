@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { app, send, refreshSets } from "../lib/store.svelte";
   import { getInputPorts } from "../lib/bridge";
+  import { roleColor } from "../lib/music";
 
   const t = $derived(app.snap!.transport);
   const lanes = $derived(app.snap!.lanes);
@@ -114,7 +115,8 @@
       {#each lanes as l (l.index)}
         <div class="route">
           <div class="rhead">
-            <span class="lb">{l.label}</span>
+            <span class="lb" style:color={roleColor(l.role)}>{l.label}</span>
+            <span class="dev">{l.device_label}</span>
             <span class="conn" class:ok={l.connected} title={l.connected ? "connected" : "not found"}>
               {l.connected ? "●" : "○"}
             </span>
@@ -263,9 +265,17 @@
   }
   .rhead {
     display: flex;
-    justify-content: space-between;
-    align-items: center;
+    align-items: baseline;
+    gap: 8px;
     margin-bottom: 6px;
+  }
+  .dev {
+    flex: 1;
+    font-size: 10px;
+    color: var(--fg-dim);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .rctl {
     display: flex;

@@ -88,8 +88,8 @@ pub fn render_route_editor(f: &mut Frame, area: Rect, app: &App) {
         let channel_display = format!("{}", effective.channel + 1);
         let clock_display = if effective.clock_out { "on" } else { "off" };
 
-        // Lane name label: profile id.
-        let lane_label = lane.profile.id;
+        // Lane name label: musical role (device is identified by its routed port).
+        let lane_label = lane.role.label();
 
         // Highlight selected lane's focused field.
         let base_style = if selected {
@@ -169,6 +169,7 @@ mod tests {
 
     fn empty_library() -> Library {
         Library {
+            chords: crate::pattern::library::GenreMap::new(),
             records: Vec::new(),
             v2_index: Default::default(),
             families: Vec::new(),
@@ -203,18 +204,22 @@ mod tests {
         app.route_editor_lane = 0;
         app.route_editor_field = RouteField::Port;
         let whole = render_route_editor_to_string(&app);
-        // Default profiles: t8-drums, t8-bass, s1
+        // Lanes are identified by musical role, not device id (device shows via its port).
         assert!(
-            whole.contains("t8-drums"),
-            "expected t8-drums lane label; got: {whole:?}"
+            whole.contains("DRUMS"),
+            "expected DRUMS lane label; got: {whole:?}"
         );
         assert!(
-            whole.contains("t8-bass"),
-            "expected t8-bass lane label; got: {whole:?}"
+            whole.contains("BASS"),
+            "expected BASS lane label; got: {whole:?}"
         );
         assert!(
-            whole.contains("s1"),
-            "expected s1 lane label; got: {whole:?}"
+            whole.contains("CHORDS"),
+            "expected CHORDS lane label; got: {whole:?}"
+        );
+        assert!(
+            whole.contains("SYNTH"),
+            "expected SYNTH lane label; got: {whole:?}"
         );
     }
 
@@ -277,7 +282,7 @@ mod tests {
         app.mode = Mode::RouteEditor;
         // Default lane 0 (t8-drums) has profile channel 9 → display as "10".
         let profiles = default_profiles();
-        let profile_ch = profiles[0].channel; // should be 9
+        let profile_ch = profiles[0].1.channel; // should be 9
         let whole = render_route_editor_to_string(&app);
         let display_ch = (profile_ch + 1).to_string();
         assert!(

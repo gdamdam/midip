@@ -11,7 +11,7 @@ use crate::app::{App, HitCell, HitTarget};
 use crate::devices::profiles::drum_label;
 use crate::pattern::model::{PatternData, TrigCond};
 use crate::ui::theme::{
-    cursor_style, lane_color, playhead_style, step_attr_marker, vel_bar, vel_color, vel_glyph,
+    cursor_style, playhead_style, role_color, step_attr_marker, vel_bar, vel_color, vel_glyph,
 };
 
 /// Velocity of a hit on `note` at `step`, or 0 if none.
@@ -52,7 +52,7 @@ pub fn render_drum_editor(f: &mut Frame, area: Rect, app: &App) {
 
     // Polymeter: render the playhead at the focused lane's LOCAL step.
     let local_playhead = if len == 0 { 0 } else { app.playhead % len };
-    let accent = lane_color(lane.profile.id);
+    let accent = role_color(lane.role);
 
     let steps: &[Vec<crate::pattern::model::DrumHit>] = match &pattern.data {
         PatternData::Drums(s) => s,
@@ -107,15 +107,17 @@ pub fn render_drum_editor(f: &mut Frame, area: Rect, app: &App) {
         }
         extras
     };
+    // Lead with the musical ROLE; the device profile is shown separately at the end.
     let title = format!(
-        " EDIT · {} · \"{}\" · {} steps · ch{}{}{}{} ",
-        lane.profile.label,
+        " EDIT · {} · \"{}\" · {} steps · ch{}{}{}{} · {} ",
+        lane.role.label(),
         pattern.name,
         len,
         lane.profile.channel + 1,
         lane_extras,
         scroll_indicator,
         row_indicator,
+        lane.profile.label,
     );
 
     let mut lines: Vec<Line> = Vec::with_capacity(voices.len() + 4);
@@ -336,6 +338,7 @@ mod tests {
 
     fn empty_library() -> Library {
         Library {
+            chords: crate::pattern::library::GenreMap::new(),
             records: Vec::new(),
             v2_index: Default::default(),
             families: Vec::new(),

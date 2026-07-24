@@ -29,14 +29,16 @@ export function condLabel(c: TrigCond | null | undefined): string {
   }
 }
 
-/** Ember accent for a lane by role id. */
+/** Ember accent for a lane by musical role (hardware-neutral). */
 export function roleColor(role: string): string {
   switch (role) {
-    case "t8-drums":
+    case "drums":
       return "var(--ember)";
-    case "t8-bass":
+    case "bass":
       return "var(--pink)";
-    case "s1":
+    case "chords":
+      return "var(--green)";
+    case "synth":
       return "var(--aqua)";
     default:
       return "var(--fg-dim)";

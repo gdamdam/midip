@@ -72,18 +72,8 @@ def pack_hiphop():
     family("boom-bap-bass-walk","Upright Walk","bass",g,
            [("core",c),("sparse",s),("dense",v)])
 
-    # --- synth: Dusty Keys (minor 7 chords) ---
-    kw = dict(bpm=(82,98), feel="straight-16", tags=["hip-hop","boom-bap","keys"],
-              prov=BB, harmonic="minor7")
-    c = synth(g,"Rhodes Min7 Stabs","core",
-        [(2,[0,3,7,10],0.4,'n'),(6,[0,3,7,10],0.4,'n'),(10,[-2,2,5,9],0.4,'n'),(14,[0,3,7,10],0.4,'a')],
-        desc="Off-beat Rhodes minor-seventh chord stabs; a dusty two-chord vamp.",
-        energy="mid", density="core", **kw)
-    v = synth(g,"Jazz ii-V-i","dense",
-        [(0,[5,9,12,15],1.5,'n'),(4,[10,14,17,20],1.5,'n'),(8,[0,3,7,10],2.5,'a')],
-        desc="A ii-V-i in minor: held Dm7, G7, then a resting Am7 chord.",
-        energy="mid", density="core", **kw)
-    family("boom-bap-synth-keys","Dusty Keys","synth",g,[("core",c),("dense",v)])
+    # Boom-bap chord keys (Rhodes Min7 Stabs, Jazz ii-V-i) moved to role "chords"
+    # (see packs_chords.py). Only mono/riff synth lines remain in this pack.
 
     # ================= TRAP =================
     g = "trap"
@@ -137,16 +127,14 @@ def pack_hiphop():
         energy="mid", density="dense", **kw)
     family("trap-bass-808","808 Glide","bass",g,[("core",c),("sparse",s),("dense",v)])
 
+    # Minor Bell Stabs (chord triad) moved to role "chords" (packs_chords.py).
+    # The monophonic Phrygian Motif stays under synth as the family core.
     kw = dict(bpm=(130,150), feel="half-time", tags=["trap","dark","keys"], prov=TR, harmonic="minor")
-    c = synth(g,"Minor Bell Stabs","core",
-        [(0,[0,3,7],0.5,'a'),(6,[0,3,7],0.5,'n'),(8,[-1,3,7],0.5,'n'),(12,[0,3,7],0.5,'n')],
-        desc="Dark minor-triad bell stabs — a sparse, ominous trap motif.",
-        energy="mid", density="core", **kw)
-    v = synth(g,"Phrygian Motif","dense",
+    v = synth(g,"Phrygian Motif","core",
         [(0,0,0.5,'a'),(2,1,0.5,'n'),(4,3,0.5,'n'),(6,0,0.5,'n'),(8,-2,1.0,'n'),(12,1,0.5,'n')],
         desc="Single-line Phrygian motif leaning on the flat-second for menace.",
         energy="mid", density="core", **kw)
-    family("trap-synth-dark","Dark Trap Keys","synth",g,[("core",c),("dense",v)])
+    family("trap-synth-dark","Dark Trap Lead","synth",g,[("core",v)])
 
 
 # ============================ PACK 6: MODERN CLUB ============================
@@ -199,12 +187,7 @@ def pack_club():
         energy="high", density="dense", **kw)
     family("tech-house-bass-roll","Offbeat Roller","bass",g,[("core",c),("dense",v)])
 
-    kw=dict(bpm=(124,128), feel="straight", tags=["tech-house","stab"], prov=TH, harmonic="minor9")
-    c=synth(g,"Minimal Min9 Stab","core",
-        [(2,[0,3,7,10,14],0.3,'n'),(10,[0,3,7,10,14],0.3,'a')],
-        desc="Two minimal minor-ninth organ stabs — the whole harmonic hook.",
-        energy="mid", density="core", **kw)
-    family("tech-house-synth-stab","Minimal Stab","synth",g,[("core",c)])
+    # Minimal Min9 Stab (chord) moved to role "chords" (packs_chords.py).
 
     # ---- melodic-techno ----
     g="melodic-techno"
@@ -230,11 +213,8 @@ def pack_club():
         [(i,[0,7,12,15,19][i%5],0.25,'n') for i in range(16)],
         desc="Sixteenth-note arpeggio builder climbing the minor chord tones with a filter opening.",
         energy="high", density="dense", cc={0:[(74,30)],8:[(74,80)],15:[(74,120)]}, **kw)
-    bd=synth(g,"Melodic Breakdown","breakdown",
-        [(0,[0,3,7,10],6.0,'a'),(8,[-2,3,7,10],6.0,'n')],
-        desc="Two sustained minor-ninth pad chords for the breakdown, with a slow filter sweep.",
-        energy="low", density="sparse", cc={0:[(74,20)],8:[(74,70)]}, **kw)
-    family("melodic-techno-synth-arp","Melodic Arp","synth",g,[("core",c),("dense",d),("breakdown",bd)])
+    # Melodic Breakdown (sustained pad chords) moved to role "chords".
+    family("melodic-techno-synth-arp","Melodic Arp","synth",g,[("core",c),("dense",d)])
 
     kw=dict(bpm=(120,126), feel="straight", tags=["melodic-techno","sub","bass"], prov=MT, harmonic="minor")
     c=bass(g,"Sustained Sub","core",

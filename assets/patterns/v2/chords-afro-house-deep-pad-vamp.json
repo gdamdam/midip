@@ -1,0 +1,135 @@
+{
+  "schema": "midip.pattern",
+  "version": 2,
+  "factory_id": "chords.afro-house.deep-pad-vamp",
+  "role": "chords",
+  "kind": "melodic",
+  "genre": "afro-house",
+  "name": "Deep Pad Vamp",
+  "desc": "Two-chord minor-ninth pad vamp (i to bVII) with a slow filter opening.",
+  "length": 16,
+  "steps": [
+    [
+      {
+        "semi": 0,
+        "vel": 1.0,
+        "slide": false,
+        "len": 4.0
+      },
+      {
+        "semi": 3,
+        "vel": 1.0,
+        "slide": false,
+        "len": 4.0
+      },
+      {
+        "semi": 10,
+        "vel": 1.0,
+        "slide": false,
+        "len": 4.0
+      },
+      {
+        "semi": 14,
+        "vel": 1.0,
+        "slide": false,
+        "len": 4.0
+      }
+    ],
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    [
+      {
+        "semi": -2,
+        "vel": 1.0,
+        "slide": false,
+        "len": 4.0
+      },
+      {
+        "semi": 3,
+        "vel": 1.0,
+        "slide": false,
+        "len": 4.0
+      },
+      {
+        "semi": 7,
+        "vel": 1.0,
+        "slide": false,
+        "len": 4.0
+      },
+      {
+        "semi": 10,
+        "vel": 1.0,
+        "slide": false,
+        "len": 4.0
+      }
+    ],
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+  ],
+  "cc": [
+    [
+      {
+        "cc": 74,
+        "val": 35
+      }
+    ],
+    [],
+    [],
+    [],
+    [],
+    [],
+    [],
+    [],
+    [
+      {
+        "cc": 74,
+        "val": 95
+      }
+    ]
+  ],
+  "metadata": {
+    "bpm_min": 118,
+    "bpm_max": 125,
+    "feel": "straight",
+    "timing": "straight",
+    "energy": "mid",
+    "density": "core",
+    "tags": [
+      "afro-house",
+      "pad",
+      "marimba",
+      "min9",
+      "chords"
+    ],
+    "harmonic": "min9",
+    "chord_poly": "chord",
+    "subgenre": "afro-house",
+    "compatible_devices": [
+      "j-6",
+      "s1",
+      "minilogue-xd",
+      "microfreak",
+      "generic-poly-synth"
+    ],
+    "function": "core"
+  },
+  "provenance": {
+    "source": "midip factory",
+    "author": "midip",
+    "pack": "chords-v1",
+    "license": "CC0-1.0",
+    "references": [
+      "https://www.roland.com/GLOBAL/products/j-6/"
+    ]
+  }
+}

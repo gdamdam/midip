@@ -64,11 +64,17 @@ export interface Transport {
   set_name: string;
 }
 
+export type Role = "drums" | "bass" | "chords" | "synth";
+
 export interface Lane {
   index: number;
   kind: "drums" | "melodic";
-  role: string;
+  /** Persisted musical role — drives accent color and label, independent of device. */
+  role: Role;
+  /** Uppercase role label shown as the lane's primary name (DRUMS/BASS/CHORDS/SYNTH). */
   label: string;
+  /** Manufacturer-qualified device label (e.g. "Roland J-6"), shown as a sublabel. */
+  device_label: string;
   pattern_name: string;
   connected: boolean;
   device: string;

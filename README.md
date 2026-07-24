@@ -7,7 +7,7 @@
 [![License](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
 [![Version](https://img.shields.io/badge/version-1.9.0-success.svg)](CHANGELOG.md)
 [![Rust](https://img.shields.io/badge/rust-2021%20edition-orange.svg)](https://www.rust-lang.org)
-[![Tests](https://img.shields.io/badge/tests-1206%20passing-brightgreen.svg)](CHANGELOG.md)
+[![Tests](https://img.shields.io/badge/tests-1212%20passing-brightgreen.svg)](CHANGELOG.md)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey.svg)](#build--run)
 [![Built with ratatui](https://img.shields.io/badge/TUI-ratatui-blueviolet.svg)](https://ratatui.rs)
 
@@ -17,10 +17,11 @@
 
 ```
 ▶ PLAY  124 BPM  LINK 2 LOCKED  001.2.3  SW 56%  SAVED
-▸1 DRUM   techno #03   ●  M– S–  [●···●···●···●···]        ACTIVE
+▸1 DRUMS  techno #03   ●  M– S–  [●···●···●···●···]        ACTIVE
  2 BASS   acid #11     ●  M– S–  [●··●····●··●····]        QUEUED⟶
- 3 SYNTH  dub #07      ○  M– S–  [··●····●····●···]
-EDIT DRUM | Steps 1-16 of 16 | Cursor 1 | Playhead 4
+ 3 CHORDS min9 #02     ○  M– S–  [●·······●·······]
+ 4 SYNTH  dub #07      ○  M– S–  [··●····●····●···]
+EDIT DRUMS | Steps 1-16 of 16 | Cursor 1 | Playhead 4
  ... step grid ...
 Step 1 · BD · Velocity 120 [-/+] · Probability 100% [p/P] · Ratchet x1 [y/Y]
 [space]play [tab]lane [arrows]move [enter]toggle [0-9]vel [?]controls
@@ -67,8 +68,11 @@ gear is the sound. (It never triggers a device's own internal pattern — see
   RD‑8 & TD‑3, Arturia DrumBrute Impact & MicroFreak, Korg monologue & minilogue xd, Elektron
   Digitakt and Novation Circuit Tracks, plus generic GM‑drum/mono/poly fallbacks. Press `d` to
   swap any device onto a lane (filtered to the lane's kind); add your own via `devices.json`.
-- **3‑lane groovebox** — T‑8 drums + T‑8 bass + S‑1 synth play together, each with its own
+- **4‑lane groovebox** — DRUMS, BASS, CHORDS and SYNTH play together, each with its own
   pattern, with **polymeter** (lanes can have different lengths and drift in and out of phase).
+  Lanes are named by their musical **role**, not their device: fresh sets default to Roland
+  T‑8 drums, T‑8 bass, **J‑6** (chords) and S‑1 (synth), but any compatible device can be
+  swapped onto a lane — a CHORDS lane can drive a J‑6, MicroFreak, minilogue xd, or any poly synth.
 - **Built‑in library** — hundreds of named patterns across 20 genres (a vendored snapshot of
   the [mpump](https://github.com/gdamdam) pattern set), browsable with **audible audition**
   (cue a pattern before committing it — gated to stopped or muted lanes so it never collides
@@ -93,7 +97,9 @@ gear is the sound. (It never triggers a device's own internal pattern — see
 - **Scale-aware melodic editing** — choose a root + scale per melodic lane (`n`/`N` scale,
   `h`/`H` root); `↑`/`↓` moves by scale degree; `X` conforms existing notes to the scale;
   `I` opens a QWERTY piano note-input sub-mode.
-- **Chords & polyphony** — the S‑1 synth lane is polyphonic: a step can hold several notes.
+- **Chords & polyphony** — the CHORDS lane (default Roland J‑6, four‑voice) and the SYNTH lane
+  are polyphonic: a step can hold several notes. midip ships a curated **CHORDS factory library**
+  of ~48 chord patterns (voiced to ≤4 notes for the J‑6), searchable under its own role.
   Stack notes by key in the note-input sub-mode, build a scale-aware triad with `j`, or strip
   a note with `J`. The T‑8 bass stays monophonic (single note + slide). Backward-compatible:
   every existing pattern loads and plays exactly as before.
@@ -190,9 +196,10 @@ clock-in, the generative tool (Generate/Vary/Arp with live preview), a command p
 - **Transport bar** — play state · BPM · Link (peers + `LOCKED`) · `bar.beat.16th` · swing ·
   `SAVED`/`EDITED`, with a status/toast line beneath it ("Saved", "Loaded dub #07",
   "Velocity 96", "Link lost", …).
-- **Lanes** — one row each for `DRUM` / `BASS` / `SYNTH`: focus marker, pattern name,
-  connection `●/○`, mute/solo (`M●`/`S●`), mirror indicator (`MIR`), a live activity strip,
-  and `ACTIVE` / `QUEUED⟶` launch markers when queuing is in play.
+- **Lanes** — one row each for `DRUMS` / `BASS` / `CHORDS` / `SYNTH` (labeled by musical role,
+  with the device shown separately): focus marker, pattern name, connection `●/○`, mute/solo
+  (`M●`/`S●`), mirror indicator (`MIR`), a live activity strip, and `ACTIVE` / `QUEUED⟶` launch
+  markers when queuing is in play. Each role has its own accent color.
 - **Editor** — adapts to the focused lane:
   - **Drums**: a TR‑style grid (voice rows × steps); velocity shown as cell shading.
   - **Melodic**: a note lane with pitch names, note length (sustain spans cells), and slides
@@ -395,15 +402,21 @@ The UI is organized into five workspaces — **Perform**, **Pattern**, **Library
 
 ## Devices & MIDI
 
-A fresh set opens as three lanes matching the AIRA Compacts, each auto‑detected by port name:
+A fresh set opens as four lanes, each named by its musical **role** and each with a default
+device (auto‑detected by port name). The lane role is persisted and hardware‑neutral — the
+device is only a default and stays replaceable via the picker (`d`) and route editor (`w`):
 
-| Lane | Device | MIDI channel |
-|------|--------|--------------|
-| DRUM | T‑8 (drum part) | 10 |
-| BASS | T‑8 (bass part) | 2 |
-| SYNTH | S‑1 | 1 |
+| Lane (role) | Default device | MIDI channel |
+|-------------|----------------|--------------|
+| DRUMS | Roland T‑8 (drum part) | 10 |
+| BASS | Roland T‑8 (bass part) | 2 |
+| CHORDS | Roland J‑6 (four‑voice) | 1 |
+| SYNTH | Roland S‑1 | 1 |
 
-The two T‑8 lanes share one physical connection (distinguished by channel).
+The two T‑8 lanes share one physical connection (distinguished by channel). A CHORDS lane can
+run any compatible polyphonic device (J‑6, MicroFreak, minilogue xd, generic poly synth …).
+Existing three‑lane sets saved before this release load unchanged as DRUMS / BASS / SYNTH and
+never gain a CHORDS lane.
 
 ### Device library & picker (`d`)
 
@@ -417,8 +430,14 @@ port stay adjustable per lane):
 
 | Kind | Devices |
 |------|---------|
-| Drums | T‑8 · Behringer RD‑8 · Arturia DrumBrute Impact · Novation Circuit (drums) · **Generic GM drums** |
-| Synth | S‑1 · Roland J‑6 · Behringer TD‑3 · Korg monologue · Arturia MicroFreak · Korg minilogue xd · Elektron Digitakt · Novation Circuit (synth) · **Generic mono / poly** |
+| Drums | Roland T‑8 · Behringer RD‑8 · Arturia DrumBrute Impact · Novation Circuit (drums) · **Generic GM drums** |
+| Melodic (bass / chords / synth) | Roland S‑1 · Roland J‑6 (four‑voice) · Behringer TD‑3 · Korg monologue · Arturia MicroFreak · Korg minilogue xd · Elektron Digitakt · Novation Circuit (synth) · **Generic mono / poly** |
+
+The device picker filters by lane kind (drum lanes show drum machines; melodic lanes — BASS,
+CHORDS and SYNTH — show synths). Melodic device labels are manufacturer‑qualified; a device's
+polyphony is shown so a CHORDS lane can be paired with a chord‑capable synth. (Canonical device
+ids stay short — `t8-drums`, `t8-bass`, `j-6`, `s1` — for save‑file compatibility;
+manufacturer‑qualified aliases like `roland-j6` also resolve.)
 
 The generic profiles drive *any* class‑compliant USB‑MIDI device immediately — pick a generic,
 then set its port/channel in the route editor. To ship named profiles of your own, drop a
@@ -449,10 +468,12 @@ mirrors the full output stream additively; it does not double-send a lane alread
 
 ## Patterns, library & sets
 
-- The library lives in `assets/patterns/` (`patterns-t8-drums.json`, `patterns-t8-bass.json`,
-  `patterns-s1.json`, `catalog.json`) — a **read‑only vendored snapshot** of the mpump set,
-  never modified at runtime. Genres are listed alphabetically; each pattern has a name and
-  description from the catalog.
+- The library is organized by musical **role** (`drums`, `bass`, `chords`, `synth`), not by
+  device. The legacy device‑shaped files (`patterns-t8-drums.json`, `patterns-t8-bass.json`,
+  `patterns-s1.json`, `catalog.json`) remain a **read‑only vendored snapshot** of the mpump set
+  (a compatibility reader still parses the old `t8`/`s1` catalog schema). The `chords` role is
+  supplied entirely by the v2 factory library below. Genres are listed alphabetically; each
+  pattern has a name and description.
 - A documented, versioned **factory pattern format v2** (`assets/patterns/v2/*.json`, loaded
   additively when present) can carry the full pattern model — chords, note length, probability,
   ratchets, microtiming, trig conditions, per-step CC locks, a stable `factory_id`, and
@@ -479,9 +500,10 @@ mirrors the full output stream additively; it does not double-send a lane alread
 - **User patterns**: `A` saves the focused lane as a named user pattern; `Z` clears it. User
   patterns appear in the library under a "User" section and can be renamed, duplicated, or
   deleted from there.
-- **Sets** hold all three lanes + tempo/swing. Set files are named `<name>-<id>.json` (stable
-  IDs prevent silent overwrites). The format is versioned; old files upgrade automatically; a
-  file from a newer midip is rejected cleanly.
+- **Sets** hold all lanes (with each lane's persisted role) + tempo/swing. Set files are named
+  `<name>-<id>.json` (stable IDs prevent silent overwrites). The format is versioned (now v5,
+  which adds the per‑lane role); old files upgrade automatically — a pre‑v5 three‑lane set
+  loads as DRUMS / BASS / SYNTH; a file from a newer midip is rejected cleanly.
 - **Autosave** writes a recovery file in the background (never overwrites a deliberate save).
   On an **unclean shutdown**, startup prompts **Recover / Discard / Open** saved.
 - **Set management** (`o`): save‑as, rename, duplicate, new, and delete with confirmation.
@@ -494,7 +516,9 @@ mirrors the full output stream additively; it does not double-send a lane alread
   duplicate, delete, and reorder entries; a pattern can live in multiple crates.
 - **Live crate view** (`V`) — browse crates and launch patterns live without touching the
   library. `Enter` launches the selected entry **quantized** to the **role-matched lane**
-  (drums→drum lane, bass→bass, synth→synth). `a` auditions (gated), `←/→` switches crates,
+  (drums→DRUMS, bass→BASS, chords→CHORDS, synth→SYNTH — located by the lane's persisted role,
+  not a fixed index; if the set has no lane of that role it reports a clear status instead of
+  loading into an unrelated lane). `a` auditions (gated), `←/→` switches crates,
   `f` favorites, `C` cancels a queued launch.
 - **Pre-performance validation** (`z` in the crate view) — reports entries whose pattern is
   missing or whose target lane's device is unavailable before a set.
@@ -531,8 +555,11 @@ explicit intent.
 
 ### Chords (poly lanes)
 
-The S‑1 synth lane is **polyphonic** — a step can hold more than one note (the T‑8 bass lane
-stays mono: a new note replaces the old, keeping slide). On a poly lane:
+The CHORDS lane (default Roland J‑6, four‑voice) and the SYNTH lane (S‑1) are **polyphonic** —
+a step can hold more than one note (the T‑8 bass lane stays mono: a new note replaces the old,
+keeping slide). A device's voice capability is respected: the J‑6 is a four‑voice machine, so
+the factory chord library is voiced to at most four notes, and pairing a CHORDS lane with a
+lower‑polyphony device surfaces a capability hint. On a poly lane:
 
 - In the note-input sub-mode, each key **stacks** its pitch onto the current step (press the
   same pitch again to remove it) rather than advancing — so you can play a chord, then move

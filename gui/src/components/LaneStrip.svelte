@@ -29,6 +29,7 @@
         <span class="focusmark">{lane.focused ? "▸" : ""}</span>
         <span class="label">{lane.label}</span>
         <span class="patname" title={lane.pattern_name}>{lane.pattern_name || "—"}</span>
+        <span class="device" title={`Device: ${lane.device_label}`}>{lane.device_label}</span>
         <span class="conn" class:ok={lane.connected} title={lane.device}>
           {lane.connected ? "●" : "○"}
         </span>
@@ -121,6 +122,14 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     color: var(--fg);
+  }
+  .device {
+    font-size: 10px;
+    color: var(--fg-dim);
+    white-space: nowrap;
+    max-width: 40%;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .conn {
     color: var(--dim);

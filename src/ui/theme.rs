@@ -106,6 +106,7 @@ pub struct Palette {
     pub dim: Color,
     pub drums: Color,
     pub bass: Color,
+    pub chords: Color,
     pub synth: Color,
     pub warn: Color,
     pub err: Color,
@@ -121,6 +122,7 @@ pub const EMBER: Palette = Palette {
     dim: Color::Rgb(102, 92, 84),      // #665C54
     drums: Color::Rgb(254, 128, 25),   // #FE8019 warm orange
     bass: Color::Rgb(211, 134, 155),   // #D3869B pink
+    chords: Color::Rgb(142, 192, 124), // #8EC07C green (distinct from bass pink & synth aqua)
     synth: Color::Rgb(131, 165, 152),  // #83A598 cool aqua
     warn: Color::Rgb(250, 189, 47),    // #FABD2F amber
     err: Color::Rgb(251, 73, 52),      // #FB4934 red
@@ -129,14 +131,15 @@ pub const EMBER: Palette = Palette {
     playhead: Color::Rgb(60, 56, 54),  // #3C3836
 };
 
-/// Distinct static accent color per lane, keyed by `DeviceProfile::id`. Unknown ids fall
-/// back to `dim` so an added profile still renders (just without a custom hue).
-pub fn lane_color(profile_id: &str) -> Color {
-    match profile_id {
-        "s1" => EMBER.synth,       // S-1 synth: cool aqua
-        "t8-drums" => EMBER.drums, // T-8 drums: warm orange
-        "t8-bass" => EMBER.bass,   // T-8 bass: pink
-        _ => EMBER.dim,
+/// Distinct static accent color per lane, keyed by musical **role** (not device).
+/// A CHORDS lane is purple regardless of which polyphonic device it drives.
+pub fn role_color(role: crate::pattern::library::LibRole) -> Color {
+    use crate::pattern::library::LibRole;
+    match role {
+        LibRole::Drums => EMBER.drums,   // warm orange
+        LibRole::Bass => EMBER.bass,     // pink
+        LibRole::Chords => EMBER.chords, // purple
+        LibRole::Synth => EMBER.synth,   // cool aqua
     }
 }
 
@@ -294,16 +297,19 @@ mod tests {
     }
 
     #[test]
-    fn lane_color_is_distinct_per_known_id_and_dim_for_unknown() {
-        let drums = lane_color("t8-drums");
-        let bass = lane_color("t8-bass");
-        let synth = lane_color("s1");
-        // Three known ids -> three distinct colors.
-        assert_ne!(drums, bass);
-        assert_ne!(bass, synth);
-        assert_ne!(drums, synth);
-        // Unknown id -> dim fallback (not Gray).
-        assert_eq!(lane_color("j6"), EMBER.dim);
+    fn role_color_is_distinct_per_role() {
+        use crate::pattern::library::LibRole;
+        let drums = role_color(LibRole::Drums);
+        let bass = role_color(LibRole::Bass);
+        let chords = role_color(LibRole::Chords);
+        let synth = role_color(LibRole::Synth);
+        // Four roles -> four distinct accent colors.
+        let all = [drums, bass, chords, synth];
+        for (i, a) in all.iter().enumerate() {
+            for b in &all[i + 1..] {
+                assert_ne!(a, b, "role accents must be distinct");
+            }
+        }
     }
 
     #[test]

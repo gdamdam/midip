@@ -1,0 +1,164 @@
+{
+  "schema": "midip.pattern",
+  "version": 2,
+  "factory_id": "chords.deep-house.deep-min9-pulse",
+  "role": "chords",
+  "kind": "melodic",
+  "genre": "deep-house",
+  "name": "Deep Min9 Pulse",
+  "desc": "Pulsing off-beat minor-ninth stabs alternating i9 and bVII.",
+  "length": 16,
+  "steps": [
+    null,
+    null,
+    [
+      {
+        "semi": 0,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.5
+      },
+      {
+        "semi": 3,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.5
+      },
+      {
+        "semi": 10,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.5
+      },
+      {
+        "semi": 14,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.5
+      }
+    ],
+    null,
+    null,
+    null,
+    [
+      {
+        "semi": 0,
+        "vel": 0.82,
+        "slide": false,
+        "len": 0.5
+      },
+      {
+        "semi": 3,
+        "vel": 0.82,
+        "slide": false,
+        "len": 0.5
+      },
+      {
+        "semi": 10,
+        "vel": 0.82,
+        "slide": false,
+        "len": 0.5
+      },
+      {
+        "semi": 14,
+        "vel": 0.82,
+        "slide": false,
+        "len": 0.5
+      }
+    ],
+    null,
+    null,
+    null,
+    [
+      {
+        "semi": 0,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.5
+      },
+      {
+        "semi": 3,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.5
+      },
+      {
+        "semi": 10,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.5
+      },
+      {
+        "semi": 14,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.5
+      }
+    ],
+    null,
+    null,
+    null,
+    [
+      {
+        "semi": -2,
+        "vel": 1.15,
+        "slide": false,
+        "len": 0.5
+      },
+      {
+        "semi": 2,
+        "vel": 1.15,
+        "slide": false,
+        "len": 0.5
+      },
+      {
+        "semi": 9,
+        "vel": 1.15,
+        "slide": false,
+        "len": 0.5
+      },
+      {
+        "semi": 12,
+        "vel": 1.15,
+        "slide": false,
+        "len": 0.5
+      }
+    ],
+    null
+  ],
+  "metadata": {
+    "bpm_min": 120,
+    "bpm_max": 125,
+    "feel": "straight",
+    "timing": "straight",
+    "energy": "mid",
+    "density": "core",
+    "tags": [
+      "deep-house",
+      "pulse",
+      "stab",
+      "min9",
+      "chords"
+    ],
+    "harmonic": "min9",
+    "chord_poly": "chord",
+    "subgenre": "deep-house",
+    "compatible_devices": [
+      "j-6",
+      "s1",
+      "minilogue-xd",
+      "microfreak",
+      "generic-poly-synth"
+    ],
+    "function": "core"
+  },
+  "provenance": {
+    "source": "midip factory",
+    "author": "midip",
+    "pack": "chords-v1",
+    "license": "CC0-1.0",
+    "references": [
+      "https://www.roland.com/GLOBAL/products/j-6/"
+    ]
+  }
+}

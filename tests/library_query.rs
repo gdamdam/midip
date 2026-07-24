@@ -14,7 +14,7 @@ fn lib() -> Library {
 #[test]
 fn index_covers_every_pattern() {
     let l = lib();
-    let total: usize = [&l.drums, &l.bass, &l.synth]
+    let total: usize = [&l.drums, &l.bass, &l.chords, &l.synth]
         .iter()
         .flat_map(|m| m.values())
         .map(|v| v.len())

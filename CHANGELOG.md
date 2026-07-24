@@ -7,6 +7,35 @@ feature milestone is a minor bump).
 
 ## [Unreleased]
 
+## [1.10.0] — 2026-07-24 — Fourth CHORDS lane & hardware-neutral lane roles
+
+### Added
+- **Fourth CHORDS lane + hardware-neutral lane roles.** Fresh sets now open with four
+  lanes — DRUMS, BASS, CHORDS, SYNTH — each labeled by its musical **role** rather than its
+  device. The role is persisted on the lane (set format **v5**) and is independent of the
+  device profile: a CHORDS lane defaults to the Roland J-6 but can drive any compatible
+  polyphonic synth (MicroFreak, minilogue xd, generic poly, …).
+- **Curated CHORDS factory library** — ~48 four-voice chord patterns across the main genres
+  and a cross-genre utility group, searchable under the new `chords` library role. Voicings
+  respect the J-6's four-voice limit (a loader check rejects any factory step with >4 notes).
+- **Device polyphony capability** — device profiles gained an optional `max_poly`; the J-6
+  declares four voices. Pairing a CHORDS lane with a lower-polyphony device surfaces a hint.
+- Manufacturer-qualified device labels ("Roland T-8 Drums/Bass", "Roland J-6", "Roland S-1")
+  with backward-compatible aliases (`roland-j6` → `j-6`, etc.); canonical stored ids unchanged.
+
+### Changed
+- Runtime pattern targeting (load / audition / queue / crates) locates a lane by its persisted
+  **role** — focused lane if its role matches, else the first lane of that role — instead of a
+  hard-coded index; it reports a clear status when no lane of the requested role exists.
+- The pattern library is organized by role (`drums`/`bass`/`chords`/`synth`); a compatibility
+  reader still parses the legacy device-shaped catalog. TUI and GUI label lanes by role with a
+  distinct CHORDS accent color and show the selected device separately.
+
+### Compatibility
+- Existing three-lane sets saved before this release load unchanged as DRUMS / BASS / SYNTH
+  and never gain a CHORDS lane. Old vendored pattern references to synth-role chord patterns
+  that were reclassified to the chords role still resolve.
+
 ## [1.9.1] — 2026-07-24 — GUI pattern library: sorted, collapsible genres
 
 ### Changed

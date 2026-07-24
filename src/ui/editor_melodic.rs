@@ -14,7 +14,7 @@ use crate::music::scale::{degree_label, note_name as scale_note_name};
 use crate::pattern::model::TrigCond;
 use crate::pattern::model::{MelodicStep, PatternData};
 use crate::ui::theme::{
-    cursor_style, lane_color, note_name, playhead_style, step_attr_marker, vel_bar, vel_color,
+    cursor_style, note_name, playhead_style, role_color, step_attr_marker, vel_bar, vel_color,
 };
 
 /// Render a small chord-size badge (number of stacked notes) as a single superscript
@@ -52,7 +52,7 @@ pub fn render_melodic_editor(f: &mut Frame, area: Rect, app: &App) {
 
     // Polymeter: render the playhead at the focused lane's LOCAL step.
     let local_playhead = if len == 0 { 0 } else { app.playhead % len };
-    let accent = lane_color(lane.profile.id);
+    let accent = role_color(lane.role);
 
     let steps: &[MelodicStep] = match &pattern.data {
         PatternData::Melodic(s) => s,
@@ -89,9 +89,10 @@ pub fn render_melodic_editor(f: &mut Frame, area: Rect, app: &App) {
         }
         extras
     };
+    // Lead with the musical ROLE; the device profile is shown separately at the end.
     let title = format!(
-        " EDIT · {} · \"{}\" · {} steps · ch{} · root {} · {} · Oct {:+} · Transp {:+}{}{} ",
-        lane.profile.label,
+        " EDIT · {} · \"{}\" · {} steps · ch{} · root {} · {} · Oct {:+} · Transp {:+}{}{} · {} ",
+        lane.role.label(),
         pattern.name,
         len,
         lane.profile.channel + 1,
@@ -101,6 +102,7 @@ pub fn render_melodic_editor(f: &mut Frame, area: Rect, app: &App) {
         lane.transpose,
         lane_extras,
         scroll_indicator,
+        lane.profile.label,
     );
 
     // Feature #2: EDIT header line.
@@ -344,6 +346,7 @@ mod tests {
 
     fn empty_library() -> Library {
         Library {
+            chords: crate::pattern::library::GenreMap::new(),
             records: Vec::new(),
             v2_index: Default::default(),
             families: Vec::new(),

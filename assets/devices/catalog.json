@@ -3,7 +3,7 @@
   "profiles": [
     {
       "id": "j-6",
-      "label": "J-6 SYNTH",
+      "label": "Roland J-6",
       "port_match": "J-6",
       "kind": "melodic",
       "channel": 0,
@@ -12,7 +12,8 @@
       "drum_gate_fraction": 0.0,
       "send_clock": true,
       "drum_voices": [],
-      "poly": true
+      "poly": true,
+      "max_poly": 4
     },
     {
       "id": "rd-8",

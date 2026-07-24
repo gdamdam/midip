@@ -72,16 +72,13 @@ def pack_meter():
     phr("bass", "tech-house", "Two-Bar Roller Bass", [(s, 0 if (s // 2) % 2 == 0 else -2, 0.4, 'n') for s in range(2, 32, 4)], 32, 2, "Two-bar rolling offbeat bass.", (124, 128), "minor")
     phr("synth", "trap", "Two-Bar Phrygian", [(0, 0, 1.0, 'a'), (6, 1, 0.5, 'n'), (10, 3, 1.0, 'n'), (16, -2, 1.0, 'n'), (22, 1, 0.5, 'n'), (26, 0, 2.0, 'n')], 32, 2, "Two-bar dark Phrygian motif.", (130, 150), "phrygian")
     phr("bass", "disco", "Two-Bar Octave Walk", [(s, 0 if s % 4 == 0 else 12, 0.5, 'n') for s in range(0, 32, 2)], 32, 2, "Two-bar disco octave bass with a walk-up.", (115, 125), "major")
-    phr("synth", "house", "Two-Bar Stab Vamp", [(2, [0, 3, 7, 10], 0.4, 'n'), (10, [0, 3, 7, 10], 0.4, 'n'), (18, [-2, 2, 5, 9], 0.4, 'n'), (26, [-2, 2, 5, 9], 0.4, 'a')], 32, 2, "Two-bar house chord-stab vamp.", (120, 126), "minor7")
+    # Multi-bar chord phrases (house Two-Bar Stab Vamp; melodic-techno Three-Bar
+    # Progression & Four-Bar Chords; amapiano Three-Bar Jazzy Vamp; deep-house
+    # Four-Bar Pads; disco Four-Bar Strings) moved to role "chords" (packs_chords.py).
     # 48-step (3-bar)
-    phr("synth", "melodic-techno", "Three-Bar Progression", [(0, [0, 3, 7], 4.0, 'n'), (16, [8, 12, 15], 4.0, 'n'), (32, [3, 7, 10], 4.0, 'a')], 48, 3, "Three-chord melodic-techno progression, one per bar (i-VI-III).", (120, 126), "minor")
-    phr("synth", "amapiano", "Three-Bar Jazzy Vamp", [(0, [0, 3, 7, 10, 14], 3.0, 'n'), (16, [-2, 2, 5, 9, 12], 3.0, 'n'), (32, [3, 7, 10, 14], 3.0, 'a')], 48, 3, "Three-bar jazzy amapiano chord vamp.", (108, 118), "minor9")
     phr("bass", "afro-house", "Three-Bar Roll", [(s, [0, 3, 7, 0][(s // 4) % 4], 0.5, 'n') for s in range(0, 48, 2)], 48, 3, "Three-bar rolling pentatonic afro bass.", (118, 125), "minor-pentatonic")
     # 64-step (4-bar)
-    phr("synth", "deep-house", "Four-Bar Pads", [(0, [0, 4, 7, 11], 8.0, 'n'), (16, [-3, 0, 4, 9], 8.0, 'n'), (32, [-1, 2, 5, 9], 8.0, 'n'), (48, [-3, 0, 4, 7], 8.0, 'a')], 64, 4, "Four-bar deep-house pad progression (Imaj7-vi-ii-V feel).", (120, 125), "major7")
-    phr("synth", "melodic-techno", "Four-Bar Chords", [(0, [0, 3, 7], 8.0, 'n'), (16, [8, 12, 15], 8.0, 'n'), (32, [3, 7, 10], 8.0, 'n'), (48, [10, 14, 17], 8.0, 'a')], 64, 4, "Four-bar melodic-techno chord progression (i-VI-III-VII).", (120, 126), "minor")
     phr("bass", "trap", "Four-Bar 808 Line", [(0, 0, 3.0, 'a'), (10, 0, 1.0, 'n'), (16, 3, 2.0, 'n', 'slide'), (32, -2, 3.0, 'n', 'slide'), (48, 0, 3.0, 'n')], 64, 4, "Four-bar melodic 808 sub line with glides.", (130, 150), "minor")
-    phr("synth", "disco", "Four-Bar Strings", [(0, [0, 4, 7, 11], 3.0, 'n'), (16, [2, 5, 9, 12], 3.0, 'n'), (32, [7, 11, 14], 3.0, 'n'), (48, [0, 4, 7, 11], 4.0, 'a')], 64, 4, "Four-bar disco string ii-V-I turnaround.", (115, 125), "major7")
 
     # ================= 3. 3/4 & 6/8 families (steps_per_bar 12) =================
     g = "waltz"

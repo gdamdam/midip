@@ -934,12 +934,8 @@ const MEL_DEFAULT_VEL: f32 = 1.0;
 impl App {
     pub fn new(set: Set, library: Library) -> App {
         let n = set.lanes.len();
-        let role = role_for_profile(
-            set.lanes
-                .first()
-                .map(|l| l.profile.id)
-                .unwrap_or("t8-drums"),
-        );
+        // The library browser opens on the first lane's persisted role (hardware-neutral).
+        let role = set.lanes.first().map(|l| l.role).unwrap_or(LibRole::Drums);
         App {
             set,
             focus: 0,
@@ -1098,40 +1094,53 @@ impl App {
 
     /// Determine the role-matched target lane index for a resolved pattern ref + pattern.
     ///
-    /// This is the shared lane-targeting logic used by both `launch_ref` and `validate_crate`.
-    /// - `Vendored`: uses `role_lane_hint()`, clamped to available lanes.
-    /// - `User`: Drums → first drum lane; Melodic → focused lane if melodic, else first melodic.
+    /// This is the shared lane-targeting logic used by `launch_ref`, `validate_crate`,
+    /// and library load/audition. Targeting is by persisted lane **role**, never by a
+    /// hard-coded index:
+    /// - `Vendored` (known role): the focused lane when its role matches, else the
+    ///   first lane with that role, else `None` (caller reports "no <ROLE> lane").
+    /// - `User` (no stored role): fall back to the pattern's data kind — Drums → first
+    ///   drum-role lane; Melodic → focused lane if melodic, else the first melodic lane.
     pub fn target_lane_for(&self, r: &PatternRef, pat: &Pattern) -> Option<usize> {
-        let n = self.set.lanes.len();
-        if n == 0 {
+        if self.set.lanes.is_empty() {
             return None;
         }
-        let lane = if let Some(hint) = r.role_lane_hint() {
-            hint.min(n - 1)
-        } else {
-            match pat.kind() {
-                LaneKind::Drums => self
-                    .set
-                    .lanes
-                    .iter()
-                    .position(|l| l.profile.kind == LaneKind::Drums)
-                    .unwrap_or(0),
-                LaneKind::Melodic => {
-                    if self.set.lanes.get(self.focus).map(|l| l.profile.kind)
-                        == Some(LaneKind::Melodic)
-                    {
-                        self.focus
-                    } else {
-                        self.set
-                            .lanes
-                            .iter()
-                            .position(|l| l.profile.kind == LaneKind::Melodic)
-                            .unwrap_or(self.focus)
-                    }
+        // A Vendored ref carries an explicit role — target a lane of that role.
+        if let PatternRef::Vendored { role, .. } = r {
+            if let Some(want) = crate::pattern::library::LibRole::from_wire(role) {
+                return self.lane_for_role(want);
+            }
+        }
+        // User pattern (or unrecognized role): match by data kind instead.
+        match pat.kind() {
+            LaneKind::Drums => self
+                .set
+                .lanes
+                .iter()
+                .position(|l| l.role.lane_kind() == LaneKind::Drums),
+            LaneKind::Melodic => {
+                if self.set.lanes.get(self.focus).map(|l| l.role.lane_kind())
+                    == Some(LaneKind::Melodic)
+                {
+                    Some(self.focus)
+                } else {
+                    self.set
+                        .lanes
+                        .iter()
+                        .position(|l| l.role.lane_kind() == LaneKind::Melodic)
                 }
             }
-        };
-        Some(lane)
+        }
+    }
+
+    /// The lane index for a musical role: the focused lane when its persisted role
+    /// matches, otherwise the first lane carrying that role. `None` when the set has
+    /// no lane of that role (e.g. a chords pattern targeting an old three-lane set).
+    pub fn lane_for_role(&self, role: crate::pattern::library::LibRole) -> Option<usize> {
+        if self.set.lanes.get(self.focus).map(|l| l.role) == Some(role) {
+            return Some(self.focus);
+        }
+        self.set.lanes.iter().position(|l| l.role == role)
     }
 
     /// Validate all entries in the crate at `crate_idx`.
@@ -1179,10 +1188,10 @@ impl App {
 
     /// Resolve `r` and load/queue it to the role-matched lane.
     ///
-    /// Lane targeting:
-    /// - `Vendored`: `role_lane_hint()` (drums→0, bass→1, synth→2); unknown → focused lane.
-    /// - `User`: resolved pattern's `kind()` — Drums → first drum lane; Melodic → focused lane
-    ///   if it is melodic, else the first melodic lane.
+    /// Lane targeting is by persisted role (see `target_lane_for`): the focused lane
+    /// if its role matches, else the first lane of the ref's role. When the set has
+    /// no lane of that role, it reports a clear status and loads nothing rather than
+    /// clamping to an unrelated lane.
     ///
     /// Returns empty vec and sets status "missing pattern" when the ref cannot be resolved.
     pub fn launch_ref(&mut self, r: &PatternRef) -> Vec<UiCommand> {
@@ -1197,7 +1206,10 @@ impl App {
         // LibLoad / RecallScene (transport keeps playing; only auto-advance stops).
         self.deactivate_chain_on_manual();
 
-        let lane = self.target_lane_for(r, &pat).unwrap_or(self.focus);
+        let Some(lane) = self.target_lane_for(r, &pat) else {
+            self.set_status(format!("no {} lane in this set", r.role_label()));
+            return vec![];
+        };
 
         let name = pat.name.clone();
         self.snapshot();
@@ -2399,7 +2411,27 @@ impl App {
                             lane,
                             route: Some(route),
                         });
-                        self.set_status(format!("Lane {lane}: device → {}", new_profile.label));
+                        // Capability hint: a CHORDS lane needs polyphony. If the newly
+                        // picked device can voice fewer than the four-voice baseline,
+                        // say so (non-blocking — the role and pattern are unchanged).
+                        let role = self.set.lanes[lane].role;
+                        let msg = if role == LibRole::Chords
+                            && new_profile.max_voices().is_some_and(|v| v < 4)
+                        {
+                            format!(
+                                "Lane {lane}: device → {} (⚠ {} voice{}; chords need up to 4)",
+                                new_profile.label,
+                                new_profile.max_voices().unwrap_or(1),
+                                if new_profile.max_voices() == Some(1) {
+                                    ""
+                                } else {
+                                    "s"
+                                },
+                            )
+                        } else {
+                            format!("Lane {lane}: device → {}", new_profile.label)
+                        };
+                        self.set_status(msg);
                     }
                 }
                 self.close_overlay();
@@ -4073,7 +4105,8 @@ impl App {
 
     fn set_focus(&mut self, i: usize) {
         self.focus = i;
-        self.lib_role = role_for_profile(self.set.lanes[i].profile.id);
+        // Library role follows the focused lane's persisted role (not its device).
+        self.lib_role = self.set.lanes[i].role;
         self.lib_col = LibCol::Genre;
         self.lib_genre = 0;
         self.lib_pattern = 0;
@@ -5072,10 +5105,12 @@ impl App {
         // shows saved user patterns regardless of focused-lane role. Only if non-empty.
         self.library.drums.shift_remove("User");
         self.library.bass.shift_remove("User");
+        self.library.chords.shift_remove("User");
         self.library.synth.shift_remove("User");
         if !user_pats.is_empty() {
             self.library.drums.insert("User".into(), user_pats.clone());
             self.library.bass.insert("User".into(), user_pats.clone());
+            self.library.chords.insert("User".into(), user_pats.clone());
             self.library.synth.insert("User".into(), user_pats);
         }
     }
@@ -5084,6 +5119,7 @@ impl App {
         match self.lib_role {
             LibRole::Drums => &self.library.drums,
             LibRole::Bass => &self.library.bass,
+            LibRole::Chords => &self.library.chords,
             LibRole::Synth => &self.library.synth,
         }
     }
@@ -5097,13 +5133,8 @@ impl App {
         if genre == "User" {
             PatternRef::User(pat.id.clone())
         } else {
-            let role = match self.lib_role {
-                LibRole::Drums => "drums",
-                LibRole::Bass => "bass",
-                LibRole::Synth => "synth",
-            };
             PatternRef::Vendored {
-                role: role.to_string(),
+                role: self.lib_role.as_str().to_string(),
                 genre: genre.to_string(),
                 name: pat.name.clone(),
             }
@@ -5344,16 +5375,6 @@ pub fn apply_fill(p: &mut Pattern) {
     }
 }
 
-fn role_for_profile(id: &str) -> LibRole {
-    // Map by profile id so each lane points at its own library:
-    // "t8-drums" -> Drums, "t8-bass" -> Bass, "s1" -> Synth.
-    match id {
-        "t8-drums" => LibRole::Drums,
-        "s1" => LibRole::Synth,
-        _ => LibRole::Bass, // "t8-bass" and any other melodic profile
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5428,6 +5449,7 @@ mod tests {
         );
 
         Library {
+            chords: crate::pattern::library::GenreMap::new(),
             records: Vec::new(),
             v2_index: Default::default(),
             families: Vec::new(),
@@ -5443,16 +5465,17 @@ mod tests {
     }
 
     #[test]
-    fn focus_wraps_around_three_lanes() {
+    fn focus_wraps_around_four_lanes() {
         let mut app = new_app();
         assert_eq!(app.focus, 0);
         app.apply(Action::FocusNext);
         app.apply(Action::FocusNext);
-        assert_eq!(app.focus, 2);
-        app.apply(Action::FocusNext); // wrap 2 -> 0
+        app.apply(Action::FocusNext);
+        assert_eq!(app.focus, 3);
+        app.apply(Action::FocusNext); // wrap 3 -> 0
         assert_eq!(app.focus, 0);
-        app.apply(Action::FocusPrev); // wrap 0 -> 2
-        assert_eq!(app.focus, 2);
+        app.apply(Action::FocusPrev); // wrap 0 -> 3
+        assert_eq!(app.focus, 3);
     }
 
     #[test]
@@ -5604,7 +5627,7 @@ mod tests {
     #[test]
     fn focusing_s1_lane_sets_lib_role_synth() {
         let mut app = new_app();
-        app.apply(Action::FocusLane(2)); // S-1 synth lane (profile id "s1")
+        app.apply(Action::FocusLane(3)); // S-1 synth lane is now index 3 (index 2 is J-6 chords)
         assert_eq!(app.lib_role, LibRole::Synth);
         app.apply(Action::FocusLane(1)); // T-8 bass
         assert_eq!(app.lib_role, LibRole::Bass);
@@ -6771,6 +6794,7 @@ mod tests {
             ],
         );
         let library = Library {
+            chords: crate::pattern::library::GenreMap::new(),
             records: Vec::new(),
             v2_index: Default::default(),
             families: Vec::new(),
@@ -6935,6 +6959,7 @@ mod tests {
         };
         drums.insert("techno".into(), vec![pat_a, pat_b]);
         let library = Library {
+            chords: crate::pattern::library::GenreMap::new(),
             records: Vec::new(),
             v2_index: Default::default(),
             families: Vec::new(),
@@ -7230,15 +7255,17 @@ mod tests {
     fn route_nav_lane_wraps_within_lane_count() {
         let mut app = new_app();
         app.apply(Action::OpenRouteEditor);
-        // default 3 lanes, start at 0
+        // default 4 lanes (DRUMS/BASS/CHORDS/SYNTH), start at 0
         app.apply(Action::RouteNavLane(1));
         assert_eq!(app.route_editor_lane, 1);
         app.apply(Action::RouteNavLane(1));
         assert_eq!(app.route_editor_lane, 2);
-        app.apply(Action::RouteNavLane(1)); // wrap 2 -> 0
+        app.apply(Action::RouteNavLane(1));
+        assert_eq!(app.route_editor_lane, 3);
+        app.apply(Action::RouteNavLane(1)); // wrap 3 -> 0
         assert_eq!(app.route_editor_lane, 0);
-        app.apply(Action::RouteNavLane(-1)); // wrap 0 -> 2
-        assert_eq!(app.route_editor_lane, 2);
+        app.apply(Action::RouteNavLane(-1)); // wrap 0 -> 3
+        assert_eq!(app.route_editor_lane, 3);
     }
 
     #[test]
@@ -7768,7 +7795,7 @@ mod tests {
         let mut app = app_with_scene();
         app.engine_playing = true;
         let cmds = app.apply(Action::RecallScene(0));
-        // Exactly one QueueScene carrying all 3 resolvable lanes at one quant.
+        // Exactly one QueueScene carrying all 4 resolvable lanes at one quant.
         let scene_cmds: Vec<&UiCommand> = cmds
             .iter()
             .filter(|c| matches!(c, UiCommand::QueueScene { .. }))
@@ -7782,12 +7809,12 @@ mod tests {
             assert_eq!(*quant, Quant::NextBar, "uses the current launch_quant");
             assert_eq!(
                 lanes.len(),
-                3,
-                "all 3 lanes queued together on ONE boundary"
+                4,
+                "all 4 lanes queued together on ONE boundary"
             );
             let mut idxs: Vec<usize> = lanes.iter().map(|(l, _, _)| *l).collect();
             idxs.sort_unstable();
-            assert_eq!(idxs, vec![0, 1, 2]);
+            assert_eq!(idxs, vec![0, 1, 2, 3]);
         }
         // No immediate LoadPattern while playing — everything is queued.
         assert!(
@@ -7915,7 +7942,7 @@ mod tests {
             .iter()
             .filter(|c| matches!(c, UiCommand::CancelQueue { .. }))
             .count();
-        assert_eq!(cancels, 3, "one CancelQueue per queued lane; got {cmds:?}");
+        assert_eq!(cancels, 4, "one CancelQueue per queued lane; got {cmds:?}");
     }
 
     #[test]
@@ -8894,6 +8921,7 @@ mod tests {
         drums.insert("User".to_string(), vec![user_pat]);
 
         let lib = Library {
+            chords: crate::pattern::library::GenreMap::new(),
             records: Vec::new(),
             v2_index: Default::default(),
             families: Vec::new(),
@@ -9030,6 +9058,7 @@ mod tests {
         let mut drums = GenreMap::new();
         drums.insert("techno".to_string(), vec![mk("A"), mk("B"), mk("C")]);
         let lib = Library {
+            chords: crate::pattern::library::GenreMap::new(),
             records: Vec::new(),
             v2_index: Default::default(),
             families: Vec::new(),
@@ -9324,6 +9353,7 @@ mod tests {
         };
         drums.insert("techno".to_string(), vec![pat]);
         let lib = Library {
+            chords: crate::pattern::library::GenreMap::new(),
             records: Vec::new(),
             v2_index: Default::default(),
             families: Vec::new(),
@@ -9379,6 +9409,7 @@ mod tests {
         };
         bass.insert("techno".to_string(), vec![pat]);
         let lib = Library {
+            chords: crate::pattern::library::GenreMap::new(),
             records: Vec::new(),
             v2_index: Default::default(),
             families: Vec::new(),
@@ -9417,7 +9448,7 @@ mod tests {
     }
 
     #[test]
-    fn launch_crate_entry_synth_targets_lane_2_when_stopped() {
+    fn launch_crate_entry_synth_targets_synth_lane_when_stopped() {
         use crate::pattern::library::GenreMap;
         use crate::pattern::model::PatternData;
         use crate::pattern::refs::PatternRef;
@@ -9434,6 +9465,7 @@ mod tests {
         };
         synth.insert("techno".to_string(), vec![pat]);
         let lib = Library {
+            chords: crate::pattern::library::GenreMap::new(),
             records: Vec::new(),
             v2_index: Default::default(),
             families: Vec::new(),
@@ -9464,8 +9496,8 @@ mod tests {
         let cmds = app.apply(Action::LaunchCrateEntry);
         assert!(
             cmds.iter()
-                .any(|c| matches!(c, UiCommand::LoadPattern { lane: 2, .. })),
-            "synth entry must load to lane 2; got {:?}",
+                .any(|c| matches!(c, UiCommand::LoadPattern { lane: 3, .. })),
+            "synth entry must load to the SYNTH lane (index 3, role-matched); got {:?}",
             cmds
         );
     }
@@ -9488,6 +9520,7 @@ mod tests {
         };
         drums.insert("techno".to_string(), vec![pat]);
         let lib = Library {
+            chords: crate::pattern::library::GenreMap::new(),
             records: Vec::new(),
             v2_index: Default::default(),
             families: Vec::new(),
@@ -11011,7 +11044,7 @@ mod tests {
             panic!("expected melodic data on lane 1");
         }
 
-        // ── Poly lane (S-1 SYNTH, lane 2) — verify flag only ──────────────
+        // ── Poly lane (J-6 CHORDS, lane 2, poly == true) — verify flag only ──────────────
         let app2 = new_app();
         assert!(
             app2.set.lanes[2].profile.poly,
@@ -11023,7 +11056,7 @@ mod tests {
 
     /// On a poly lane in note-input sub-mode, two different piano-key presses on the
     /// same step STACK into a 2-note chord, and the cursor does NOT advance. Drives the
-    /// real Action path. Lane 2 = S-1 SYNTH (poly == true).
+    /// real Action path. Lane 2 = J-6 CHORDS (poly == true).
     #[test]
     fn add_chord_note_stacks_on_poly_lane() {
         let mut app = new_app();

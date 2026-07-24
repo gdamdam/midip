@@ -87,12 +87,17 @@ pub fn save_prefs(dir: &Path, prefs: &Prefs) -> anyhow::Result<()> {
 }
 
 /// The current on-disk schema version. Increment when the format changes.
-pub const CURRENT_SET_VERSION: u32 = 4;
+pub const CURRENT_SET_VERSION: u32 = 5;
 
 /// On-disk lane: stores the profile *id* (not the static profile), rehydrated on load.
 #[derive(Serialize, Deserialize)]
 struct LaneDto {
     profile_id: String,
+    /// Persisted musical role (v5+). Hardware-neutral and independent of the
+    /// device profile. Absent in pre-v5 files → `None`; the loader infers it from
+    /// the profile so old three-lane sets load as DRUMS/BASS/SYNTH.
+    #[serde(default)]
+    role: Option<crate::pattern::library::LibRole>,
     pattern: Pattern,
     mute: bool,
     solo: bool,
@@ -147,6 +152,7 @@ impl From<&Lane> for LaneDto {
     fn from(lane: &Lane) -> Self {
         LaneDto {
             profile_id: lane.profile.id.to_string(),
+            role: Some(lane.role),
             pattern: lane.pattern.clone(),
             mute: lane.mute,
             solo: lane.solo,
@@ -243,6 +249,49 @@ fn migrate_v3_to_v4(v: &mut serde_json::Value) {
     v["version"] = serde_json::json!(4u32);
 }
 
+/// Migration: v4 → v5 (adds the persisted lane `role`). Backfills each lane's role
+/// from its device profile so an existing three-lane set loads as DRUMS/BASS/SYNTH
+/// — never gaining a CHORDS lane. A CHORDS lane is only ever created explicitly for
+/// fresh sets, so this migration never invents one.
+fn migrate_v4_to_v5(v: &mut serde_json::Value) {
+    v["version"] = serde_json::json!(5u32);
+    if let Some(lanes) = v["lanes"].as_array_mut() {
+        for lane in lanes {
+            if lane.get("role").and_then(|r| r.as_str()).is_none() {
+                let pid = lane["profile_id"].as_str().unwrap_or("");
+                let role = infer_lane_role_wire(pid);
+                lane["role"] = serde_json::json!(role);
+            }
+        }
+    }
+}
+
+/// Infer a lane's role wire-string from its device profile id, for the v4→v5
+/// backfill. Mirrors the legacy device→role mapping: drum-kind → drums, the
+/// T-8 bass part → bass, every other melodic device → synth. CHORDS is never
+/// inferred (pre-v5 sets had no chords lane).
+fn infer_lane_role_wire(profile_id: &str) -> &'static str {
+    match profile_by_id(profile_id) {
+        Some(p) if p.kind == LaneKind::Drums => "drums",
+        _ if profile_id == "t8-bass" => "bass",
+        _ => "synth",
+    }
+}
+
+/// Infer a lane's role from an already-resolved profile — the load-time safety
+/// net when a (possibly hand-written) file has no `role`. Same mapping as
+/// [`infer_lane_role_wire`].
+fn infer_lane_role(
+    profile: &crate::devices::profiles::DeviceProfile,
+) -> crate::pattern::library::LibRole {
+    use crate::pattern::library::LibRole;
+    match profile.kind {
+        LaneKind::Drums => LibRole::Drums,
+        LaneKind::Melodic if profile.id == "t8-bass" => LibRole::Bass,
+        LaneKind::Melodic => LibRole::Synth,
+    }
+}
+
 /// Run the migration ladder on a `serde_json::Value` before typed parse.
 /// Rejects files saved by a newer midip; upgrades older files in-place.
 pub fn migrate_set_value(v: &mut serde_json::Value) -> anyhow::Result<()> {
@@ -265,6 +314,7 @@ pub fn migrate_set_value(v: &mut serde_json::Value) -> anyhow::Result<()> {
             1 => migrate_v1_to_v2(v),
             2 => migrate_v2_to_v3(v),
             3 => migrate_v3_to_v4(v),
+            4 => migrate_v4_to_v5(v),
             _ => break,
         }
         cur += 1;
@@ -326,6 +376,9 @@ pub fn load_set_with_report(path: &Path) -> anyhow::Result<(Set, Vec<String>)> {
             }
         };
         lanes.push(Lane {
+            // Prefer the persisted role (v5+); fall back to inference for pre-v5
+            // files that slipped past migration or were hand-authored.
+            role: l.role.unwrap_or_else(|| infer_lane_role(&profile)),
             profile,
             pattern: l.pattern,
             mute: l.mute,
@@ -1082,7 +1135,7 @@ mod tests {
     #[test]
     fn load_and_resave_set_with_short_id_does_not_panic() {
         let dir = unique_dir("h6-short-id");
-        let profile_id = default_profiles()[0].id;
+        let profile_id = default_profiles()[0].1.id;
         let json = format!(
             r#"{{
                 "version": {ver},
@@ -1125,7 +1178,7 @@ mod tests {
     #[test]
     fn load_and_resave_set_with_multibyte_id_does_not_panic() {
         let dir = unique_dir("h6-multibyte-id");
-        let profile_id = default_profiles()[0].id;
+        let profile_id = default_profiles()[0].1.id;
         let json = format!(
             r#"{{
                 "version": {ver},
@@ -1318,7 +1371,7 @@ mod tests {
         // Write a raw v0 file (no version, no id) and verify load_set migrates it.
         let dir = unique_dir("old-file");
         // We need a valid profile_id; use one from default_profiles.
-        let profile_id = default_profiles()[0].id;
+        let profile_id = default_profiles()[0].1.id;
         let old_json = format!(
             r#"{{
                 "name": "legacy",
@@ -1571,7 +1624,7 @@ mod tests {
     fn old_set_json_without_route_loads_as_none() {
         use crate::pattern::model::LaneKind;
         let dir = unique_dir("t5-old-no-route");
-        let profile_id = default_profiles()[0].id;
+        let profile_id = default_profiles()[0].1.id;
         // Construct a JSON that has NO "route" key in the lane (old format)
         let old_json = format!(
             r#"{{
@@ -1603,8 +1656,8 @@ mod tests {
         );
         // effective_route must still derive from profile
         let r = loaded.lanes[0].effective_route();
-        assert_eq!(r.channel, default_profiles()[0].channel);
-        assert_eq!(r.port.stable_key, default_profiles()[0].port_match);
+        assert_eq!(r.channel, default_profiles()[0].1.channel);
+        assert_eq!(r.port.stable_key, default_profiles()[0].1.port_match);
         assert!(r.clock_out);
         assert_eq!(loaded.lanes[0].pattern.kind(), LaneKind::Drums);
 
@@ -2315,7 +2368,7 @@ mod tests {
     #[test]
     fn set_scenes_default_empty_on_old_json() {
         // A set JSON without a `scenes` field must deserialize with scenes == [].
-        let profile_id = default_profiles()[0].id;
+        let profile_id = default_profiles()[0].1.id;
         let old_json = format!(
             r#"{{
                 "version": 1,
@@ -2387,6 +2440,15 @@ mod tests {
                     transpose: 0,
                     octave: 0,
                 },
+                // One assignment per lane (four now): scene assignments are positional,
+                // and validate-and-repair pads any scene to the set's lane count.
+                LaneAssignment {
+                    pattern: PatternRef::User(set.lanes[3].pattern.id.clone()),
+                    mute: false,
+                    solo: false,
+                    transpose: 0,
+                    octave: 0,
+                },
             ],
         }];
 
@@ -2397,7 +2459,7 @@ mod tests {
         let s = &loaded.scenes[0];
         assert_eq!(s.id, scene_id, "scene id must be stable");
         assert_eq!(s.name, "Scene 1");
-        assert_eq!(s.assignments.len(), 3);
+        assert_eq!(s.assignments.len(), 4);
         assert!(s.assignments[0].mute);
         assert_eq!(s.assignments[1].transpose, 3);
         assert_eq!(s.assignments[1].octave, 1);
@@ -2527,8 +2589,8 @@ mod tests {
     fn old_lane_json_without_scale_loads_chromatic() {
         use crate::music::scale::Scale;
         let dir = unique_dir("m5a-old-no-scale");
-        let profile_id = default_profiles()[1].id; // melodic lane profile
-                                                   // Old-format JSON: no `scale` or `root` keys in the lane object.
+        let profile_id = default_profiles()[1].1.id; // melodic lane profile
+                                                     // Old-format JSON: no `scale` or `root` keys in the lane object.
         let old_json = format!(
             r#"{{
                 "name": "legacy scale test",
@@ -2582,7 +2644,7 @@ mod tests {
     fn v1_set_without_chains_loads_with_empty_chains() {
         let mut v: serde_json::Value = serde_json::from_str(MINIMAL_V1_SET_JSON).unwrap();
         migrate_set_value(&mut v).unwrap();
-        assert_eq!(v["version"], 4, "v1 must migrate to version 4");
+        assert_eq!(v["version"], 5, "v1 must migrate to current version 5");
         // Deserialize into SetDto — missing `chains` key must default to [].
         let dto: SetDto = serde_json::from_value(v).unwrap();
         assert!(
@@ -2627,7 +2689,7 @@ mod tests {
     fn v2_set_without_m8_fields_loads_with_defaults() {
         let mut v: serde_json::Value = serde_json::from_str(MINIMAL_V2_SET_JSON).unwrap();
         migrate_set_value(&mut v).unwrap();
-        assert_eq!(v["version"], 4, "v2 must migrate to version 4");
+        assert_eq!(v["version"], 5, "v2 must migrate to current version 5");
         // Deserialize into SetDto — missing M8 keys must default cleanly.
         let dto: SetDto = serde_json::from_value(v).unwrap();
         assert!(
@@ -2734,15 +2796,15 @@ mod tests {
     }"#;
 
     #[test]
-    fn set_version_is_4() {
-        assert_eq!(CURRENT_SET_VERSION, 4);
+    fn set_version_is_5() {
+        assert_eq!(CURRENT_SET_VERSION, 5);
     }
 
     #[test]
     fn v3_set_without_clock_in_port_loads_with_none() {
         let mut v: serde_json::Value = serde_json::from_str(MINIMAL_V3_SET_JSON).unwrap();
         migrate_set_value(&mut v).unwrap();
-        assert_eq!(v["version"], 4, "v3 must migrate to version 4");
+        assert_eq!(v["version"], 5, "v3 must migrate to current version 5");
         let dto: SetDto = serde_json::from_value(v).unwrap();
         assert!(
             dto.clock_in_port.is_none(),

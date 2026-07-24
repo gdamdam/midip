@@ -1,0 +1,113 @@
+{
+  "schema": "midip.pattern",
+  "version": 2,
+  "factory_id": "chords.utility.min9-neutral-vamp",
+  "role": "chords",
+  "kind": "melodic",
+  "genre": "utility",
+  "name": "Min9 Neutral Vamp",
+  "desc": "Neutral one-bar minor-ninth vamp (i9 to bVII9) usable across genres.",
+  "length": 16,
+  "steps": [
+    [
+      {
+        "semi": 0,
+        "vel": 1.0,
+        "slide": false,
+        "len": 4.0
+      },
+      {
+        "semi": 3,
+        "vel": 1.0,
+        "slide": false,
+        "len": 4.0
+      },
+      {
+        "semi": 10,
+        "vel": 1.0,
+        "slide": false,
+        "len": 4.0
+      },
+      {
+        "semi": 14,
+        "vel": 1.0,
+        "slide": false,
+        "len": 4.0
+      }
+    ],
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    [
+      {
+        "semi": -2,
+        "vel": 1.15,
+        "slide": false,
+        "len": 4.0
+      },
+      {
+        "semi": 2,
+        "vel": 1.15,
+        "slide": false,
+        "len": 4.0
+      },
+      {
+        "semi": 9,
+        "vel": 1.15,
+        "slide": false,
+        "len": 4.0
+      },
+      {
+        "semi": 12,
+        "vel": 1.15,
+        "slide": false,
+        "len": 4.0
+      }
+    ],
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+  ],
+  "metadata": {
+    "bpm_min": 90,
+    "bpm_max": 130,
+    "feel": "straight",
+    "timing": "straight",
+    "energy": "mid",
+    "density": "core",
+    "tags": [
+      "utility",
+      "vamp",
+      "min9",
+      "chords"
+    ],
+    "harmonic": "min9",
+    "chord_poly": "chord",
+    "subgenre": "utility",
+    "compatible_devices": [
+      "j-6",
+      "s1",
+      "minilogue-xd",
+      "microfreak",
+      "generic-poly-synth"
+    ],
+    "function": "core"
+  },
+  "provenance": {
+    "source": "midip factory",
+    "author": "midip",
+    "pack": "chords-v1",
+    "license": "CC0-1.0",
+    "references": [
+      "https://www.roland.com/GLOBAL/products/j-6/"
+    ]
+  }
+}

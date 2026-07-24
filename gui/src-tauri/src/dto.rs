@@ -196,9 +196,14 @@ pub struct LaneDto {
     pub index: usize,
     /// "drums" | "melodic"
     pub kind: String,
-    /// device profile id, e.g. "t8-drums" | "t8-bass" | "s1"
+    /// Persisted musical role: "drums" | "bass" | "chords" | "synth". Drives the
+    /// lane's accent color and label — independent of the device.
     pub role: String,
+    /// Uppercase role label shown as the lane's primary name (DRUMS/BASS/CHORDS/SYNTH).
     pub label: String,
+    /// Manufacturer-qualified device profile label (e.g. "Roland J-6"), shown as a
+    /// secondary sublabel so the device stays visible but never names the lane.
+    pub device_label: String,
     pub pattern_name: String,
     pub connected: bool,
     /// Connected port name, or the profile's port-match hint when disconnected.
@@ -348,8 +353,9 @@ impl Snapshot {
                 LaneDto {
                     index: i,
                     kind: kind_str(lane.pattern.kind()),
-                    role: lane.profile.id.to_string(),
-                    label: lane.profile.label.to_string(),
+                    role: lane.role.as_str().to_string(),
+                    label: lane.role.label().to_string(),
+                    device_label: lane.profile.label.to_string(),
                     pattern_name: lane.pattern.name.clone(),
                     connected,
                     device,
@@ -497,6 +503,7 @@ impl LibraryDto {
             roles: vec![
                 role_dto(lib, "drums", LibRole::Drums, &lib.drums, favs),
                 role_dto(lib, "bass", LibRole::Bass, &lib.bass, favs),
+                role_dto(lib, "chords", LibRole::Chords, &lib.chords, favs),
                 role_dto(lib, "synth", LibRole::Synth, &lib.synth, favs),
             ],
         }
@@ -778,12 +785,7 @@ pub struct QueryDto {
 }
 
 fn parse_role(s: &str) -> Option<LibRole> {
-    match s {
-        "drums" => Some(LibRole::Drums),
-        "bass" => Some(LibRole::Bass),
-        "synth" => Some(LibRole::Synth),
-        _ => None,
-    }
+    LibRole::from_wire(s)
 }
 
 fn parse_function(s: &str) -> Option<PatternFunction> {
@@ -804,9 +806,21 @@ impl QueryDto {
         q.role = self.role.as_deref().and_then(parse_role);
         q.genre = self.genre.clone().filter(|s| !s.is_empty());
         q.function = self.function.as_deref().and_then(parse_function);
-        q.feel = self.feel.as_deref().map(Feel::parse).filter(|f| *f != Feel::Unknown);
-        q.energy = self.energy.as_deref().map(Energy::parse).filter(|e| *e != Energy::Unknown);
-        q.density = self.density.as_deref().map(Density::parse).filter(|d| *d != Density::Unknown);
+        q.feel = self
+            .feel
+            .as_deref()
+            .map(Feel::parse)
+            .filter(|f| *f != Feel::Unknown);
+        q.energy = self
+            .energy
+            .as_deref()
+            .map(Energy::parse)
+            .filter(|e| *e != Energy::Unknown);
+        q.density = self
+            .density
+            .as_deref()
+            .map(Density::parse)
+            .filter(|d| *d != Density::Unknown);
         q.poly = self.poly.as_deref().and_then(|s| match s {
             "mono" => Some(Poly::Mono),
             "poly" => Some(Poly::Poly),
@@ -828,11 +842,7 @@ pub fn library_query(lib: &Library, favs: &Favorites, qdto: &QueryDto) -> Vec<Re
         .into_iter()
         .map(|i| {
             let r = &lib.records()[i];
-            let role = match r.role {
-                LibRole::Drums => "drums",
-                LibRole::Bass => "bass",
-                LibRole::Synth => "synth",
-            };
+            let role = r.role.as_str();
             let fam_id = lib
                 .family_of(r.role, &r.genre, &r.name)
                 .map(|(f, _)| f.id.clone());
@@ -929,7 +939,12 @@ mod tests {
         }
 
         // Text query is case-insensitive and hits a known genre token.
-        let q = QueryDto { text: "TRAP".into(), ..Default::default() };
-        assert!(library_query(&lib, &favs, &q).iter().any(|r| r.genre == "trap"));
+        let q = QueryDto {
+            text: "TRAP".into(),
+            ..Default::default()
+        };
+        assert!(library_query(&lib, &favs, &q)
+            .iter()
+            .any(|r| r.genre == "trap"));
     }
 }

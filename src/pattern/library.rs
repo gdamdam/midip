@@ -11,11 +11,68 @@ use crate::pattern::model::{DrumHit, MelodicNote, MelodicStep, Pattern, PatternD
 /// genre name -> patterns, preserving the file's genre order.
 pub type GenreMap = IndexMap<String, Vec<Pattern>>;
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+/// The musical job a lane/pattern performs. This is the hardware-neutral role
+/// taxonomy: it is independent of any device profile (a Chords lane may use a
+/// J-6, Minilogue XD, MicroFreak, or a generic poly synth). Serialized as the
+/// lowercase wire string ("drums"/"bass"/"chords"/"synth"); also persisted on a
+/// lane (see `LaneDto.role`).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum LibRole {
     Drums,
     Bass,
+    Chords,
     Synth,
+}
+
+impl LibRole {
+    /// Every role, in canonical lane order (DRUMS, BASS, CHORDS, SYNTH).
+    pub const ALL: [LibRole; 4] = [
+        LibRole::Drums,
+        LibRole::Bass,
+        LibRole::Chords,
+        LibRole::Synth,
+    ];
+
+    /// The lowercase wire string used in `PatternRef`, factory ids, and the GUI DTO.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            LibRole::Drums => "drums",
+            LibRole::Bass => "bass",
+            LibRole::Chords => "chords",
+            LibRole::Synth => "synth",
+        }
+    }
+
+    /// Parse a wire string back into a role; `None` for anything unrecognized.
+    pub fn from_wire(s: &str) -> Option<LibRole> {
+        match s {
+            "drums" => Some(LibRole::Drums),
+            "bass" => Some(LibRole::Bass),
+            "chords" => Some(LibRole::Chords),
+            "synth" => Some(LibRole::Synth),
+            _ => None,
+        }
+    }
+
+    /// Uppercase label for lane strips / editor headers (DRUMS, BASS, CHORDS, SYNTH).
+    pub fn label(&self) -> &'static str {
+        match self {
+            LibRole::Drums => "DRUMS",
+            LibRole::Bass => "BASS",
+            LibRole::Chords => "CHORDS",
+            LibRole::Synth => "SYNTH",
+        }
+    }
+
+    /// The data shape patterns in this role use. Drums → drum data; every melodic
+    /// role (bass/chords/synth) → melodic data.
+    pub fn lane_kind(&self) -> crate::pattern::model::LaneKind {
+        match self {
+            LibRole::Drums => crate::pattern::model::LaneKind::Drums,
+            _ => crate::pattern::model::LaneKind::Melodic,
+        }
+    }
 }
 
 /// The performance function a pattern serves within its family (Phase 3).
@@ -67,6 +124,9 @@ pub struct Family {
 pub struct Library {
     pub drums: GenreMap,
     pub bass: GenreMap,
+    /// Polyphonic chord patterns (role: chords). Populated from v2 `chords-*.json`
+    /// files; there is no legacy device-shaped file for this role.
+    pub chords: GenreMap,
     pub synth: GenreMap,
     /// Performance families (Phase 3). Additive metadata over the patterns above;
     /// does not affect loading or `PatternRef` resolution.
@@ -297,6 +357,9 @@ pub fn parse_catalog(
         LibRole::Drums => root.t8.drum_genres,
         LibRole::Bass => root.t8.bass_genres,
         LibRole::Synth => root.s1.genres,
+        // Chords is a v2-only role — patterns carry their own names, so there is
+        // no legacy catalog section to overlay.
+        LibRole::Chords => Vec::new(),
     };
     let mut map = HashMap::new();
     for g in genres {
@@ -381,11 +444,9 @@ pub fn parse_families(json: &str) -> Vec<Family> {
     root.families
         .into_iter()
         .filter_map(|rf| {
-            let role = match rf.role.as_str() {
-                "drums" => LibRole::Drums,
-                "bass" => LibRole::Bass,
-                "synth" => LibRole::Synth,
-                _ => return None,
+            let role = match LibRole::from_wire(&rf.role) {
+                Some(r) => r,
+                None => return None,
             };
             Some(Family {
                 id: rf.id,
@@ -476,6 +537,8 @@ impl Library {
         let mut lib = Library {
             drums,
             bass,
+            // Chords has no legacy file; it is filled entirely from v2 below.
+            chords: GenreMap::new(),
             synth,
             families,
             v2_index: V2Index::default(),
@@ -504,6 +567,7 @@ impl Library {
         Library {
             drums: GenreMap::new(),
             bass: GenreMap::new(),
+            chords: GenreMap::new(),
             synth: GenreMap::new(),
             families: Vec::new(),
             v2_index: V2Index::default(),
@@ -524,6 +588,7 @@ impl Library {
             let map = match item.role {
                 LibRole::Drums => &mut self.drums,
                 LibRole::Bass => &mut self.bass,
+                LibRole::Chords => &mut self.chords,
                 LibRole::Synth => &mut self.synth,
             };
             let bucket = map.entry(item.genre.clone()).or_default();
@@ -583,12 +648,7 @@ impl Library {
     /// patterns so old saved `PatternRef`s keep working. `role` is the wire string
     /// ("drums"/"bass"/"synth").
     pub fn resolve_alias_name(&self, role: &str, genre: &str, name: &str) -> Option<&str> {
-        let role = match role {
-            "drums" => LibRole::Drums,
-            "bass" => LibRole::Bass,
-            "synth" => LibRole::Synth,
-            _ => return None,
-        };
+        let role = LibRole::from_wire(role)?;
         self.v2_index
             .aliases
             .iter()
@@ -600,10 +660,21 @@ impl Library {
     /// when the direct name misses (so a renamed pattern still resolves by its old
     /// name). This is the single consult point for alias-aware resolution.
     pub fn find_aliased(&self, role: &str, genre: &str, name: &str) -> Option<&Pattern> {
-        self.find(role, genre, name).or_else(|| {
-            self.resolve_alias_name(role, genre, name)
-                .and_then(|canon| self.find(role, genre, canon))
-        })
+        self.find(role, genre, name)
+            .or_else(|| {
+                self.resolve_alias_name(role, genre, name)
+                    .and_then(|canon| self.find(role, genre, canon))
+            })
+            // Cross-role migration bridge: chord patterns that used to ship under
+            // the `synth` role were reclassified to `chords` (same genre+name).
+            // An old saved `PatternRef` with role "synth" must still resolve.
+            .or_else(|| {
+                if role == "synth" {
+                    self.find("chords", genre, name)
+                } else {
+                    None
+                }
+            })
     }
 
     /// All performance families.
@@ -637,6 +708,7 @@ impl Library {
         for (role, map) in [
             (LibRole::Drums, &self.drums),
             (LibRole::Bass, &self.bass),
+            (LibRole::Chords, &self.chords),
             (LibRole::Synth, &self.synth),
         ] {
             for (genre, pats) in map {
@@ -732,16 +804,19 @@ impl Library {
         let map = match role {
             LibRole::Drums => &self.drums,
             LibRole::Bass => &self.bass,
+            LibRole::Chords => &self.chords,
             LibRole::Synth => &self.synth,
         };
         map.keys().map(|s| s.as_str()).collect()
     }
 
-    /// Look up a pattern by (role, genre, name). role must be "drums", "bass", or "synth".
+    /// Look up a pattern by (role, genre, name). role must be "drums", "bass",
+    /// "chords", or "synth".
     pub fn find(&self, role: &str, genre: &str, name: &str) -> Option<&Pattern> {
         let map = match role {
             "drums" => &self.drums,
             "bass" => &self.bass,
+            "chords" => &self.chords,
             "synth" => &self.synth,
             _ => return None,
         };
@@ -754,6 +829,7 @@ impl Library {
         for (role, map) in [
             ("drums", &self.drums),
             ("bass", &self.bass),
+            ("chords", &self.chords),
             ("synth", &self.synth),
         ] {
             for (genre, patterns) in map {
@@ -1028,11 +1104,7 @@ mod tests {
             lib.families().len()
         );
         for fam in lib.families() {
-            let role = match fam.role {
-                LibRole::Drums => "drums",
-                LibRole::Bass => "bass",
-                LibRole::Synth => "synth",
-            };
+            let role = fam.role.as_str();
             assert!(
                 fam.members
                     .iter()

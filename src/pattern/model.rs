@@ -289,6 +289,10 @@ impl Pattern {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Lane {
+    /// The musical job this lane performs (DRUMS/BASS/CHORDS/SYNTH). Persisted and
+    /// hardware-neutral: it is the source of truth for role, never inferred from
+    /// `profile`. A CHORDS lane may run any compatible polyphonic device.
+    pub role: crate::pattern::library::LibRole,
     pub profile: DeviceProfile,
     pub pattern: Pattern,
     pub mute: bool,
@@ -545,17 +549,21 @@ impl Set {
         }
     }
 
-    /// A fresh set: bpm 120, swing 0.5, one empty 16-step lane per profile.
-    /// Drum-kind profiles get an empty drum pattern; melodic-kind get empty melodic.
-    pub fn default_set(profiles: [DeviceProfile; 3]) -> Set {
-        let lanes = profiles
-            .iter()
-            .map(|&profile| {
-                let pattern = match profile.kind {
+    /// A fresh set: bpm 120, swing 0.5, one empty 16-step lane per (role, profile).
+    /// The lane's *role* (not its device) decides the pattern data shape: drums →
+    /// empty drum pattern, every melodic role → empty melodic. This is the only
+    /// place the role→lane ordering is fixed (the default template); runtime
+    /// targeting always resolves lanes by their persisted role.
+    pub fn default_set(lanes: Vec<(crate::pattern::library::LibRole, DeviceProfile)>) -> Set {
+        let lanes = lanes
+            .into_iter()
+            .map(|(role, profile)| {
+                let pattern = match role.lane_kind() {
                     LaneKind::Drums => Pattern::empty_drums(16),
                     LaneKind::Melodic => Pattern::empty_melodic(16),
                 };
                 Lane {
+                    role,
                     profile,
                     pattern,
                     mute: false,
@@ -901,7 +909,8 @@ mod tests {
     fn effective_route_defaults_from_profile_when_none() {
         let profiles = crate::devices::profiles::default_profiles();
         let lane = Lane {
-            profile: profiles[0], // T8_DRUMS: port_match="T-8", channel=9
+            role: crate::pattern::library::LibRole::Drums,
+            profile: profiles[0].1, // T8_DRUMS: port_match="T-8", channel=9
             pattern: Pattern::empty_drums(4),
             mute: false,
             solo: false,
@@ -915,9 +924,9 @@ mod tests {
             clock_div: None,
         };
         let r = lane.effective_route();
-        assert_eq!(r.channel, profiles[0].channel);
-        assert_eq!(r.port.stable_key, profiles[0].port_match);
-        assert_eq!(r.port.name, profiles[0].port_match);
+        assert_eq!(r.channel, profiles[0].1.channel);
+        assert_eq!(r.port.stable_key, profiles[0].1.port_match);
+        assert_eq!(r.port.name, profiles[0].1.port_match);
         assert!(r.clock_out, "default clock_out must be true");
     }
 
@@ -933,7 +942,8 @@ mod tests {
             clock_out: false,
         };
         let lane = Lane {
-            profile: profiles[0],
+            role: crate::pattern::library::LibRole::Drums,
+            profile: profiles[0].1,
             pattern: Pattern::empty_drums(4),
             mute: false,
             solo: false,
@@ -955,7 +965,8 @@ mod tests {
         let profiles = crate::devices::profiles::default_profiles();
         // No route → profile channel.
         let lane = Lane {
-            profile: profiles[0], // channel 9
+            role: crate::pattern::library::LibRole::Drums,
+            profile: profiles[0].1, // channel 9
             pattern: Pattern::empty_drums(4),
             mute: false,
             solo: false,
@@ -968,7 +979,7 @@ mod tests {
             swing: None,
             clock_div: None,
         };
-        assert_eq!(lane.route_channel(), profiles[0].channel);
+        assert_eq!(lane.route_channel(), profiles[0].1.channel);
 
         // Explicit route → route channel, overriding the profile.
         let mut lane2 = lane.clone();
@@ -981,7 +992,7 @@ mod tests {
             clock_out: true,
         });
         assert_eq!(lane2.route_channel(), 5);
-        assert_ne!(lane2.route_channel(), profiles[0].channel);
+        assert_ne!(lane2.route_channel(), profiles[0].1.channel);
     }
 
     #[test]
@@ -1002,16 +1013,17 @@ mod tests {
     }
 
     #[test]
-    fn default_set_has_three_init_lanes_bpm120_swing_half() {
+    fn default_set_has_four_init_lanes_bpm120_swing_half() {
         let profiles = crate::devices::profiles::default_profiles();
         let set = Set::default_set(profiles);
         assert_eq!(set.bpm, 120.0);
         assert_eq!(set.swing, 0.5);
-        assert_eq!(set.lanes.len(), 3);
-        // Drums lane is drum-kind; the two melodic lanes are melodic-kind.
+        assert_eq!(set.lanes.len(), 4);
+        // Order: drums=0 (drum-kind); bass=1, chords=2, synth=3 (all melodic-kind).
         assert_eq!(set.lanes[0].pattern.kind(), LaneKind::Drums);
         assert_eq!(set.lanes[1].pattern.kind(), LaneKind::Melodic);
         assert_eq!(set.lanes[2].pattern.kind(), LaneKind::Melodic);
+        assert_eq!(set.lanes[3].pattern.kind(), LaneKind::Melodic);
         assert!(set.lanes.iter().all(|l| !l.mute && !l.solo));
     }
 
@@ -1112,7 +1124,8 @@ mod tests {
         let profiles = crate::devices::profiles::default_profiles();
         // Use the bass profile (profiles[1]) which has root_note=45.
         let lane = Lane {
-            profile: profiles[1],
+            role: crate::pattern::library::LibRole::Bass,
+            profile: profiles[1].1,
             pattern: Pattern::empty_melodic(4),
             mute: false,
             solo: false,
@@ -1129,7 +1142,7 @@ mod tests {
         assert_eq!(lane.root, None);
         assert_eq!(
             lane.effective_root(),
-            profiles[1].root_note,
+            profiles[1].1.root_note,
             "effective_root must fall back to profile.root_note when root is None"
         );
     }
@@ -1138,7 +1151,8 @@ mod tests {
     fn effective_root_uses_override_when_set() {
         let profiles = crate::devices::profiles::default_profiles();
         let lane = Lane {
-            profile: profiles[1], // root_note=45
+            role: crate::pattern::library::LibRole::Bass,
+            profile: profiles[1].1, // root_note=45
             pattern: Pattern::empty_melodic(4),
             mute: false,
             solo: false,
@@ -1195,7 +1209,8 @@ mod tests {
     fn sample_lane() -> Lane {
         let profiles = crate::devices::profiles::default_profiles();
         Lane {
-            profile: profiles[0],
+            role: crate::pattern::library::LibRole::Drums,
+            profile: profiles[0].1,
             pattern: Pattern::empty_drums(16),
             mute: false,
             solo: false,

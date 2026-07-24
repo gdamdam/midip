@@ -1,3 +1,4 @@
+use crate::pattern::library::LibRole;
 use crate::pattern::model::LaneKind;
 use std::path::Path;
 use std::sync::OnceLock;
@@ -10,9 +11,12 @@ pub struct DrumVoice {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DeviceProfile {
-    pub id: &'static str,         // "t8-drums" | "t8-bass" | "s1"
-    pub label: &'static str,      // "T-8 DRUM" | "T-8 BASS" | "S-1 SYNTH"
-    pub port_match: &'static str, // "T-8" | "S-1"
+    // Canonical stored ids stay short ("t8-drums" | "t8-bass" | "j-6" | "s1") for
+    // save-file/user-catalog compatibility; manufacturer-qualified aliases
+    // ("roland-t8-drums", …) resolve via `resolve_device_alias`.
+    pub id: &'static str,
+    pub label: &'static str, // manufacturer-qualified, e.g. "Roland T-8 Drums"
+    pub port_match: &'static str, // "T-8" | "J-6" | "S-1"
     pub kind: LaneKind,
     pub channel: u8,                       // 0-indexed
     pub root_note: u8,                     // melodic base (45); 0 for drums
@@ -22,10 +26,27 @@ pub struct DeviceProfile {
     pub drum_voices: &'static [DrumVoice], // non-empty for drums, empty for melodic
     /// Whether this lane can hold more than one note per step (chord-capable).
     /// false → mono: the edit layer enforces at most one note per step.
-    /// true  → poly: stacking is allowed (chord entry added in M5b Task 4).
+    /// true  → poly: stacking is allowed.
     /// Drum profiles: always false here — drum steps are already poly via
     /// Vec<DrumHit> and this field is irrelevant for drum lanes.
     pub poly: bool,
+    /// Maximum simultaneous notes this device can voice, when known. `None` means
+    /// unspecified (treat as unbounded for a poly device). Expresses hardware
+    /// capability — e.g. the Roland J-6 is four-voice — without silently
+    /// truncating; see `max_voices()`.
+    pub max_poly: Option<u8>,
+}
+
+impl DeviceProfile {
+    /// Effective ceiling on simultaneous notes: a mono device is always 1; a poly
+    /// device uses its `max_poly` when declared, else `None` (unbounded/unknown).
+    pub fn max_voices(&self) -> Option<usize> {
+        if !self.poly {
+            Some(1)
+        } else {
+            self.max_poly.map(|n| n as usize)
+        }
+    }
 }
 
 /// Standard T-8 kit voices, in editor-row order, derived from notes present in the library.
@@ -74,7 +95,7 @@ pub const DRUM_VOICES: &[DrumVoice] = &[
 
 pub const T8_DRUMS: DeviceProfile = DeviceProfile {
     id: "t8-drums",
-    label: "T-8 DRUM",
+    label: "Roland T-8 Drums",
     port_match: "T-8",
     kind: LaneKind::Drums,
     channel: 9,
@@ -85,11 +106,12 @@ pub const T8_DRUMS: DeviceProfile = DeviceProfile {
     drum_voices: DRUM_VOICES,
     // Irrelevant for drum lanes — drum steps are poly via Vec<DrumHit>.
     poly: false,
+    max_poly: None,
 };
 
 pub const T8_BASS: DeviceProfile = DeviceProfile {
     id: "t8-bass",
-    label: "T-8 BASS",
+    label: "Roland T-8 Bass",
     port_match: "T-8",
     kind: LaneKind::Melodic,
     channel: 1,
@@ -100,11 +122,32 @@ pub const T8_BASS: DeviceProfile = DeviceProfile {
     drum_voices: &[],
     // Mono: T-8 BASS has slide and is always single-note per step.
     poly: false,
+    max_poly: Some(1),
+};
+
+/// Roland J-6 — the default CHORDS device. A four-voice polyphonic chord machine;
+/// `max_poly: Some(4)` states that capability so factory chord voicings never
+/// exceed what it can sound. Not a builtin (stays user-shadowable via the catalog),
+/// but referenced directly by `default_profiles` for a fresh set's CHORDS lane.
+pub const J6: DeviceProfile = DeviceProfile {
+    id: "j-6",
+    label: "Roland J-6",
+    port_match: "J-6",
+    kind: LaneKind::Melodic,
+    channel: 0,
+    root_note: 48,
+    gate_fraction: 0.9,
+    drum_gate_fraction: 0.0,
+    send_clock: true,
+    drum_voices: &[],
+    // Poly: the J-6 plays chords, up to four voices.
+    poly: true,
+    max_poly: Some(4),
 };
 
 pub const S1: DeviceProfile = DeviceProfile {
     id: "s1",
-    label: "S-1 SYNTH",
+    label: "Roland S-1",
     port_match: "S-1",
     kind: LaneKind::Melodic,
     channel: 0,
@@ -113,17 +156,42 @@ pub const S1: DeviceProfile = DeviceProfile {
     drum_gate_fraction: 0.0,
     send_clock: true,
     drum_voices: &[],
-    // Poly: S-1 SYNTH supports chords (chord-stacking added in M5b Task 4).
+    // Poly: S-1 SYNTH supports chords.
     poly: true,
+    max_poly: None,
 };
 
-pub fn default_profiles() -> [DeviceProfile; 3] {
-    [T8_DRUMS, T8_BASS, S1]
+/// The role-aware default four-lane template for a fresh set: DRUMS→T-8 drums,
+/// BASS→T-8 bass, CHORDS→J-6, SYNTH→S-1. The lane *role* is persisted and
+/// hardware-neutral; these are only the default devices and stay replaceable.
+pub fn default_profiles() -> Vec<(LibRole, DeviceProfile)> {
+    vec![
+        (LibRole::Drums, T8_DRUMS),
+        (LibRole::Bass, T8_BASS),
+        (LibRole::Chords, J6),
+        (LibRole::Synth, S1),
+    ]
 }
 
 /// The three built-in profiles, always present and reserved: their ids cannot
-/// be shadowed by the catalog file. A fresh set is `[T8_DRUMS, T8_BASS, S1]`.
+/// be shadowed by the catalog file. (J-6 is shipped via the catalog so it stays
+/// user-replaceable; a fresh CHORDS lane still uses `J6` by default.)
 const BUILTINS: [DeviceProfile; 3] = [T8_DRUMS, T8_BASS, S1];
+
+/// Map a manufacturer-qualified device alias to its canonical stored id. The
+/// canonical ids stay short to avoid migrating saved sets, user device catalogs,
+/// and the 40+ pattern `compatible_devices` lists; these aliases let the
+/// canonical-style ids (`roland-t8-drums`, `roland-j6`, …) resolve too. A full
+/// canonical-ID migration is deferred as follow-up.
+pub fn resolve_device_alias(id: &str) -> &str {
+    match id {
+        "roland-t8-drums" => "t8-drums",
+        "roland-t8-bass" => "t8-bass",
+        "roland-j6" => "j-6",
+        "roland-s1" => "s1",
+        other => other,
+    }
+}
 
 /// Additional shipped device profiles, embedded at compile time so the catalog
 /// is always available — including in unit tests and when the assets dir is
@@ -154,6 +222,8 @@ struct DeviceProfileDto {
     drum_voices: Vec<DrumVoiceDto>,
     #[serde(default)]
     poly: bool,
+    #[serde(default)]
+    max_poly: Option<u8>,
 }
 
 #[derive(serde::Deserialize)]
@@ -199,6 +269,7 @@ fn to_profile(dto: DeviceProfileDto) -> DeviceProfile {
         send_clock: dto.send_clock,
         drum_voices: Box::leak(voices.into_boxed_slice()),
         poly: dto.poly,
+        max_poly: dto.max_poly,
     }
 }
 
@@ -252,6 +323,7 @@ pub fn init_user_catalog(data_dir: &Path) {
 }
 
 pub fn profile_by_id(id: &str) -> Option<DeviceProfile> {
+    let id = resolve_device_alias(id);
     catalog().iter().copied().find(|p| p.id == id)
 }
 
@@ -441,9 +513,9 @@ mod tests {
         ] }"#;
         let cat = build_catalog(Some(user));
 
-        // Built-in id is reserved: the real T-8 DRUM profile wins, not the user's.
+        // Built-in id is reserved: the real T-8 Drums profile wins, not the user's.
         let t8 = cat.iter().find(|p| p.id == "t8-drums").unwrap();
-        assert_eq!(t8.label, "T-8 DRUM");
+        assert_eq!(t8.label, "Roland T-8 Drums");
         assert_eq!(t8.channel, 9);
 
         // A genuinely new user profile is added.

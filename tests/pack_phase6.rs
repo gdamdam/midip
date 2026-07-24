@@ -137,7 +137,8 @@ fn amapiano_log_drum_is_a_gliding_bass_line() {
 fn poly_synth_packs_carry_chords() {
     let l = lib();
     // Amapiano jazzy keys must contain a genuine chord step (2+ simultaneous notes).
-    let p = l.find("synth", "amapiano", "Jazzy Keys").unwrap();
+    // Reclassified from role "synth" to the polyphonic "chords" role.
+    let p = l.find("chords", "amapiano", "Jazzy Keys").unwrap();
     let has_chord = match &p.data {
         PatternData::Melodic(steps) => steps.iter().any(|s| s.len() >= 2),
         _ => false,

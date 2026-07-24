@@ -1648,6 +1648,7 @@ mod sequencer_tests {
             });
         }
         Lane {
+            role: crate::pattern::library::LibRole::Drums,
             profile: T8_DRUMS,
             pattern: Pattern {
                 name: "four".to_string(),
@@ -1680,6 +1681,11 @@ mod sequencer_tests {
             .map(|n| MelodicStep::from(n.into_iter().collect::<Vec<_>>()))
             .collect();
         Lane {
+            role: if profile_bass {
+                crate::pattern::library::LibRole::Bass
+            } else {
+                crate::pattern::library::LibRole::Synth
+            },
             profile: if profile_bass { T8_BASS } else { S1 },
             pattern: Pattern {
                 name: "mel".to_string(),
@@ -2017,6 +2023,7 @@ mod sequencer_tests {
             cond: TrigCond::Always,
         });
         Lane {
+            role: crate::pattern::library::LibRole::Drums,
             profile: T8_DRUMS,
             pattern: Pattern {
                 name: format!("len{length}"),
@@ -2257,6 +2264,7 @@ mod sequencer_tests {
             cond: TrigCond::Always,
         });
         Lane {
+            role: crate::pattern::library::LibRole::Drums,
             profile: T8_DRUMS,
             pattern: Pattern {
                 name: "one".to_string(),
@@ -2329,6 +2337,7 @@ mod sequencer_tests {
             });
         }
         let lane = Lane {
+            role: crate::pattern::library::LibRole::Drums,
             profile: T8_DRUMS,
             pattern: Pattern {
                 name: "row".to_string(),
@@ -2527,6 +2536,7 @@ mod sequencer_tests {
             });
         }
         Lane {
+            role: crate::pattern::library::LibRole::Drums,
             profile: T8_DRUMS,
             pattern: Pattern {
                 name: "every".to_string(),
@@ -2727,6 +2737,7 @@ mod sequencer_tests {
             .map(|n| MelodicStep::from(n.into_iter().collect::<Vec<_>>()))
             .collect();
         Lane {
+            role: crate::pattern::library::LibRole::Bass,
             profile: T8_BASS,
             pattern: Pattern {
                 name: "slide".to_string(),
@@ -2880,6 +2891,7 @@ mod sequencer_tests {
             });
         }
         Lane {
+            role: crate::pattern::library::LibRole::Drums,
             profile: T8_DRUMS,
             pattern: Pattern {
                 name: "distinct".to_string(),
@@ -3241,6 +3253,7 @@ mod sequencer_tests {
             cond: TrigCond::Always,
         });
         Lane {
+            role: crate::pattern::library::LibRole::Drums,
             profile: T8_DRUMS,
             pattern: Pattern {
                 name: format!("k{note}"),
@@ -3804,6 +3817,7 @@ mod sequencer_tests {
             cond: TrigCond::Always,
         });
         Lane {
+            role: crate::pattern::library::LibRole::Drums,
             profile: T8_DRUMS,
             pattern: Pattern {
                 name: "kh".to_string(),
@@ -3938,6 +3952,7 @@ mod sequencer_tests {
         let len = steps.len();
         let steps: Vec<MelodicStep> = steps.into_iter().map(MelodicStep::from).collect();
         Lane {
+            role: crate::pattern::library::LibRole::Synth,
             profile: S1,
             pattern: Pattern {
                 name: "poly".to_string(),
@@ -4400,6 +4415,7 @@ mod sequencer_tests {
             cond: TrigCond::Always,
         });
         Lane {
+            role: crate::pattern::library::LibRole::Drums,
             profile: T8_DRUMS,
             pattern: Pattern {
                 name: "micro_drum".to_string(),
@@ -4434,6 +4450,7 @@ mod sequencer_tests {
             cond: TrigCond::Always,
         });
         Lane {
+            role: crate::pattern::library::LibRole::Drums,
             profile: T8_DRUMS,
             pattern: Pattern {
                 name: "micro_ratchet_drum".to_string(),
@@ -4812,6 +4829,7 @@ mod sequencer_tests {
             note_a, note_b,
         ])];
         Lane {
+            role: crate::pattern::library::LibRole::Synth,
             profile: S1,
             pattern: Pattern {
                 name: "chord_micro".to_string(),
@@ -4929,6 +4947,7 @@ mod sequencer_tests {
         // make sure step_cc is consistent
         assert_eq!(pattern.step_cc(0), &[CcLock { cc, val }]);
         Lane {
+            role: crate::pattern::library::LibRole::Drums,
             profile: T8_DRUMS,
             pattern,
             mute: false,
@@ -4958,6 +4977,7 @@ mod sequencer_tests {
         };
         let steps = vec![MelodicStep::from(vec![note])];
         Lane {
+            role: crate::pattern::library::LibRole::Synth,
             profile: S1,
             pattern: Pattern {
                 name: "cc_mel".to_string(),
@@ -5052,6 +5072,7 @@ mod sequencer_tests {
             });
         }
         let lane = Lane {
+            role: crate::pattern::library::LibRole::Drums,
             profile: T8_DRUMS,
             pattern: Pattern {
                 name: "cc_repeat".to_string(),
@@ -5123,6 +5144,7 @@ mod sequencer_tests {
             });
         }
         let lane = Lane {
+            role: crate::pattern::library::LibRole::Drums,
             profile: T8_DRUMS,
             pattern: Pattern {
                 name: "cc_change".to_string(),
@@ -5239,6 +5261,7 @@ mod sequencer_tests {
             cond,
         });
         Lane {
+            role: crate::pattern::library::LibRole::Drums,
             profile: T8_DRUMS,
             pattern: Pattern {
                 name: "cond".to_string(),
@@ -5279,6 +5302,7 @@ mod sequencer_tests {
             MelodicStep::from(vec![]),
         ];
         Lane {
+            role: crate::pattern::library::LibRole::Synth,
             profile: S1,
             pattern: Pattern {
                 name: "cond_mel".to_string(),
@@ -5452,6 +5476,7 @@ mod sequencer_tests {
             MelodicStep::from(vec![]),
         ];
         Lane {
+            role: crate::pattern::library::LibRole::Synth,
             profile: S1,
             pattern: Pattern {
                 name: "cond_chord".to_string(),
@@ -5519,6 +5544,7 @@ mod sequencer_tests {
             cond: TrigCond::Always,
         });
         Lane {
+            role: crate::pattern::library::LibRole::Drums,
             profile: T8_DRUMS,
             pattern: Pattern {
                 name: "swing_div".to_string(),
@@ -5563,6 +5589,7 @@ mod sequencer_tests {
             cond: TrigCond::Always,
         });
         let lane0 = Lane {
+            role: crate::pattern::library::LibRole::Drums,
             profile: T8_DRUMS,
             pattern: Pattern {
                 name: "global_sw".to_string(),
@@ -5595,6 +5622,7 @@ mod sequencer_tests {
             cond: TrigCond::Always,
         });
         let lane1 = Lane {
+            role: crate::pattern::library::LibRole::Drums,
             profile: T8_DRUMS,
             pattern: Pattern {
                 name: "lane_sw".to_string(),
@@ -5714,6 +5742,7 @@ mod sequencer_tests {
         });
         // steps[1] is empty (rest)
         let lane = Lane {
+            role: crate::pattern::library::LibRole::Drums,
             profile: T8_DRUMS,
             pattern: Pattern {
                 name: "div2".to_string(),
@@ -5790,6 +5819,7 @@ mod sequencer_tests {
             cond: TrigCond::Always,
         });
         let lane = Lane {
+            role: crate::pattern::library::LibRole::Drums,
             profile: T8_DRUMS,
             pattern: Pattern {
                 name: "div4".to_string(),
@@ -5860,6 +5890,7 @@ mod sequencer_tests {
             cond: TrigCond::Always,
         });
         let normal_lane = Lane {
+            role: crate::pattern::library::LibRole::Drums,
             profile: T8_DRUMS,
             pattern: Pattern {
                 name: "normal".to_string(),
@@ -5892,6 +5923,7 @@ mod sequencer_tests {
             cond: TrigCond::Always,
         });
         let div_lane = Lane {
+            role: crate::pattern::library::LibRole::Drums,
             profile: T8_DRUMS,
             pattern: Pattern {
                 name: "div".to_string(),
@@ -5955,6 +5987,7 @@ mod sequencer_tests {
             cond: TrigCond::Always,
         });
         let lane = Lane {
+            role: crate::pattern::library::LibRole::Drums,
             profile: T8_DRUMS,
             pattern: Pattern {
                 name: "hung".to_string(),

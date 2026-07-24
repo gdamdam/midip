@@ -1,0 +1,164 @@
+{
+  "schema": "midip.pattern",
+  "version": 2,
+  "factory_id": "chords.funk.clav-ninth-stabs",
+  "role": "chords",
+  "kind": "melodic",
+  "genre": "funk",
+  "name": "Clav Ninth Stabs",
+  "desc": "Scratchy off-beat dominant-ninth clav stabs over a one-chord vamp.",
+  "length": 16,
+  "steps": [
+    null,
+    null,
+    [
+      {
+        "semi": 0,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.3
+      },
+      {
+        "semi": 4,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.3
+      },
+      {
+        "semi": 10,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.3
+      },
+      {
+        "semi": 14,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.3
+      }
+    ],
+    null,
+    null,
+    null,
+    [
+      {
+        "semi": 0,
+        "vel": 1.15,
+        "slide": false,
+        "len": 0.3
+      },
+      {
+        "semi": 4,
+        "vel": 1.15,
+        "slide": false,
+        "len": 0.3
+      },
+      {
+        "semi": 10,
+        "vel": 1.15,
+        "slide": false,
+        "len": 0.3
+      },
+      {
+        "semi": 14,
+        "vel": 1.15,
+        "slide": false,
+        "len": 0.3
+      }
+    ],
+    null,
+    null,
+    null,
+    null,
+    [
+      {
+        "semi": 0,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.25
+      },
+      {
+        "semi": 4,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.25
+      },
+      {
+        "semi": 10,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.25
+      },
+      {
+        "semi": 14,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.25
+      }
+    ],
+    null,
+    null,
+    [
+      {
+        "semi": 0,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.3
+      },
+      {
+        "semi": 4,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.3
+      },
+      {
+        "semi": 10,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.3
+      },
+      {
+        "semi": 14,
+        "vel": 1.0,
+        "slide": false,
+        "len": 0.3
+      }
+    ],
+    null
+  ],
+  "metadata": {
+    "bpm_min": 96,
+    "bpm_max": 112,
+    "feel": "straight",
+    "timing": "straight",
+    "energy": "high",
+    "density": "core",
+    "tags": [
+      "funk",
+      "clav",
+      "stabs",
+      "dom9",
+      "chords"
+    ],
+    "harmonic": "dom9",
+    "chord_poly": "chord",
+    "subgenre": "funk",
+    "compatible_devices": [
+      "j-6",
+      "s1",
+      "minilogue-xd",
+      "microfreak",
+      "generic-poly-synth"
+    ],
+    "function": "core"
+  },
+  "provenance": {
+    "source": "midip factory",
+    "author": "midip",
+    "pack": "chords-v1",
+    "license": "CC0-1.0",
+    "references": [
+      "https://www.roland.com/GLOBAL/products/j-6/"
+    ]
+  }
+}

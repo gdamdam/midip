@@ -1883,25 +1883,26 @@ mod tests {
         let set = default_set();
         let plan = build_route_plan(&set.lanes);
 
-        // Default profiles are [T8_DRUMS("T-8"), T8_BASS("T-8"), S1("S-1")].
-        // Exactly TWO distinct physical ports, NOT three — the two T-8 lanes dedupe.
+        // Default profiles are [T8_DRUMS("T-8"), T8_BASS("T-8"), J6("J-6"), S1("S-1")].
+        // THREE distinct physical ports — the two T-8 lanes dedupe; J-6 and S-1 are separate.
         assert_eq!(
             plan.ports.len(),
-            2,
-            "two T-8 lanes must collapse to one port"
+            3,
+            "two T-8 lanes collapse; J-6 and S-1 are distinct"
         );
         assert_eq!(plan.ports[0].stable_key, "T-8");
-        assert_eq!(plan.ports[1].stable_key, "S-1");
+        assert_eq!(plan.ports[1].stable_key, "J-6");
+        assert_eq!(plan.ports[2].stable_key, "S-1");
 
         // Both T-8 lanes map to the SAME port index (one shared connection).
         assert_eq!(
             plan.lane_to_port[0], plan.lane_to_port[1],
             "T-8 drums + bass share one port"
         );
-        // S-1 maps to a different port.
+        // J-6 (chords) maps to a different port than T-8.
         assert_ne!(
             plan.lane_to_port[2], plan.lane_to_port[0],
-            "S-1 is a distinct port"
+            "J-6 is a distinct port"
         );
 
         // One connection per distinct port: two lanes target T-8 but only ONE T-8 port exists.
@@ -1924,38 +1925,41 @@ mod tests {
         let set = default_set();
         let plan = build_route_plan(&set.lanes);
 
-        // Exactly two distinct ports (T-8 + S-1).
-        assert_eq!(plan.ports.len(), 2);
+        // Three distinct ports (T-8 + J-6 + S-1).
+        assert_eq!(plan.ports.len(), 3);
 
         // Drums (ch9) and bass (ch1) both live on the T-8 port → same port index.
         let t8 = plan.channel_to_port[9];
         let bass = plan.channel_to_port[1];
-        let s1 = plan.channel_to_port[0];
-        assert!(t8.is_some() && bass.is_some() && s1.is_some());
+        // J-6 and S-1 both default to channel 0 on different ports; channel_to_port
+        // is last-writer-wins (S-1), but per-lane delivery keeps them independent.
+        let melodic_ch0 = plan.channel_to_port[0];
+        assert!(t8.is_some() && bass.is_some() && melodic_ch0.is_some());
         assert_eq!(t8, bass, "ch9 and ch1 both route to the T-8 port");
-        assert_ne!(t8, s1, "S-1 (ch0) is a different port from T-8");
+        assert_ne!(t8, melodic_ch0, "the ch0 synth port differs from T-8");
 
-        // Both distinct ports send clock, each appearing exactly once (deduped).
-        assert_eq!(plan.clock_ports.len(), 2, "both ports clock-out once each");
+        // All three distinct ports send clock, each appearing exactly once (deduped).
+        assert_eq!(plan.clock_ports.len(), 3, "each port clocks-out once");
         let mut cp = plan.clock_ports.clone();
         cp.sort_unstable();
         cp.dedup();
-        assert_eq!(cp.len(), 2, "clock_ports has no duplicates");
+        assert_eq!(cp.len(), 3, "clock_ports has no duplicates");
     }
 
     /// A lane whose route has `clock_out=false` is excluded from `clock_ports` (T6, pure).
     #[test]
     fn build_route_plan_respects_clock_out_false() {
         let mut set = default_set();
-        // Give the S-1 lane an explicit route with clock disabled.
+        // Give the J-6 (chords) lane — on its own distinct port — an explicit route
+        // with clock disabled.
         let mut r = set.lanes[2].effective_route();
         r.clock_out = false;
         set.lanes[2].route = Some(r);
 
         let plan = build_route_plan(&set.lanes);
-        let s1_idx = plan.channel_to_port[0].expect("S-1 mapped");
+        let j6_idx = plan.lane_to_port[2];
         assert!(
-            !plan.clock_ports.contains(&s1_idx),
+            !plan.clock_ports.contains(&j6_idx),
             "clock_out=false excludes the port from clock_ports; got {:?}",
             plan.clock_ports
         );
@@ -2327,7 +2331,8 @@ mod tests {
     }
 
     /// Task 5: lanes_of groups every lane that shares a port. Default profiles =
-    /// [T-8 drums, T-8 bass, S-1]: the T-8 port owns lanes [0,1]; the S-1 port owns [2].
+    /// [T-8 drums, T-8 bass, J-6, S-1]: the T-8 port owns lanes [0,1]; J-6 owns [2];
+    /// the S-1 port owns [3].
     #[test]
     fn lanes_of_port_groups_shared_port_lanes() {
         let set = default_set();
@@ -2343,7 +2348,7 @@ mod tests {
             .position(|p| p.stable_key == "S-1")
             .unwrap();
         assert_eq!(lanes_of(&plan.lane_to_port, t8_idx), vec![0, 1]);
-        assert_eq!(lanes_of(&plan.lane_to_port, s1_idx), vec![2]);
+        assert_eq!(lanes_of(&plan.lane_to_port, s1_idx), vec![3]);
     }
 
     /// Link-gated start fires at the boundary: armed at beat=-1, boundary crossed at beat=0.
@@ -3041,13 +3046,13 @@ mod tests {
     #[test]
     fn build_route_plan_reflects_route_change() {
         let mut set = default_set();
-        // Initially the S-1 lane (idx 2) is on channel 0.
+        // Initially the S-1 lane (idx 3) is on channel 0.
         let plan0 = build_route_plan(&set.lanes);
         assert!(plan0.channel_to_port[0].is_some(), "ch0 mapped initially");
         assert!(plan0.channel_to_port[6].is_none(), "ch6 unmapped initially");
 
-        // Override the S-1 lane to channel 6 on the same port.
-        set.lanes[2].route = Some(route_on(6));
+        // Override the S-1 lane to channel 6 on the same (S-1) port.
+        set.lanes[3].route = Some(route_on(6));
         let plan1 = build_route_plan(&set.lanes);
         assert!(
             plan1.channel_to_port[6].is_some(),
@@ -3143,8 +3148,12 @@ mod tests {
         let vidx = virtual_port_index(&plan).expect("virtual port must be present in the plan");
         assert_eq!(plan.ports[vidx].stable_key, VIRTUAL_PORT_KEY);
         assert_eq!(plan.ports[vidx].name, "midip");
-        // The two hardware ports (T-8, S-1) plus the virtual port = 3 distinct ports.
-        assert_eq!(plan.ports.len(), 3, "two hardware ports + the virtual port");
+        // The three hardware ports (T-8, J-6, S-1) plus the virtual port = 4 distinct ports.
+        assert_eq!(
+            plan.ports.len(),
+            4,
+            "three hardware ports + the virtual port"
+        );
     }
 
     /// A lane whose route key == VIRTUAL_PORT_KEY maps its channel to the virtual port index.

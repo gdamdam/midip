@@ -88,22 +88,18 @@ pub struct LoadedV2 {
 }
 
 fn parse_role(s: &str) -> Option<LibRole> {
-    match s {
-        "drums" => Some(LibRole::Drums),
-        "bass" => Some(LibRole::Bass),
-        "synth" => Some(LibRole::Synth),
-        _ => None,
-    }
+    LibRole::from_wire(s)
 }
 
-/// The `LibRole` → wire string used in `PatternRef`/`find` (drums/bass/synth).
+/// The `LibRole` → wire string used in `PatternRef`/`find` (drums/bass/chords/synth).
 pub fn role_str(role: LibRole) -> &'static str {
-    match role {
-        LibRole::Drums => "drums",
-        LibRole::Bass => "bass",
-        LibRole::Synth => "synth",
-    }
+    role.as_str()
 }
+
+/// Maximum simultaneous notes a factory melodic step may hold. This is the
+/// baseline four-voice polyphony of the default CHORDS device (Roland J-6); mono
+/// roles (bass/synth) never approach it.
+pub const MAX_CHORD_VOICES: usize = 4;
 
 /// A factory_id must be a non-empty run of `[a-z0-9._-]` — stable, lowercase, and
 /// filesystem/URL friendly, independent of the display name.
@@ -124,10 +120,11 @@ fn validate(pattern: &Pattern, role: LibRole) -> Vec<String> {
         errs.push(format!("length {} out of range 1..=64", pattern.length));
     }
 
-    // role ↔ data-kind consistency.
+    // role ↔ data-kind consistency. Every melodic role (bass/chords/synth) holds
+    // melodic data; only drums holds drum data.
     match (&pattern.data, role) {
         (PatternData::Drums(_), LibRole::Drums) => {}
-        (PatternData::Melodic(_), LibRole::Bass | LibRole::Synth) => {}
+        (PatternData::Melodic(_), LibRole::Bass | LibRole::Chords | LibRole::Synth) => {}
         (PatternData::Drums(_), r) => {
             errs.push(format!("role '{}' cannot hold drum data", role_str(r)))
         }
@@ -173,6 +170,15 @@ fn validate(pattern: &Pattern, role: LibRole) -> Vec<String> {
         }
         PatternData::Melodic(steps) => {
             for (i, step) in steps.iter().enumerate() {
+                // No factory step may exceed the four-voice baseline (J-6). This
+                // keeps chord voicings playable on the default CHORDS device and
+                // never truncates silently at runtime.
+                if step.len() > MAX_CHORD_VOICES {
+                    errs.push(format!(
+                        "step {i}: {} simultaneous notes exceeds the {MAX_CHORD_VOICES}-voice maximum",
+                        step.len()
+                    ));
+                }
                 for note in step.iter() {
                     let w = format!("step {i} semi {}", note.semi);
                     if !(0.5..=1.3).contains(&note.vel) {

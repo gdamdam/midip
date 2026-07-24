@@ -24,7 +24,7 @@ use midip::engine::{run_engine_headless, run_engine_headless_clocked, EngineEven
 use midip::link::{step_from_beat, FakeLink};
 use midip::midi::message::MidiMessage;
 use midip::midi::ports::RecordingSink;
-use midip::pattern::library::{GenreMap, Library};
+use midip::pattern::library::{GenreMap, LibRole, Library};
 use midip::pattern::model::{
     CcLock, DrumHit, DrumStep, Lane, LaneRoute, MelodicNote, MelodicStep, Pattern, PatternData,
     PortRef, Set, TrigCond,
@@ -92,9 +92,10 @@ fn three_lane_set() -> Set {
         bpm: 120.0,
         swing: 0.5,
         lanes: vec![
-            lane(profs[0], drums),
-            lane(profs[1], bass),
-            lane(profs[2], synth),
+            lane(profs[0].clone(), drums),
+            lane(profs[1].clone(), bass),
+            // S-1 synth is now index 3 (index 2 is the J-6 chords profile).
+            lane(profs[3].clone(), synth),
         ],
         id: midip::persist::Id::nil(),
         scenes: Vec::new(),
@@ -104,8 +105,9 @@ fn three_lane_set() -> Set {
     }
 }
 
-fn lane(profile: profiles::DeviceProfile, pattern: Pattern) -> Lane {
+fn lane((role, profile): (LibRole, profiles::DeviceProfile), pattern: Pattern) -> Lane {
     Lane {
+        role,
         profile,
         pattern,
         mute: false,
@@ -217,6 +219,7 @@ fn test_library() -> Library {
         records: Vec::new(),
         drums,
         bass,
+        chords: GenreMap::new(),
         synth,
         families: Vec::new(),
         v2_index: Default::default(),
@@ -965,11 +968,11 @@ fn chord_step(notes: &[(i8, f32)]) -> MelodicStep {
 fn chord_survives_save_load_and_plays_with_clean_release() {
     // ── 1. Build a Set with a poly S-1 lane containing a chord, a rest and a mono step ──
     let profs = profiles::default_profiles();
-    // profs[2] is S-1 SYNTH (poly == true, channel 0, root_note 45).
-    let s1_prof = profs[2];
+    // profs[3] is S-1 SYNTH (poly == true, channel 0, root_note 45); index 2 is J-6 chords.
+    let s1_prof = profs[3];
     assert!(
-        s1_prof.poly,
-        "fixture assumes profs[2] is the poly S-1 profile"
+        s1_prof.1.poly,
+        "fixture assumes profs[3] is the poly S-1 profile"
     );
 
     // Pattern layout (16 steps):
@@ -1128,14 +1131,15 @@ fn generative_preview_commit_undo_roundtrip() {
 
     // ── 1. Build a Set with one melodic lane using Major scale ────────────────
     let profs = profiles::default_profiles();
-    // profs[2] is S-1 SYNTH (poly == true), suitable as a melodic lane.
-    let synth_prof = profs[2];
-    assert!(synth_prof.poly, "fixture assumes profs[2] is poly");
+    // profs[3] is S-1 SYNTH (poly == true), suitable as a melodic lane (index 2 is J-6 chords).
+    let synth_prof = profs[3].1;
+    assert!(synth_prof.poly, "fixture assumes profs[3] is poly");
 
     // Source pattern: a simple three-note figure that generate can mutate.
     let original_pat = melodic_pattern("orig", &[(0, 0, 0.5), (4, 5, 0.5), (8, 7, 0.5)]);
 
     let melodic_lane = Lane {
+        role: LibRole::Synth,
         profile: synth_prof,
         pattern: original_pat.clone(),
         mute: false,
@@ -1284,8 +1288,9 @@ fn generative_vary_identity_and_mutation() {
     use midip::pattern::generate::GenMode;
 
     let profs = profiles::default_profiles();
-    let synth_prof = profs[2];
-    assert!(synth_prof.poly, "fixture assumes profs[2] is poly");
+    // S-1 synth is index 3 (index 2 is the J-6 chords profile).
+    let synth_prof = profs[3].1;
+    assert!(synth_prof.poly, "fixture assumes profs[3] is poly");
 
     // Source pattern with several active steps so Vary has material to mutate.
     let original_pat = melodic_pattern(
@@ -1304,6 +1309,7 @@ fn generative_vary_identity_and_mutation() {
 
     let make_app = || {
         let melodic_lane = Lane {
+            role: LibRole::Synth,
             profile: synth_prof,
             pattern: original_pat.clone(),
             mute: false,
@@ -1429,7 +1435,8 @@ fn scene_capture_save_load_recall_roundtrip() {
         lanes: vec![
             lane(profs[0], drums_pat.clone()),
             lane(profs[1], bass_pat.clone()),
-            lane(profs[2], synth_pat.clone()),
+            // S-1 synth is now index 3 (index 2 is the J-6 chords profile).
+            lane(profs[3], synth_pat.clone()),
         ],
         id: persist::mint_id(),
         scenes: Vec::new(),
@@ -1646,22 +1653,24 @@ fn chain_roundtrip_create_save_load_play_advance() {
     syn_pat.ensure_id();
 
     // Helper: build a Lane.
-    let make_lane = |prof: midip::devices::profiles::DeviceProfile, pat: Pattern| -> Lane {
-        Lane {
-            profile: prof,
-            pattern: pat,
-            mute: false,
-            solo: false,
-            transpose: 0,
-            octave: 0,
-            route: None,
-            muted_voices: Vec::new(),
-            scale: midip::music::scale::Scale::Chromatic,
-            root: None,
-            swing: None,
-            clock_div: None,
-        }
-    };
+    let make_lane =
+        |(role, prof): (LibRole, midip::devices::profiles::DeviceProfile), pat: Pattern| -> Lane {
+            Lane {
+                role,
+                profile: prof,
+                pattern: pat,
+                mute: false,
+                solo: false,
+                transpose: 0,
+                octave: 0,
+                route: None,
+                muted_voices: Vec::new(),
+                scale: midip::music::scale::Scale::Chromatic,
+                root: None,
+                swing: None,
+                clock_div: None,
+            }
+        };
 
     let mut set = Set {
         name: "chain-roundtrip".into(),
@@ -1669,7 +1678,8 @@ fn chain_roundtrip_create_save_load_play_advance() {
         swing: 0.5,
         lanes: vec![
             make_lane(profs[0], drum_pat.clone()), // lane 0: drums (ch 9)
-            make_lane(profs[2], syn_pat.clone()),  // lane 1: synth, held note
+            // S-1 synth is index 3 (index 2 is the J-6 chords profile).
+            make_lane(profs[3], syn_pat.clone()), // lane 1: synth, held note
         ],
         id: midip::persist::Id::nil(),
         scenes: Vec::new(),
@@ -1932,11 +1942,11 @@ fn m8_per_step_cc_microtiming_cond_clock_div_roundtrip() {
     use midip::pattern::store::{load_set, save_set, CURRENT_SET_VERSION};
 
     let profs = profiles::default_profiles();
-    // profs[2] = S-1 SYNTH, channel 0, root_note 45, poly=true.
-    let synth_prof = profs[2];
+    // profs[3] = S-1 SYNTH, channel 0, root_note 45, poly=true (index 2 is J-6 chords).
+    let synth_prof = profs[3].1;
     assert!(
         synth_prof.poly,
-        "fixture: profs[2] must be the poly S-1 profile"
+        "fixture: profs[3] must be the poly S-1 profile"
     );
     // S-1: channel=0, root_note=45. resolve_melodic_pitch(45, semi=0, 0, 0) = 45.
     let expected_pitch: u8 = 45;
@@ -1991,6 +2001,7 @@ fn m8_per_step_cc_microtiming_cond_clock_div_roundtrip() {
     // ── 2. Lane with per-lane M8 attributes ───────────────────────────────────
     // swing=0.6 (non-trivial), clock_div=2 (lane step advances every 2 global steps).
     let m8_lane = Lane {
+        role: LibRole::Synth,
         profile: synth_prof,
         pattern: pat,
         mute: false,

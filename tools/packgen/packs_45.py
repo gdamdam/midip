@@ -49,12 +49,7 @@ def pack_afro_amapiano():
         energy="mid", density="core", **kw)
     family("afro-house-bass-roll","Rolling Pentatonic","bass",g,[("core",c)])
 
-    kw=dict(bpm=(118,125), feel="straight", tags=["afro-house","pad","marimba"], prov=AF, harmonic="minor9")
-    c=synth(g,"Deep Pad Vamp","core",
-        [(0,[0,3,7,10,14],4.0,'n'),(8,[-2,3,7,10],4.0,'n')],
-        desc="Deep two-chord minor-ninth pad vamp with a slow filter opening.",
-        energy="mid", density="core", cc={0:[(74,35)],8:[(74,95)]}, **kw)
-    family("afro-house-synth-pad","Deep Pad Vamp","synth",g,[("core",c)])
+    # Deep Pad Vamp (minor-ninth chord pad) moved to role "chords" (packs_chords.py).
 
     # ---- amapiano ----
     g="amapiano"
@@ -98,16 +93,7 @@ def pack_afro_amapiano():
         energy="high", density="dense", **kw)
     family("amapiano-bass-logdrum","Log Drum","bass",g,[("core",c),("dense",d)])
 
-    kw=dict(bpm=(108,118), feel="straight-16", tags=["amapiano","jazz","keys"], prov=AM, harmonic="minor9")
-    c=synth(g,"Jazzy Keys","core",
-        [(0,[0,3,7,10,14],2.0,'n'),(6,[-2,2,5,9,12],2.0,'n'),(10,[3,7,10,14,17],1.5,'a'),(14,[-2,2,5,9],1.0,'n')],
-        desc="Warm jazzy minor-ninth and eleventh piano chords in a soulful progression.",
-        energy="mid", density="core", **kw)
-    v=synth(g,"Two-Chord Vamp","sparse",
-        [(0,[0,3,7,10,14],3.5,'n'),(8,[-4,0,3,7,10],3.5,'n')],
-        desc="Relaxed two-chord jazzy vamp for hooks and intros.",
-        energy="low", density="sparse", **kw)
-    family("amapiano-synth-keys","Jazzy Keys","synth",g,[("core",c),("sparse",v)])
+    # Amapiano jazzy keys chords (Jazzy Keys, Two-Chord Vamp) moved to role "chords".
 
 
 # ==================== PACK 5: REGGAETON / DEMBOW / BAILE FUNK =================
@@ -153,12 +139,7 @@ def pack_reggaeton_baile():
         energy="mid", density="core", **kw)
     family("reggaeton-bass-sub","Dembow Sub","bass",g,[("core",c)])
 
-    kw=dict(bpm=(88,100), feel="straight-16", tags=["reggaeton","dark","keys"], prov=RT, harmonic="minor")
-    c=synth(g,"Dark Minor Stabs","core",
-        [(0,[0,3,7],0.5,'a'),(4,[-4,0,3],0.5,'n'),(8,[-2,1,5],0.5,'n'),(12,[3,7,10],0.5,'n')],
-        desc="Dark minor triad stabs following a i-VI-VII-type progression.",
-        energy="mid", density="core", **kw)
-    family("reggaeton-synth-stabs","Dark Minor Stabs","synth",g,[("core",c)])
+    # Dark Minor Stabs (minor triad chords) moved to role "chords" (packs_chords.py).
 
     # ---- baile funk (tamborzao) — honest kick+snare skeleton, NOT authentic atabaque ----
     g="baile-funk"

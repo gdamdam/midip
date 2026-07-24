@@ -92,6 +92,7 @@ mod tests {
         App::new(
             set,
             Library {
+                chords: crate::pattern::library::GenreMap::new(),
                 records: Vec::new(),
                 v2_index: Default::default(),
                 families: Vec::new(),

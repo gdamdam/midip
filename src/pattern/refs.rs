@@ -23,13 +23,28 @@ impl PatternRef {
         }
     }
 
-    /// For Vendored: drums→0, bass→1, synth→2. For User: None.
+    /// A human label for the ref's role, for status messages ("CHORDS", "DRUMS", …).
+    /// User refs carry no stored role → "matching".
+    pub fn role_label(&self) -> String {
+        match self {
+            PatternRef::Vendored { role, .. } => crate::pattern::library::LibRole::from_wire(role)
+                .map(|r| r.label().to_string())
+                .unwrap_or_else(|| role.to_uppercase()),
+            PatternRef::User(_) => "matching".to_string(),
+        }
+    }
+
+    /// The lane index this role occupies in the *default four-lane template*
+    /// (drums→0, bass→1, chords→2, synth→3). This is only a fallback hint for the
+    /// canonical layout — runtime targeting resolves the lane by its persisted
+    /// role (see `App::target_lane_for`), never by this table. For User: None.
     pub fn role_lane_hint(&self) -> Option<usize> {
         match self {
             PatternRef::Vendored { role, .. } => match role.as_str() {
                 "drums" => Some(0),
                 "bass" => Some(1),
-                "synth" => Some(2),
+                "chords" => Some(2),
+                "synth" => Some(3),
                 _ => None,
             },
             PatternRef::User(_) => None,
@@ -173,6 +188,11 @@ mod tests {
             genre: "techno".to_string(),
             name: "x".to_string(),
         };
+        let chords = PatternRef::Vendored {
+            role: "chords".to_string(),
+            genre: "techno".to_string(),
+            name: "x".to_string(),
+        };
         let synth = PatternRef::Vendored {
             role: "synth".to_string(),
             genre: "techno".to_string(),
@@ -180,9 +200,11 @@ mod tests {
         };
         let user = PatternRef::User(persist::mint_id());
 
+        // Default four-lane template order: DRUMS, BASS, CHORDS, SYNTH.
         assert_eq!(drums.role_lane_hint(), Some(0));
         assert_eq!(bass.role_lane_hint(), Some(1));
-        assert_eq!(synth.role_lane_hint(), Some(2));
+        assert_eq!(chords.role_lane_hint(), Some(2));
+        assert_eq!(synth.role_lane_hint(), Some(3));
         assert_eq!(user.role_lane_hint(), None);
     }
 

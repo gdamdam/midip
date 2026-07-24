@@ -1,0 +1,156 @@
+{
+  "schema": "midip.pattern",
+  "version": 2,
+  "factory_id": "chords.melodic-techno.three-bar-progression",
+  "role": "chords",
+  "kind": "melodic",
+  "genre": "melodic-techno",
+  "name": "Three-Bar Progression",
+  "desc": "Three-chord melodic-techno progression, one per bar (i-VI-III).",
+  "length": 48,
+  "steps": [
+    [
+      {
+        "semi": 0,
+        "vel": 1.0,
+        "slide": false,
+        "len": 4.0
+      },
+      {
+        "semi": 3,
+        "vel": 1.0,
+        "slide": false,
+        "len": 4.0
+      },
+      {
+        "semi": 7,
+        "vel": 1.0,
+        "slide": false,
+        "len": 4.0
+      }
+    ],
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    [
+      {
+        "semi": 8,
+        "vel": 1.0,
+        "slide": false,
+        "len": 4.0
+      },
+      {
+        "semi": 12,
+        "vel": 1.0,
+        "slide": false,
+        "len": 4.0
+      },
+      {
+        "semi": 15,
+        "vel": 1.0,
+        "slide": false,
+        "len": 4.0
+      }
+    ],
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    [
+      {
+        "semi": 3,
+        "vel": 1.15,
+        "slide": false,
+        "len": 4.0
+      },
+      {
+        "semi": 7,
+        "vel": 1.15,
+        "slide": false,
+        "len": 4.0
+      },
+      {
+        "semi": 10,
+        "vel": 1.15,
+        "slide": false,
+        "len": 4.0
+      }
+    ],
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+  ],
+  "metadata": {
+    "bpm_min": 120,
+    "bpm_max": 126,
+    "feel": "straight",
+    "timing": "straight",
+    "energy": "mid",
+    "density": "sparse",
+    "tags": [
+      "melodic-techno",
+      "deep",
+      "minor",
+      "chords",
+      "3-bar"
+    ],
+    "harmonic": "minor",
+    "chord_poly": "chord",
+    "subgenre": "melodic-techno",
+    "compatible_devices": [
+      "j-6",
+      "s1",
+      "minilogue-xd",
+      "microfreak",
+      "generic-poly-synth"
+    ],
+    "meter": "4/4",
+    "steps_per_bar": 16,
+    "bars": 3,
+    "function": "variation_a"
+  },
+  "provenance": {
+    "source": "midip factory",
+    "author": "midip",
+    "pack": "chords-v1",
+    "license": "CC0-1.0",
+    "references": [
+      "https://www.roland.com/GLOBAL/products/j-6/"
+    ]
+  }
+}

@@ -231,6 +231,7 @@ mod tests {
 
     fn empty_library() -> Library {
         Library {
+            chords: crate::pattern::library::GenreMap::new(),
             records: Vec::new(),
             v2_index: Default::default(),
             families: Vec::new(),

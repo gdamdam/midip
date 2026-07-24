@@ -388,10 +388,7 @@ fn gui_library(state: tauri::State<GuiState>) -> LibraryDto {
 /// Phase 8: run a filter query through the shared engine, returning matches only.
 /// Keeps the boundary small at scale and reuses the same engine the TUI uses.
 #[tauri::command]
-fn gui_library_query(
-    query: dto::QueryDto,
-    state: tauri::State<GuiState>,
-) -> Vec<dto::RecordDto> {
+fn gui_library_query(query: dto::QueryDto, state: tauri::State<GuiState>) -> Vec<dto::RecordDto> {
     state.core.lock().unwrap().library_query(&query)
 }
 
@@ -732,9 +729,17 @@ mod tests {
     fn snapshot_reflects_default_set() {
         let core = core_no_engine();
         let snap = core.snapshot();
-        assert_eq!(snap.lanes.len(), 3, "default set has drums/bass/synth");
+        assert_eq!(
+            snap.lanes.len(),
+            4,
+            "default set has drums/bass/chords/synth"
+        );
         assert_eq!(snap.focused_lane, 0);
         assert_eq!(snap.lanes[0].kind, "drums");
+        // Lanes are labeled by musical role; the CHORDS lane is index 2.
+        assert_eq!(snap.lanes[0].role, "drums");
+        assert_eq!(snap.lanes[2].role, "chords");
+        assert_eq!(snap.lanes[3].role, "synth");
         assert!(snap.transport.set_bpm > 0.0);
         // Focused (drum) pattern exposes the standard kit rows.
         assert_eq!(snap.focused_pattern.voices.len(), DRUM_VOICES.len());

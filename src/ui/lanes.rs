@@ -1,4 +1,4 @@
-//! 3-lane overview (groovebox mixer row).
+//! Lane overview (groovebox mixer row) — one row per lane, labeled by musical role.
 
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -10,18 +10,7 @@ use crate::app::App;
 #[cfg(test)]
 use crate::pattern::model::TrigCond;
 use crate::pattern::model::{Lane, PatternData};
-use crate::ui::theme::{lane_color, playhead_style, vel_bar, EMBER};
-
-/// Compact label derived from profile id: "T-8 DRUM" -> "DRUM", "T-8 BASS" -> "BASS",
-/// "S-1 SYNTH" -> "SYNTH". Falls back to the raw label for unknown profiles.
-fn short_label(profile_id: &str) -> &'static str {
-    match profile_id {
-        "t8-drums" => "DRUM",
-        "t8-bass" => "BASS",
-        "s1" => "SYNTH",
-        _ => "?",
-    }
-}
+use crate::ui::theme::{playhead_style, role_color, vel_bar, EMBER};
 
 /// 16-cell activity strip: `●` for a step with content, `·` for empty.
 ///
@@ -120,7 +109,7 @@ fn lane_line(idx: usize, app: &App) -> Line<'static> {
     // Additive accent: each lane wears its static color (spec §7); the focused lane is
     // also BOLD. A muted lane is DIM so it reads as inactive. Text content is unchanged
     // (substring render tests still pass); degrades to monochrome without color support.
-    let mut base_style = Style::default().fg(lane_color(lane.profile.id));
+    let mut base_style = Style::default().fg(role_color(lane.role));
     if focused {
         base_style = base_style.add_modifier(Modifier::BOLD);
     }
@@ -128,14 +117,16 @@ fn lane_line(idx: usize, app: &App) -> Line<'static> {
         base_style = base_style.add_modifier(Modifier::DIM);
     }
 
-    let label = short_label(lane.profile.id);
+    // Lane label is the persisted musical ROLE (DRUMS/BASS/CHORDS/SYNTH), never the
+    // device — a CHORDS lane reads "CHORDS" whether it drives a J-6 or another poly synth.
+    let label = lane.role.label();
 
     // Show the active (committed) pattern name here; a pending launch is shown
     // separately as a QUEUED⟶ marker after the activity strip (below).
     let queued_name: Option<String> = app.queued.get(idx).and_then(|q| q.clone());
     let pat_display = lane.pattern.name.clone();
     let prefix = format!(
-        "{marker}{n} {label:<5} {pat:<12} {conn}  {m_glyph}  ",
+        "{marker}{n} {label:<6} {pat:<12} {conn}  {m_glyph}  ",
         n = idx + 1,
         pat = pat_display,
     );
@@ -177,7 +168,7 @@ fn lane_line(idx: usize, app: &App) -> Line<'static> {
     let spark = density_sparkline(lane);
     if !spark.trim().is_empty() {
         let spark_style = Style::default()
-            .fg(lane_color(lane.profile.id))
+            .fg(role_color(lane.role))
             .add_modifier(Modifier::DIM);
         spans.push(Span::styled(format!("  {spark}"), spark_style));
     }
@@ -233,6 +224,7 @@ mod tests {
 
     fn empty_library() -> Library {
         Library {
+            chords: crate::pattern::library::GenreMap::new(),
             records: Vec::new(),
             v2_index: Default::default(),
             families: Vec::new(),
@@ -267,45 +259,28 @@ mod tests {
         (term, area)
     }
 
-    // --- short label tests -----------------------------------------------
+    // --- role label tests ------------------------------------------------
 
     #[test]
-    fn short_label_drum_is_drum() {
-        assert_eq!(short_label("t8-drums"), "DRUM");
-    }
-
-    #[test]
-    fn short_label_bass_is_bass() {
-        assert_eq!(short_label("t8-bass"), "BASS");
-    }
-
-    #[test]
-    fn short_label_synth_is_synth() {
-        assert_eq!(short_label("s1"), "SYNTH");
-    }
-
-    #[test]
-    fn lanes_render_short_labels_drum_bass_synth() {
+    fn lanes_render_role_labels_drums_bass_chords_synth() {
         let app = make_app();
-        let (term, area) = render(&app, 80, 5);
+        let (term, area) = render(&app, 90, 6);
         let buf = term.backend().buffer();
         let rows = all_rows(buf, area);
         let whole: String = rows.join("");
-        assert!(whole.contains("DRUM"), "expected DRUM in: {whole:?}");
+        // Lanes are labeled by musical role, in the default template order.
+        assert!(whole.contains("DRUMS"), "expected DRUMS in: {whole:?}");
         assert!(whole.contains("BASS"), "expected BASS in: {whole:?}");
+        assert!(whole.contains("CHORDS"), "expected CHORDS in: {whole:?}");
         assert!(whole.contains("SYNTH"), "expected SYNTH in: {whole:?}");
-        // full labels must NOT appear (we show compact forms)
+        // Device labels must NOT appear in the compact strip (shown in the editor header).
         assert!(
-            !whole.contains("T-8 DRUM"),
-            "must not show full label: {whole:?}"
+            !whole.contains("Roland T-8"),
+            "must not show device label: {whole:?}"
         );
         assert!(
-            !whole.contains("T-8 BASS"),
-            "must not show full label: {whole:?}"
-        );
-        assert!(
-            !whole.contains("S-1 SYNTH"),
-            "must not show full label: {whole:?}"
+            !whole.contains("Roland J-6"),
+            "must not show device label: {whole:?}"
         );
     }
 
@@ -418,9 +393,9 @@ mod tests {
     #[test]
     fn disconnected_lane_shows_open_circle() {
         let mut app = make_app();
-        app.device_status[2] = (false, String::new());
+        app.device_status[3] = (false, String::new()); // SYNTH lane
 
-        let (term, area) = render(&app, 80, 5);
+        let (term, area) = render(&app, 80, 6);
         let buf = term.backend().buffer();
         let rows = all_rows(buf, area);
         let synth_row = rows
@@ -595,20 +570,21 @@ mod tests {
     // --- color test (kept from original) ---------------------------------
 
     #[test]
-    fn focused_lane_label_uses_its_lane_color() {
-        use crate::ui::theme::lane_color;
+    fn focused_lane_label_uses_its_role_color() {
+        use crate::pattern::library::LibRole;
+        use crate::ui::theme::role_color;
         let mut app = make_app();
-        app.focus = 1; // BASS, profile id "t8-bass"
+        app.focus = 1; // BASS lane
 
-        let (term, area) = render(&app, 80, 5);
+        let (term, area) = render(&app, 80, 6);
         let buf = term.backend().buffer();
-        let want = lane_color("t8-bass");
-        let bass_y = (0..5)
+        let want = role_color(LibRole::Bass);
+        let bass_y = (0..6)
             .find(|&y| row_string(buf, area, y).contains("BASS"))
             .expect("bass row");
         let colored =
             (area.left()..area.right()).any(|x| buf[(x, bass_y)].style().fg == Some(want));
-        assert!(colored, "bass row should use the t8-bass lane color");
+        assert!(colored, "bass row should use the BASS role color");
     }
 
     // --- M4b Task 3: FILL indicator -----------------------------------------

@@ -18,15 +18,8 @@ fn map_for_role(app: &App, role: LibRole) -> &GenreMap {
     match role {
         LibRole::Drums => &app.library.drums,
         LibRole::Bass => &app.library.bass,
+        LibRole::Chords => &app.library.chords,
         LibRole::Synth => &app.library.synth,
-    }
-}
-
-fn role_filename(role: LibRole) -> &'static str {
-    match role {
-        LibRole::Drums => "patterns-t8-drums.json",
-        LibRole::Bass => "patterns-t8-bass.json",
-        LibRole::Synth => "patterns-s1.json",
     }
 }
 
@@ -225,7 +218,7 @@ pub fn render_library(f: &mut Frame, area: Rect, app: &App) {
 
     let outer = Block::default()
         .borders(Borders::ALL)
-        .title(format!(" LIBRARY · {} ", role_filename(app.lib_role)));
+        .title(format!(" LIBRARY · {} ", app.lib_role.label()));
     let inner = outer.inner(area);
     f.render_widget(outer, area);
 
@@ -499,6 +492,7 @@ mod tests {
         };
         drums.insert("techno".to_string(), vec![pat]);
         Library {
+            chords: crate::pattern::library::GenreMap::new(),
             records: Vec::new(),
             v2_index: Default::default(),
             families: Vec::new(),
@@ -543,6 +537,7 @@ mod tests {
         };
         synth.insert("techno".to_string(), vec![pat]);
         Library {
+            chords: crate::pattern::library::GenreMap::new(),
             records: Vec::new(),
             v2_index: Default::default(),
             families: Vec::new(),
@@ -752,6 +747,7 @@ mod tests {
         };
         drums.insert("techno".to_string(), vec![pat1, pat2]);
         let library = Library {
+            chords: crate::pattern::library::GenreMap::new(),
             records: Vec::new(),
             v2_index: Default::default(),
             families: Vec::new(),
@@ -820,6 +816,7 @@ mod tests {
         };
         drums.insert("techno".to_string(), vec![pat]);
         let library = Library {
+            chords: crate::pattern::library::GenreMap::new(),
             records: Vec::new(),
             v2_index: Default::default(),
             families: Vec::new(),

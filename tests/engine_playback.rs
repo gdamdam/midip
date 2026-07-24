@@ -5,6 +5,7 @@ use midip::engine::{run_engine_headless, EngineEvent, UiCommand};
 use midip::link::FakeLink;
 use midip::midi::message::MidiMessage;
 use midip::midi::ports::RecordingSink;
+use midip::pattern::library::LibRole;
 use midip::pattern::model::{
     DrumHit, DrumStep, Lane, MelodicNote, MelodicStep, Pattern, PatternData, Set, TrigCond,
 };
@@ -88,7 +89,8 @@ fn three_lane_set() -> Set {
 
     let lanes = vec![
         Lane {
-            profile: profs[0],
+            role: LibRole::Drums,
+            profile: profs[0].1,
             pattern: drums,
             mute: false,
             solo: false,
@@ -102,7 +104,8 @@ fn three_lane_set() -> Set {
             clock_div: None,
         },
         Lane {
-            profile: profs[1],
+            role: LibRole::Bass,
+            profile: profs[1].1,
             pattern: bass,
             mute: false,
             solo: false,
@@ -116,7 +119,9 @@ fn three_lane_set() -> Set {
             clock_div: None,
         },
         Lane {
-            profile: profs[2],
+            role: LibRole::Synth,
+            // S-1 synth profile is now index 3 (index 2 is the J-6 chords profile).
+            profile: profs[3].1,
             pattern: synth,
             mute: false,
             solo: false,
@@ -437,7 +442,7 @@ fn set_octave_shifts_emitted_note_pitch() {
     // After SetOctave { lane: 2, octave: 1 } -> resolve(45, 12, 0, 1) should differ.
     let set = three_lane_set();
     let profs = profiles::default_profiles();
-    let root = profs[2].root_note; // S-1 root
+    let root = profs[3].1.root_note; // S-1 root (index 3; index 2 is J-6 chords)
 
     let octave_before: i8 = 0;
     let octave_after: i8 = 1;
@@ -558,6 +563,7 @@ fn status_string_appears_in_transport() {
             records: Vec::new(),
             drums: GenreMap::new(),
             bass: GenreMap::new(),
+            chords: GenreMap::new(),
             synth: GenreMap::new(),
             families: Vec::new(),
             v2_index: Default::default(),

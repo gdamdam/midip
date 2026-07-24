@@ -1,0 +1,184 @@
+{
+  "schema": "midip.pattern",
+  "version": 2,
+  "factory_id": "chords.jazz.dorian-trade",
+  "role": "chords",
+  "kind": "melodic",
+  "genre": "jazz",
+  "name": "Dorian Trade",
+  "desc": "Two-bar Dorian i7-IV7 trade with syncopated comping accents.",
+  "length": 32,
+  "steps": [
+    [
+      {
+        "semi": 0,
+        "vel": 1.0,
+        "slide": false,
+        "len": 1.5
+      },
+      {
+        "semi": 3,
+        "vel": 1.0,
+        "slide": false,
+        "len": 1.5
+      },
+      {
+        "semi": 7,
+        "vel": 1.0,
+        "slide": false,
+        "len": 1.5
+      },
+      {
+        "semi": 10,
+        "vel": 1.0,
+        "slide": false,
+        "len": 1.5
+      }
+    ],
+    null,
+    null,
+    null,
+    null,
+    null,
+    [
+      {
+        "semi": 0,
+        "vel": 0.82,
+        "slide": false,
+        "len": 0.5
+      },
+      {
+        "semi": 3,
+        "vel": 0.82,
+        "slide": false,
+        "len": 0.5
+      },
+      {
+        "semi": 7,
+        "vel": 0.82,
+        "slide": false,
+        "len": 0.5
+      },
+      {
+        "semi": 10,
+        "vel": 0.82,
+        "slide": false,
+        "len": 0.5
+      }
+    ],
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    [
+      {
+        "semi": 5,
+        "vel": 1.0,
+        "slide": false,
+        "len": 1.5
+      },
+      {
+        "semi": 9,
+        "vel": 1.0,
+        "slide": false,
+        "len": 1.5
+      },
+      {
+        "semi": 12,
+        "vel": 1.0,
+        "slide": false,
+        "len": 1.5
+      },
+      {
+        "semi": 15,
+        "vel": 1.0,
+        "slide": false,
+        "len": 1.5
+      }
+    ],
+    null,
+    null,
+    null,
+    null,
+    null,
+    [
+      {
+        "semi": 5,
+        "vel": 1.15,
+        "slide": false,
+        "len": 0.5
+      },
+      {
+        "semi": 9,
+        "vel": 1.15,
+        "slide": false,
+        "len": 0.5
+      },
+      {
+        "semi": 12,
+        "vel": 1.15,
+        "slide": false,
+        "len": 0.5
+      },
+      {
+        "semi": 15,
+        "vel": 1.15,
+        "slide": false,
+        "len": 0.5
+      }
+    ],
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+  ],
+  "metadata": {
+    "bpm_min": 90,
+    "bpm_max": 120,
+    "feel": "straight",
+    "timing": "straight",
+    "energy": "mid",
+    "density": "sparse",
+    "tags": [
+      "jazz",
+      "dorian",
+      "vamp",
+      "dorian",
+      "chords",
+      "2-bar"
+    ],
+    "harmonic": "dorian",
+    "chord_poly": "chord",
+    "subgenre": "jazz",
+    "compatible_devices": [
+      "j-6",
+      "s1",
+      "minilogue-xd",
+      "microfreak",
+      "generic-poly-synth"
+    ],
+    "meter": "4/4",
+    "steps_per_bar": 16,
+    "bars": 2,
+    "function": "variation_a"
+  },
+  "provenance": {
+    "source": "midip factory",
+    "author": "midip",
+    "pack": "chords-v1",
+    "license": "CC0-1.0",
+    "references": [
+      "https://www.roland.com/GLOBAL/products/j-6/"
+    ]
+  }
+}

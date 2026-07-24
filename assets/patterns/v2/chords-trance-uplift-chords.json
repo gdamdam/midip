@@ -1,0 +1,160 @@
+{
+  "schema": "midip.pattern",
+  "version": 2,
+  "factory_id": "chords.trance.uplift-chords",
+  "role": "chords",
+  "kind": "melodic",
+  "genre": "trance",
+  "name": "Uplift Chords",
+  "desc": "Two-bar sustained trance chords (i-bVI-bIII) for breakdown-to-drop tension.",
+  "length": 32,
+  "steps": [
+    [
+      {
+        "semi": 0,
+        "vel": 1.0,
+        "slide": false,
+        "len": 3.5
+      },
+      {
+        "semi": 3,
+        "vel": 1.0,
+        "slide": false,
+        "len": 3.5
+      },
+      {
+        "semi": 7,
+        "vel": 1.0,
+        "slide": false,
+        "len": 3.5
+      }
+    ],
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    [
+      {
+        "semi": 0,
+        "vel": 0.82,
+        "slide": false,
+        "len": 3.5
+      },
+      {
+        "semi": 3,
+        "vel": 0.82,
+        "slide": false,
+        "len": 3.5
+      },
+      {
+        "semi": 7,
+        "vel": 0.82,
+        "slide": false,
+        "len": 3.5
+      }
+    ],
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    [
+      {
+        "semi": -4,
+        "vel": 1.0,
+        "slide": false,
+        "len": 3.5
+      },
+      {
+        "semi": 0,
+        "vel": 1.0,
+        "slide": false,
+        "len": 3.5
+      },
+      {
+        "semi": 3,
+        "vel": 1.0,
+        "slide": false,
+        "len": 3.5
+      }
+    ],
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    [
+      {
+        "semi": -5,
+        "vel": 1.15,
+        "slide": false,
+        "len": 3.5
+      },
+      {
+        "semi": -1,
+        "vel": 1.15,
+        "slide": false,
+        "len": 3.5
+      },
+      {
+        "semi": 3,
+        "vel": 1.15,
+        "slide": false,
+        "len": 3.5
+      }
+    ],
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+  ],
+  "metadata": {
+    "bpm_min": 132,
+    "bpm_max": 140,
+    "feel": "straight",
+    "timing": "straight",
+    "energy": "mid",
+    "density": "sparse",
+    "tags": [
+      "trance",
+      "lift",
+      "uplifting",
+      "minor",
+      "chords",
+      "2-bar"
+    ],
+    "harmonic": "minor",
+    "chord_poly": "chord",
+    "subgenre": "trance",
+    "compatible_devices": [
+      "j-6",
+      "s1",
+      "minilogue-xd",
+      "microfreak",
+      "generic-poly-synth"
+    ],
+    "meter": "4/4",
+    "steps_per_bar": 16,
+    "bars": 2,
+    "function": "variation_a"
+  },
+  "provenance": {
+    "source": "midip factory",
+    "author": "midip",
+    "pack": "chords-v1",
+    "license": "CC0-1.0",
+    "references": [
+      "https://www.roland.com/GLOBAL/products/j-6/"
+    ]
+  }
+}

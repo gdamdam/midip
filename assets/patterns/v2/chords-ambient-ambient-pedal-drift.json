@@ -1,0 +1,193 @@
+{
+  "schema": "midip.pattern",
+  "version": 2,
+  "factory_id": "chords.ambient.ambient-pedal-drift",
+  "role": "chords",
+  "kind": "melodic",
+  "genre": "ambient",
+  "name": "Ambient Pedal Drift",
+  "desc": "Sustained tonic pedal (root held) under slowly drifting upper voices.",
+  "length": 64,
+  "steps": [
+    [
+      {
+        "semi": 0,
+        "vel": 0.82,
+        "slide": false,
+        "len": 16.0
+      },
+      {
+        "semi": 7,
+        "vel": 0.82,
+        "slide": false,
+        "len": 16.0
+      },
+      {
+        "semi": 14,
+        "vel": 0.82,
+        "slide": false,
+        "len": 16.0
+      }
+    ],
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    [
+      {
+        "semi": 0,
+        "vel": 0.82,
+        "slide": false,
+        "len": 16.0
+      },
+      {
+        "semi": 10,
+        "vel": 0.82,
+        "slide": false,
+        "len": 16.0
+      },
+      {
+        "semi": 15,
+        "vel": 0.82,
+        "slide": false,
+        "len": 16.0
+      }
+    ],
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    [
+      {
+        "semi": 0,
+        "vel": 0.82,
+        "slide": false,
+        "len": 16.0
+      },
+      {
+        "semi": 9,
+        "vel": 0.82,
+        "slide": false,
+        "len": 16.0
+      },
+      {
+        "semi": 14,
+        "vel": 0.82,
+        "slide": false,
+        "len": 16.0
+      }
+    ],
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    [
+      {
+        "semi": 0,
+        "vel": 0.82,
+        "slide": false,
+        "len": 16.0
+      },
+      {
+        "semi": 7,
+        "vel": 0.82,
+        "slide": false,
+        "len": 16.0
+      },
+      {
+        "semi": 12,
+        "vel": 0.82,
+        "slide": false,
+        "len": 16.0
+      }
+    ],
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+  ],
+  "metadata": {
+    "bpm_min": 60,
+    "bpm_max": 90,
+    "feel": "straight",
+    "timing": "straight",
+    "energy": "low",
+    "density": "sparse",
+    "tags": [
+      "ambient",
+      "pedal-tone",
+      "drift",
+      "pad",
+      "pedal-tone",
+      "chords",
+      "4-bar"
+    ],
+    "harmonic": "pedal-tone",
+    "chord_poly": "chord",
+    "subgenre": "ambient",
+    "compatible_devices": [
+      "j-6",
+      "s1",
+      "minilogue-xd",
+      "microfreak",
+      "generic-poly-synth"
+    ],
+    "meter": "4/4",
+    "steps_per_bar": 16,
+    "bars": 4,
+    "function": "core"
+  },
+  "provenance": {
+    "source": "midip factory",
+    "author": "midip",
+    "pack": "chords-v1",
+    "license": "CC0-1.0",
+    "references": [
+      "https://www.roland.com/GLOBAL/products/j-6/"
+    ]
+  }
+}

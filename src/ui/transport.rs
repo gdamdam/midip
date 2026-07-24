@@ -10,7 +10,7 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 
 use crate::app::{Action, App, HitCell, HitTarget, Mode};
-use crate::ui::theme::{lane_color, EMBER};
+use crate::ui::theme::{role_color, EMBER};
 
 // --- static styles -----------------------------------------------------------
 
@@ -50,7 +50,7 @@ pub fn render_transport(f: &mut Frame, area: Rect, app: &App) {
         .title_style(Style::default().fg(EMBER.fg).add_modifier(Modifier::BOLD));
 
     // Accent on the play indicator = focused lane's static color (spec §7).
-    let accent = lane_color(app.focused_lane().profile.id);
+    let accent = role_color(app.focused_lane().role);
 
     // --- play/stop ----------------------------------------------------------
     // Drive from engine-confirmed state, not the optimistic `playing` flag.
@@ -187,6 +187,7 @@ mod tests {
 
     fn empty_library() -> Library {
         Library {
+            chords: crate::pattern::library::GenreMap::new(),
             records: Vec::new(),
             v2_index: Default::default(),
             families: Vec::new(),

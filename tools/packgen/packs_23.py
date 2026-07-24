@@ -61,12 +61,7 @@ def pack_funk_disco():
         energy="mid", density="sparse", **kw)
     family("funk-bass-pocket","Syncopated Pocket","bass",g,[("core",c),("sparse",s)])
 
-    kw=dict(bpm=(96,112), feel="straight-16", tags=["funk","clav","stabs"], prov=FK, harmonic="dominant9")
-    c=synth(g,"Clav Ninth Stabs","core",
-        [(2,[0,4,7,10,14],0.3,'n'),(6,[0,4,7,10,14],0.3,'a'),(11,[0,4,7,10,14],0.25,'n'),(14,[0,4,7,10,14],0.3,'n')],
-        desc="Scratchy off-beat dominant-ninth clav stabs over a one-chord vamp.",
-        energy="high", density="core", **kw)
-    family("funk-synth-clav","Clav Stabs","synth",g,[("core",c)])
+    # Clav Ninth Stabs (dominant-ninth chord) moved to role "chords" (packs_chords.py).
 
     # ---- disco ----
     g="disco"
@@ -111,16 +106,7 @@ def pack_funk_disco():
         energy="high", density="dense", **kw)
     family("disco-bass-octave","Octave Bass","bass",g,[("core",c),("dense",v)])
 
-    kw=dict(bpm=(115,125), feel="straight", tags=["disco","strings"], prov=DS, harmonic="major7")
-    c=synth(g,"String Stabs","core",
-        [(0,[0,4,7,11],1.0,'a'),(4,[0,4,7,11],0.5,'n'),(8,[-3,0,4,7],1.0,'n'),(12,[-3,0,4,7],0.5,'n')],
-        desc="Lush major-seventh string stabs over a two-chord disco vamp.",
-        energy="mid", density="core", **kw)
-    v=synth(g,"ii-V-I Strings","dense",
-        [(0,[2,5,9,12],1.5,'n'),(4,[7,11,14,17],1.5,'n'),(8,[0,4,7,11],2.5,'a')],
-        desc="Classic ii-V-I string progression with a filter sweep on the resolution.",
-        energy="mid", density="core", cc={8:[(74,110)]}, **kw)
-    family("disco-synth-strings","String Stabs","synth",g,[("core",c),("dense",v)])
+    # Disco string chord stabs (String Stabs, ii-V-I Strings) moved to role "chords".
 
 
 # ============================ PACK 3: REGGAE / DANCEHALL ======================
@@ -181,17 +167,7 @@ def pack_reggae_dancehall():
         energy="low", density="sparse", **kw)
     family("reggae-bass-riddim","Riddim Bass","bass",g,[("core",c),("sparse",s)])
 
-    kw=dict(bpm=(70,90), feel="half-time", tags=["reggae","skank","organ"], prov=RG, harmonic="minor")
-    c=synth(g,"Offbeat Skank","core",
-        [(2,[0,3,7],0.4,'n'),(6,[0,3,7],0.4,'n'),(10,[0,3,7],0.4,'n'),(14,[0,3,7],0.4,'n')],
-        desc="The reggae identity: short minor-triad organ chops on every off-beat.",
-        energy="mid", density="core", **kw)
-    d=synth(g,"Bubble Organ","dense",
-        [(2,[0,3,7],0.25,'n'),(3,[0,3,7],0.25,'s'),(6,[0,3,7],0.25,'n'),(7,[0,3,7],0.25,'s'),
-         (10,[0,3,7],0.25,'n'),(11,[0,3,7],0.25,'s'),(14,[0,3,7],0.25,'n'),(15,[0,3,7],0.25,'s')],
-        desc="Double-skank bubble organ: two sixteenth chops per off-beat for the rolling bubble feel.",
-        energy="mid", density="dense", **kw)
-    family("reggae-synth-skank","Offbeat Skank","synth",g,[("core",c),("dense",d)])
+    # Reggae organ skank chords (Offbeat Skank, Bubble Organ) moved to role "chords".
 
     # ---- dancehall ----
     g="dancehall"

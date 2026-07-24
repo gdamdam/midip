@@ -151,12 +151,7 @@ impl Record {
     /// The `PatternRef` identity of this record (always Vendored).
     pub fn pattern_ref(&self) -> PatternRef {
         PatternRef::Vendored {
-            role: match self.role {
-                crate::pattern::library::LibRole::Drums => "drums",
-                crate::pattern::library::LibRole::Bass => "bass",
-                crate::pattern::library::LibRole::Synth => "synth",
-            }
-            .to_string(),
+            role: self.role.as_str().to_string(),
             genre: self.genre.clone(),
             name: self.name.clone(),
         }
@@ -313,7 +308,8 @@ fn role_rank(r: crate::pattern::library::LibRole) -> u8 {
     match r {
         crate::pattern::library::LibRole::Drums => 0,
         crate::pattern::library::LibRole::Bass => 1,
-        crate::pattern::library::LibRole::Synth => 2,
+        crate::pattern::library::LibRole::Chords => 2,
+        crate::pattern::library::LibRole::Synth => 3,
     }
 }
 

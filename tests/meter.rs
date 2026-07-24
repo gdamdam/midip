@@ -74,6 +74,7 @@ fn shipped_library_has_multibar_and_alt_meter_content() {
         let m = match role {
             LibRole::Drums => &lib.drums,
             LibRole::Bass => &lib.bass,
+            LibRole::Chords => &lib.chords,
             LibRole::Synth => &lib.synth,
         };
         m.get(genre)
@@ -101,15 +102,18 @@ fn shipped_library_has_multibar_and_alt_meter_content() {
         two_bar_genres >= 5,
         "several genres have 2-bar patterns, got {two_bar_genres}"
     );
-    // 4-bar (64-step) synth phrases exist.
+    // 4-bar (64-step) melodic phrases exist. The chordal 4-bar progressions now
+    // ship under the polyphonic `chords` role (reclassified from `synth`).
     assert!(
-        lib.synth.values().flatten().any(|p| p.length == 64),
-        "4-bar synth phrase shipped"
+        lib.chords.values().flatten().any(|p| p.length == 64),
+        "4-bar chords phrase shipped"
     );
     // Every record still indexed (search works over long/odd patterns).
     assert_eq!(
         lib.records().len(),
-        [&lib.drums, &lib.bass, &lib.synth]
+        // chords is a v2-only role but is still indexed into `records()`, so include
+        // its in-memory map here to keep the count identity true.
+        [&lib.drums, &lib.bass, &lib.chords, &lib.synth]
             .iter()
             .flat_map(|m| m.values())
             .map(|v| v.len())

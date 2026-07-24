@@ -11,6 +11,7 @@
 
   --ember: #fe8019; /* principal accent + drums */
   --pink: #d3869b; /* secondary emphasis + bass */
+  --green: #8ec07c; /* chords (distinct from bass pink & synth aqua — mirrors theme.rs) */
   --aqua: #83a598; /* connected / synced + synth */
   --warn: #fabd2f; /* queued / edited */
   --err: #fb4934; /* panic / error only */

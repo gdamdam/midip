@@ -577,6 +577,7 @@ mod gen_core_tests {
     fn fixture() -> (GenParams, Pattern, Lane) {
         let src = Pattern::empty_drums(4);
         let lane = Lane {
+            role: crate::pattern::library::LibRole::Drums,
             profile: T8_DRUMS,
             pattern: Pattern::empty_drums(4),
             mute: false,
@@ -653,6 +654,7 @@ mod gen_core_tests {
             use crate::devices::profiles::T8_DRUMS;
             use crate::music::scale::Scale;
             Lane {
+                role: crate::pattern::library::LibRole::Drums,
                 profile: T8_DRUMS,
                 pattern: Pattern::empty_drums(16),
                 mute: false,
@@ -690,6 +692,7 @@ mod gen_core_tests {
             use crate::devices::profiles::T8_DRUMS;
             use crate::music::scale::Scale;
             Lane {
+                role: crate::pattern::library::LibRole::Drums,
                 profile: T8_DRUMS,
                 pattern: Pattern::empty_drums(16),
                 mute: false,
@@ -730,6 +733,7 @@ mod gen_core_tests {
             use crate::devices::profiles::T8_DRUMS;
             use crate::music::scale::Scale;
             Lane {
+                role: crate::pattern::library::LibRole::Drums,
                 profile: T8_DRUMS,
                 pattern: Pattern::empty_drums(16),
                 mute: false,
@@ -777,6 +781,7 @@ mod gen_core_tests {
     fn melodic_fixture(scale: Scale) -> (GenParams, Pattern, Lane) {
         let src = Pattern::empty_melodic(16);
         let lane = Lane {
+            role: crate::pattern::library::LibRole::Synth,
             profile: S1,
             pattern: Pattern::empty_melodic(16),
             mute: false,
@@ -997,6 +1002,7 @@ mod gen_core_tests {
             use crate::devices::profiles::T8_DRUMS;
             use crate::music::scale::Scale;
             Lane {
+                role: crate::pattern::library::LibRole::Drums,
                 profile: T8_DRUMS,
                 pattern: Pattern::empty_drums(8),
                 mute: false,
@@ -1036,6 +1042,7 @@ mod gen_core_tests {
             ..Pattern::empty_melodic(8)
         };
         let lane = Lane {
+            role: crate::pattern::library::LibRole::Synth,
             profile: S1,
             pattern: Pattern::empty_melodic(8),
             mute: false,

@@ -26,6 +26,9 @@ use midip::devices::profiles::{S1, T8_BASS};
 use midip::pattern::library::{parse_catalog, parse_drum_file, parse_melodic_file, LibRole};
 use midip::pattern::model::{Pattern, PatternData};
 
+// The `chords` role is deliberately absent here: this lint operates over the
+// legacy `patterns-*.json` data files, and chords is a v2-only role with no
+// legacy file to lint. Its in-memory content is covered by other tests.
 const ROLES: [(&str, LibRole); 3] = [
     ("drums", LibRole::Drums),
     ("bass", LibRole::Bass),
@@ -221,6 +224,8 @@ fn vendored_catalog_lint() {
             LibRole::Drums => ("patterns-t8-drums.json", 0.0),
             LibRole::Bass => ("patterns-t8-bass.json", T8_BASS.gate_fraction),
             LibRole::Synth => ("patterns-s1.json", S1.gate_fraction),
+            // chords is not in ROLES (v2-only, no legacy data file) — unreachable here.
+            LibRole::Chords => unreachable!("chords has no legacy patterns-*.json file"),
         };
         let data_json = std::fs::read_to_string(dir.join(file)).expect("read data");
         let data = if librole == LibRole::Drums {
@@ -437,6 +442,7 @@ fn family_registry_lint() {
         let role = match fam.role {
             LibRole::Drums => "drums",
             LibRole::Bass => "bass",
+            LibRole::Chords => "chords",
             LibRole::Synth => "synth",
         };
 

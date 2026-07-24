@@ -297,29 +297,37 @@ mod tests {
     use super::select_sinks;
     use midip::devices::profiles::default_profiles;
 
+    /// The default template is now four lanes: DRUMS/T-8, BASS/T-8, CHORDS/J-6,
+    /// SYNTH/S-1. `select_sinks` works over the device profiles, so unpack them.
+    fn default_device_profiles() -> Vec<midip::devices::profiles::DeviceProfile> {
+        default_profiles().into_iter().map(|(_, p)| p).collect()
+    }
+
     #[test]
     fn select_sinks_maps_profiles_to_detected_ports() {
-        // Two ports present: a T-8 and an S-1; profiles are [T8_DRUMS, T8_BASS, S1].
+        // Two ports present: a T-8 and an S-1 (no J-6).
         let available = vec![
             "Roland T-8 Bus 1".to_string(),
             "Roland S-1 Bus 1".to_string(),
         ];
-        let profiles = default_profiles();
+        let profiles = default_device_profiles();
         let picks = select_sinks(&available, &profiles);
-        assert_eq!(picks.len(), 3);
+        assert_eq!(picks.len(), 4);
         // T8_DRUMS and T8_BASS both match "T-8" -> index 0.
         assert_eq!(picks[0], Some(0));
         assert_eq!(picks[1], Some(0));
+        // J-6 (CHORDS) has no matching port present.
+        assert_eq!(picks[2], None);
         // S1 matches "S-1" -> index 1.
-        assert_eq!(picks[2], Some(1));
+        assert_eq!(picks[3], Some(1));
     }
 
     #[test]
     fn select_sinks_returns_none_when_absent() {
         let available: Vec<String> = vec![];
-        let profiles = default_profiles();
+        let profiles = default_device_profiles();
         let picks = select_sinks(&available, &profiles);
-        assert_eq!(picks, vec![None, None, None]);
+        assert_eq!(picks, vec![None, None, None, None]);
     }
 
     #[test]

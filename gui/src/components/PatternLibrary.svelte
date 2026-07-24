@@ -123,7 +123,7 @@
 <section class="library">
   <div class="head">
     <div class="roles">
-      {#each ["drums", "bass", "synth"] as r (r)}
+      {#each ["drums", "bass", "chords", "synth"] as r (r)}
         <button class="role" class:active={role === r} onclick={() => (role = r)}>{r}</button>
       {/each}
     </div>
