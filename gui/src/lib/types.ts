@@ -326,6 +326,7 @@ export type GuiCommand =
   | { type: "adjustRouteChannel"; args: { lane: number; delta: number } }
   | { type: "toggleClockOut"; args: number }
   | { type: "cycleScale"; args: { lane: number; delta: number } }
+  | { type: "setScale"; args: { lane: number; index: number } }
   | { type: "adjustRoot"; args: { lane: number; delta: number } }
   | { type: "adjustOctave"; args: { lane: number; delta: number } }
   | { type: "recallScene"; args: number }

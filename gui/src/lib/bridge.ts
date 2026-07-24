@@ -24,6 +24,9 @@ export const dispatch = (cmd: GuiCommand): Promise<Snapshot> =>
 
 export const getLibrary = (): Promise<LibraryData> => invoke("gui_library");
 
+// Scale names in Scale::all() order; the index is what a SetScale command expects.
+export const getScales = (): Promise<string[]> => invoke("gui_scales");
+
 export const loadLibraryPattern = (
   role: string,
   genre: string,
@@ -35,6 +38,14 @@ export const placeNote = (
   col: number,
   pitch: number,
 ): Promise<Snapshot> => invoke("gui_place_note", { lane, col, pitch });
+
+// Build a chord progression from typed chord names onto `lane`. Returns the
+// parse error (or null) plus the fresh snapshot.
+export const applyChordProgression = (
+  lane: number,
+  text: string,
+): Promise<[string | null, Snapshot]> =>
+  invoke("gui_apply_chord_progression", { lane, text });
 
 export const auditionPattern = (
   role: string,

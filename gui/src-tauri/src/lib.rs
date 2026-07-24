@@ -164,6 +164,36 @@ impl Core {
         self.forward(cmds);
     }
 
+    /// Build a chord progression from typed chord names (e.g. "Dm7 G7 Cmaj7") and
+    /// load/queue it onto `lane`. One sustained chord per bar, voiced to ≤4 notes
+    /// relative to the lane's root. A parse error is surfaced as a status string
+    /// and nothing is changed. Returns an error message for the modal on failure.
+    pub fn apply_chord_progression(&mut self, lane: usize, text: String) -> Option<String> {
+        if lane >= self.app.set.lanes.len() {
+            self.app.set_status("no such lane");
+            return Some("no such lane".to_string());
+        }
+        let root = self.app.set.lanes[lane].effective_root();
+        let spb = self.app.set.steps_per_bar;
+        match midip::music::chord_name::build_progression_pattern(&text, spb, root) {
+            Ok(pat) => {
+                let cmds = self.app.set_lane_pattern(lane, pat);
+                self.forward(cmds);
+                if self.app.dirty {
+                    let _ = midip::pattern::store::save_recovery(
+                        &self.data_dir,
+                        &self.app.committed_set(),
+                    );
+                }
+                None
+            }
+            Err(e) => {
+                self.app.set_status(format!("chords: {e}"));
+                Some(e)
+            }
+        }
+    }
+
     /// Place a melodic note of a specific absolute MIDI `pitch` at `(lane,col)`,
     /// driving the engine's note-input path (which scale-folds on placement, so a
     /// click on a non-scale row snaps to the nearest degree). Inverts
@@ -380,6 +410,16 @@ fn gui_dispatch(cmd: GuiCommand, state: tauri::State<GuiState>) -> Snapshot {
     core.snapshot()
 }
 
+/// The full list of scale names, in `Scale::all()` order — the index is what
+/// `SetScale` expects. Fetched once by the GUI to populate the scale dropdown.
+#[tauri::command]
+fn gui_scales() -> Vec<String> {
+    midip::music::scale::Scale::all()
+        .iter()
+        .map(|s| s.name().to_string())
+        .collect()
+}
+
 #[tauri::command]
 fn gui_library(state: tauri::State<GuiState>) -> LibraryDto {
     state.core.lock().unwrap().library()
@@ -511,6 +551,19 @@ fn gui_load_pattern(
     let mut core = state.core.lock().unwrap();
     core.load_library_pattern(role, genre, name);
     core.snapshot()
+}
+
+/// Apply a typed chord progression to `lane`. Returns `(error, snapshot)`: `error`
+/// is `Some(msg)` when the text failed to parse (the modal shows it and stays open).
+#[tauri::command]
+fn gui_apply_chord_progression(
+    lane: usize,
+    text: String,
+    state: tauri::State<GuiState>,
+) -> (Option<String>, Snapshot) {
+    let mut core = state.core.lock().unwrap();
+    let err = core.apply_chord_progression(lane, text);
+    (err, core.snapshot())
 }
 
 #[tauri::command]
@@ -677,6 +730,8 @@ pub fn run() {
             gui_library,
             gui_library_query,
             gui_load_pattern,
+            gui_apply_chord_progression,
+            gui_scales,
             gui_audition,
             gui_place_note,
             gui_add_chain_entry,

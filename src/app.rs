@@ -258,6 +258,8 @@ pub enum Action {
     /// Cycle the focused melodic lane's scale forward (+1) or backward (-1) through
     /// `Scale::all()`. Does NOT rewrite existing note semis — fold applies to new input only.
     CycleScale(i8),
+    /// Set the focused lane's scale by index into `Scale::all()` (dropdown pick).
+    SetScale(usize),
     /// Adjust the focused melodic lane's root note by ±1 semitone (0..=127, clamped).
     /// Sets `lane.root = Some(...)` so it overrides the profile root.
     AdjustRoot(i8),
@@ -1202,15 +1204,24 @@ impl App {
             return vec![];
         };
 
-        // M12: a manual pattern launch takes over from chain auto-advance, same as
-        // LibLoad / RecallScene (transport keeps playing; only auto-advance stops).
-        self.deactivate_chain_on_manual();
-
         let Some(lane) = self.target_lane_for(r, &pat) else {
             self.set_status(format!("no {} lane in this set", r.role_label()));
             return vec![];
         };
+        self.set_lane_pattern(lane, pat)
+    }
 
+    /// Commit a concrete `Pattern` to `lane` and return the engine command(s) to
+    /// realize it: queued at the next boundary while playing, loaded immediately
+    /// when stopped. Snapshots for undo and marks the set dirty. Shared by
+    /// `launch_ref` and by generated-pattern paths (e.g. typed chord progressions).
+    pub fn set_lane_pattern(&mut self, lane: usize, pat: Pattern) -> Vec<UiCommand> {
+        if lane >= self.set.lanes.len() {
+            self.set_status("no such lane");
+            return vec![];
+        }
+        // A manual launch takes over from any chain auto-advance.
+        self.deactivate_chain_on_manual();
         let name = pat.name.clone();
         self.snapshot();
         self.set.lanes[lane].pattern = pat.clone();
@@ -1218,11 +1229,7 @@ impl App {
         if self.engine_playing {
             let quant = self.launch_quant;
             self.queued[lane] = Some(name.clone());
-            let quant_str = match quant {
-                Quant::NextBar => "next bar",
-                Quant::NextBeat => "next beat",
-            };
-            self.set_status(format!("Queued {} ({})", name, quant_str));
+            self.set_status(format!("Queued {} ({})", name, quant_label(quant)));
             cmds.push(UiCommand::QueuePattern {
                 lane,
                 pattern: pat,
@@ -1648,6 +1655,23 @@ impl App {
                 ));
                 self.dirty = true;
                 cmds.push(self.load_focused());
+            }
+            Action::SetScale(index) => {
+                let all = Scale::all();
+                if let Some(&scale) = all.get(index) {
+                    self.snapshot();
+                    let lane = &mut self.set.lanes[self.focus];
+                    lane.scale = scale;
+                    let name = lane.scale.name();
+                    let root = lane.effective_root();
+                    self.set_status(format!(
+                        "Scale: {} (root {})",
+                        name,
+                        crate::music::scale::note_name(root)
+                    ));
+                    self.dirty = true;
+                    cmds.push(self.load_focused());
+                }
             }
             Action::AdjustRoot(dir) => {
                 self.snapshot();

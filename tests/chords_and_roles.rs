@@ -31,7 +31,12 @@ fn fresh_set_has_four_role_labeled_lanes() {
     let roles: Vec<LibRole> = set.lanes.iter().map(|l| l.role).collect();
     assert_eq!(
         roles,
-        vec![LibRole::Drums, LibRole::Bass, LibRole::Chords, LibRole::Synth]
+        vec![
+            LibRole::Drums,
+            LibRole::Bass,
+            LibRole::Chords,
+            LibRole::Synth
+        ]
     );
     // Default devices per role — J-6 is the CHORDS default but not the lane identity.
     assert_eq!(set.lanes[0].profile.id, "t8-drums");
@@ -50,8 +55,15 @@ fn chords_lane_role_is_independent_of_device() {
     let mut set = Set::default_set(default_profiles());
     let poly = midip::devices::profiles::profile_by_id("minilogue-xd").expect("poly synth exists");
     set.lanes[2].profile = poly;
-    assert_eq!(set.lanes[2].role, LibRole::Chords, "role is not device-derived");
-    assert!(set.lanes[2].profile.poly, "replacement device is polyphonic");
+    assert_eq!(
+        set.lanes[2].role,
+        LibRole::Chords,
+        "role is not device-derived"
+    );
+    assert!(
+        set.lanes[2].profile.poly,
+        "replacement device is polyphonic"
+    );
 }
 
 // ── Old three-lane persistence migration ────────────────────────────────────
@@ -83,7 +95,11 @@ fn legacy_three_lane_set_loads_as_drums_bass_synth_no_chords() {
     std::fs::write(&path, LEGACY_V4_SET).unwrap();
 
     let (set, _notes) = midip::pattern::store::load_set_with_report(&path).unwrap();
-    assert_eq!(set.lanes.len(), 3, "no CHORDS lane is inserted into old sets");
+    assert_eq!(
+        set.lanes.len(),
+        3,
+        "no CHORDS lane is inserted into old sets"
+    );
     let roles: Vec<LibRole> = set.lanes.iter().map(|l| l.role).collect();
     assert_eq!(
         roles,
@@ -245,7 +261,9 @@ fn chords_are_excluded_from_synth_results_and_mono_synth_survives() {
     let mut qc = Query::default();
     qc.role = Some(LibRole::Chords);
     assert!(
-        l.query(&qc, &favs).iter().all(|r| r.role == LibRole::Chords),
+        l.query(&qc, &favs)
+            .iter()
+            .all(|r| r.role == LibRole::Chords),
         "chords query returns only chords-role patterns"
     );
     assert!(!l.query(&qc, &favs).is_empty(), "chords role has patterns");

@@ -188,6 +188,11 @@ pub enum GuiCommand {
         lane: usize,
         delta: i32,
     },
+    /// Set a lane's scale directly by index into `Scale::all()` (dropdown pick).
+    SetScale {
+        lane: usize,
+        index: usize,
+    },
     AdjustRoot {
         lane: usize,
         delta: i32,
@@ -323,6 +328,7 @@ pub fn command_lane(cmd: &GuiCommand) -> Option<usize> {
         }
         AdjustPatternLen { lane, .. }
         | CycleScale { lane, .. }
+        | SetScale { lane, .. }
         | AdjustRoot { lane, .. }
         | AdjustOctave { lane, .. }
         | CycleRoutePort { lane, .. }
@@ -523,6 +529,9 @@ pub fn gui_to_actions(cmd: &GuiCommand) -> Vec<Action> {
         // per-lane melodic params — focus then act
         G::CycleScale { lane, delta } => {
             vec![Action::FocusLane(lane), Action::CycleScale(clamp_i8(delta))]
+        }
+        G::SetScale { lane, index } => {
+            vec![Action::FocusLane(lane), Action::SetScale(index)]
         }
         G::AdjustRoot { lane, delta } => {
             vec![Action::FocusLane(lane), Action::AdjustRoot(clamp_i8(delta))]

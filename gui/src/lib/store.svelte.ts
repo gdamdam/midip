@@ -11,9 +11,11 @@ import {
   crateMoveEntry as bridgeCrateMoveEntry,
   crateRemoveEntry as bridgeCrateRemoveEntry,
   crateRename as bridgeCrateRename,
+  applyChordProgression as bridgeApplyChords,
   dispatch as bridgeDispatch,
   getAppVersion,
   getLibrary,
+  getScales,
   getSetList,
   getSnapshot,
   loadLibraryPattern,
@@ -37,6 +39,8 @@ interface AppState {
   library: LibraryData | null;
   sets: SetEntry[];
   userPatterns: UserPatternEntry[];
+  /** Scale names in backend order; index is what a SetScale command expects. */
+  scales: string[];
   version: string;
   ready: boolean;
   error: string | null;
@@ -47,6 +51,7 @@ export const app = $state<AppState>({
   library: null,
   sets: [],
   userPatterns: [],
+  scales: [],
   version: "",
   ready: false,
   error: null,
@@ -64,6 +69,7 @@ export async function init(): Promise<void> {
       if (app.snap) app.snap.transport = t;
     });
     app.library = await getLibrary();
+    app.scales = await getScales();
     app.sets = await getSetList();
     app.userPatterns = await getUserPatterns();
     try {
@@ -105,6 +111,22 @@ export async function placeNote(
     app.snap = await bridgePlaceNote(lane, col, pitch);
   } catch (e) {
     app.error = String(e);
+  }
+}
+
+/// Apply a typed chord progression to `lane`. Returns a parse-error string when
+/// the text was invalid (the modal keeps it open and shows the message), else null.
+export async function applyChordProgression(
+  lane: number,
+  text: string,
+): Promise<string | null> {
+  try {
+    const [err, snap] = await bridgeApplyChords(lane, text);
+    app.snap = snap;
+    return err;
+  } catch (e) {
+    app.error = String(e);
+    return String(e);
   }
 }
 

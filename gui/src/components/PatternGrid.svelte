@@ -2,9 +2,11 @@
   import { app, send, userPatternCmd } from "../lib/store.svelte";
   import DrumGrid from "./DrumGrid.svelte";
   import MelodicGrid from "./MelodicGrid.svelte";
+  import ChordProgressionModal from "./ChordProgressionModal.svelte";
 
   let saving = $state(false);
   let saveName = $state("");
+  let chordModal = $state(false);
   async function saveUserPattern() {
     const n = saveName.trim();
     if (!n) return;
@@ -35,9 +37,19 @@
     {#if pat.kind === "melodic"}
       <div class="ctl">
         <span class="lbl">scale</span>
-        <button onclick={() => send({ type: "cycleScale", args: { lane, delta: -1 } })}>‹</button>
-        <span class="val">{pat.scale}</span>
-        <button onclick={() => send({ type: "cycleScale", args: { lane, delta: 1 } })}>›</button>
+        <select
+          class="scalesel"
+          value={pat.scale}
+          onchange={(e) => {
+            const idx = app.scales.indexOf((e.currentTarget as HTMLSelectElement).value);
+            if (idx >= 0) send({ type: "setScale", args: { lane, index: idx } });
+          }}
+          title="Scale"
+        >
+          {#each app.scales as s (s)}
+            <option value={s}>{s}</option>
+          {/each}
+        </select>
       </div>
       <div class="ctl">
         <span class="lbl">root</span>
@@ -89,6 +101,9 @@
     {:else}
       <button onclick={() => (saving = true)} title="Save this lane's pattern to your library">save→lib</button>
     {/if}
+    {#if laneInfo.role === "chords"}
+      <button class="chords" onclick={() => (chordModal = true)} title="Type a chord progression (chord names) onto this lane">♪ Chords…</button>
+    {/if}
     <button class="gen" onclick={() => send({ type: "openGenerative" })} title="Generate / vary / arpeggiate this lane">⚡ Generate</button>
     <button class="danger" onclick={() => send({ type: "clearPattern", args: lane })}>clear</button>
   </div>
@@ -101,6 +116,10 @@
     {/if}
   </div>
 </section>
+
+{#if chordModal}
+  <ChordProgressionModal {lane} close={() => (chordModal = false)} />
+{/if}
 
 <style>
   .patwrap {
@@ -157,6 +176,19 @@
     min-width: 30px;
     text-align: center;
   }
+  .scalesel {
+    background: var(--bg);
+    color: var(--fg);
+    border: var(--border);
+    border-radius: var(--radius);
+    font-family: inherit;
+    font-size: 11px;
+    padding: 2px 4px;
+    cursor: pointer;
+  }
+  .scalesel:hover {
+    border-color: var(--fg-dim);
+  }
   .spacer {
     /* Force a wrap so the action buttons (save / generate / clear) sit on their
        own row; the parameter groups above wrap freely to fit any width. */
@@ -179,6 +211,15 @@
   }
   .gen:hover {
     border-color: var(--ember);
+  }
+  .chords {
+    color: var(--green);
+    border-color: var(--dim-2);
+    font-size: 11px;
+    font-weight: 700;
+  }
+  .chords:hover {
+    border-color: var(--green);
   }
   .danger {
     color: var(--err);

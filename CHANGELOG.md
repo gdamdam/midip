@@ -7,6 +7,21 @@ feature milestone is a minor bump).
 
 ## [Unreleased]
 
+## [1.11.0] — 2026-07-24 — Type chord progressions · scale dropdown
+
+### Added
+- **Type a chord progression (GUI).** A **♪ Chords…** button on the CHORDS lane
+  opens a modal where you type chord names (`Dm7 G7 Cmaj7 A7`, `Am F C G`, …).
+  The progression is parsed and voiced to at most four notes (J-6) with smart
+  voice-leading, laid out as one sustained chord per bar. Supports maj/m/7/maj7/
+  m7/m7b5/dim/dim7/aug/6/m6/9/maj9/m9/add9/sus2/sus4/7sus4, accidentals, and a
+  slash-bass (ignored). Parser + voicer live in a tested Rust core
+  (`music::chord_name`), reusable by the TUI later.
+
+### Changed
+- **Scale selector is a dropdown.** The editor-header scale control now lists all
+  scales in a dropdown (click to pick) instead of only cycling with `‹ ›`.
+
 ## [1.10.1] — 2026-07-24 — Fix chord rendering in the GUI piano-roll
 
 ### Fixed
