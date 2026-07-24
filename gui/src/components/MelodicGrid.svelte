@@ -26,8 +26,11 @@
     return rows;
   });
 
-  function firstNote(col: number) {
-    return pat.melodic_steps[col]?.[0];
+  // The note at a given pitch in a step, if any. A step may hold several
+  // simultaneous notes (a chord), so we match by pitch rather than taking the
+  // first — every voice of a chord must render on its own row.
+  function noteAt(col: number, pitch: number) {
+    return pat.melodic_steps[col]?.find((n) => n.pitch === pitch);
   }
   function isBlack(pitch: number): boolean {
     return [1, 3, 6, 8, 10].includes(((pitch % 12) + 12) % 12);
@@ -96,8 +99,8 @@
       <div class="prow" class:black={isBlack(pitch)} class:root={pitch === pat.root}>
         <div class="keylabel mono">{midiName(pitch)}</div>
         {#each cols as c (c)}
-          {@const n = firstNote(c)}
-          {@const on = !!(n && n.pitch === pitch)}
+          {@const n = noteAt(c, pitch)}
+          {@const on = !!n}
           <button
             class="mcell"
             class:sep={c % 4 === 3 && c !== pat.length - 1}
