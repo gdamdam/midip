@@ -7,6 +7,14 @@ feature milestone is a minor bump).
 
 ## [Unreleased]
 
+## [1.10.1] — 2026-07-24 — Fix chord rendering in the GUI piano-roll
+
+### Fixed
+- **GUI melodic piano-roll now draws every note of a chord.** It previously
+  rendered only the first note of each step, so a CHORDS-lane pattern with
+  stacked voices showed a single note per chord. Each voice now renders on its
+  own row. Chord entry was already correct (display-only fix).
+
 ## [1.10.0] — 2026-07-24 — Fourth CHORDS lane & hardware-neutral lane roles
 
 ### Added
