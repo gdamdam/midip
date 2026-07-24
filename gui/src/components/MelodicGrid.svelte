@@ -32,6 +32,24 @@
   function noteAt(col: number, pitch: number) {
     return pat.melodic_steps[col]?.find((n) => n.pitch === pitch);
   }
+
+  // Sustain map: cells covered by a note's LENGTH after its start. Keyed
+  // "col:pitch" → the note's start column. Lets the roll draw each note (and
+  // every voice of a chord) spanning its `len`, so length is visible and updates
+  // live when you change it in the inspector.
+  const tails = $derived.by(() => {
+    const m = new Map<string, number>();
+    pat.melodic_steps.forEach((step, c0) => {
+      for (const n of step) {
+        const span = Math.max(1, Math.round(n.len));
+        for (let k = 1; k < span && c0 + k < pat.length; k++) {
+          const key = `${c0 + k}:${n.pitch}`;
+          if (!m.has(key)) m.set(key, c0);
+        }
+      }
+    });
+    return m;
+  });
   function isBlack(pitch: number): boolean {
     return [1, 3, 6, 8, 10].includes(((pitch % 12) + 12) % 12);
   }
@@ -101,24 +119,36 @@
         {#each cols as c (c)}
           {@const n = noteAt(c, pitch)}
           {@const on = !!n}
+          {@const tailStart = tails.get(`${c}:${pitch}`)}
+          {@const sustained = tailStart !== undefined}
           <button
             class="mcell"
             class:sep={c % 4 === 3 && c !== pat.length - 1}
             class:playhead={c === playCol}
-            class:selected={sel.col === c && on}
-            onclick={() => !on && place(c, pitch)}
+            class:selected={(sel.col === c && on) || sel.col === tailStart}
+            onclick={() => {
+              if (on) return;
+              // A sustain cell selects the note it belongs to (so the inspector
+              // targets the whole chord); an empty cell places a note.
+              if (sustained) send({ type: "selectStep", args: { lane, row: 0, col: tailStart! } });
+              else place(c, pitch);
+            }}
             aria-label={`step ${c + 1} pitch ${midiName(pitch)}`}
           >
+            {#if sustained && !on}
+              <span class="sustain"></span>
+            {/if}
             {#if on}
               <span
                 class="note"
                 class:slide={n!.slide}
+                class:held={Math.round(n!.len) > 1}
                 style:opacity={0.4 + 0.6 * n!.vel}
                 onmousedown={(e) => noteDown(e, c)}
                 ondblclick={() => clearCol(c)}
                 role="button"
                 tabindex="-1"
-                title="{midiName(pitch)} — drag to change pitch, double-click to remove"
+                title="{midiName(pitch)} · len {n!.len} — drag to change pitch, double-click to remove"
               ></span>
             {/if}
           </button>
@@ -205,6 +235,22 @@
     border-radius: 2px;
     cursor: ns-resize;
     display: block;
+  }
+  /* A held note (len > 1 step) squares its right edge so it reads as continuous
+     with the sustain tail that follows it. */
+  .note.held {
+    right: -1px;
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+  }
+  /* Sustain segment: the dimmer tail of a note across the steps its length spans. */
+  .sustain {
+    position: absolute;
+    inset: 1px -1px;
+    background: var(--pink);
+    opacity: 0.28;
+    display: block;
+    pointer-events: none;
   }
   .note.slide {
     background: linear-gradient(90deg, var(--pink), var(--ember));

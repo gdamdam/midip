@@ -7,6 +7,22 @@ feature milestone is a minor bump).
 
 ## [Unreleased]
 
+## [1.11.1] — 2026-07-24 — Chord progression fixes: loop-fit, on-beat, chord-wide editing
+
+### Fixed
+- **Typed chord progressions fit the existing loop.** They no longer resize the
+  lane — chords are spread across the current loop length instead of forcing it
+  to chords × bar.
+- **Chords land on the beat.** Placement snaps to the 4-step beat grid, so e.g.
+  3 chords in a 16-step loop sit at steps 1·5·9 (beats 1·2·3), not 1·6·11.
+- **Length / slide / pitch edits act on the whole chord**, not just its first
+  voice, so a chord lengthens, slides, or transposes as one unit.
+
+### Changed
+- **The piano-roll now shows note length.** Each note (and every voice of a
+  chord) renders a sustain tail spanning its length, updating live as you change
+  it in the Step Inspector; clicking a sustain tail selects its chord.
+
 ## [1.11.0] — 2026-07-24 — Type chord progressions · scale dropdown
 
 ### Added

@@ -1,7 +1,7 @@
 //! Chord-name parsing + voice-led progression building — pure, deterministic, no I/O.
 //!
 //! Turns a typed progression like `"Dm7 G7 Cmaj7 A7"` into a melodic `Pattern`
-//! whose steps hold voiced chords (one sustained chord per bar). Voicings are
+//! that fits the lane's existing loop, with chords placed on the beat. Voicings are
 //! capped at four notes (the Roland J-6's polyphony) and voice-led so successive
 //! chords move their voices minimally. The parser and voicer are independent of
 //! any lane/device; `build_progression_pattern` layers the pattern assembly on top.
@@ -207,45 +207,58 @@ fn voicing_score(voicing: &[i32], span: i32, center: i32, prev: Option<&[i32]>) 
     }
 }
 
-/// Build a melodic `Pattern` from typed chord names: one sustained chord per bar.
-/// The pattern length is `chords × steps_per_bar`, capped at 64 (the bar length
-/// shrinks to fit when the progression is long). Voicings are relative to
-/// `root_note` (each note's `semi` is `pitch − root_note`).
+/// Build a melodic `Pattern` from typed chord names, fitted into the lane's
+/// EXISTING loop `length` (the loop is never resized). The chords are spread
+/// evenly across the loop and each is sustained until the next one — e.g. 4
+/// chords over a 16-step loop land every 4 steps. If more chords are typed than
+/// there are steps, only the first `length` fit (one per step). Voicings are
+/// relative to `root_note` (each note's `semi` is `pitch − root_note`).
 pub fn build_progression_pattern(
     text: &str,
-    steps_per_bar: usize,
+    length: usize,
     root_note: u8,
 ) -> Result<Pattern, String> {
     let chords = parse_progression(text)?;
     let center = root_note as i32 + 12; // voice chords an octave above the lane root
     let voicings = voice_progression(&chords, center);
 
-    let n = chords.len();
-    let spb = steps_per_bar.max(1);
-    // One bar per chord, but never exceed the 64-step pattern maximum.
-    let bar = if n * spb > 64 { (64 / n).max(1) } else { spb };
-    let length = (n * bar).min(64).max(1);
+    let length = length.max(1);
+    // Never place more chords than there are steps; extras beyond the loop are dropped.
+    let n = chords.len().min(length);
+
+    // Chords land ON THE BEAT. A beat is 4 steps (the sixteenth-note grid the
+    // editor draws bar lines on). When the chords fit on distinct beats, each is
+    // placed on its own beat, spread across the loop's beats (e.g. 3 chords over
+    // a 16-step / 4-beat loop → beats 1·2·3 = steps 0·4·8). Only when there are
+    // more chords than beats do we fall back to an even per-step spread.
+    const BEAT: usize = 4;
+    let beats = (length / BEAT).max(1);
+    let starts: Vec<usize> = if n <= beats {
+        (0..n).map(|i| (i * beats / n) * BEAT).collect()
+    } else {
+        (0..n).map(|i| i * length / n).collect()
+    };
 
     let mut steps: Vec<MelodicStep> = vec![MelodicStep(Vec::new()); length];
-    for (i, voicing) in voicings.iter().enumerate() {
-        let at = i * bar;
-        if at >= length {
-            break; // ran past the cap
-        }
+    for (i, voicing) in voicings.iter().take(n).enumerate() {
+        // Sustain each chord until the next one starts (the last to the loop end).
+        let start = starts[i];
+        let end = starts.get(i + 1).copied().unwrap_or(length);
+        let slot = (end.saturating_sub(start)).max(1);
         let notes: Vec<MelodicNote> = voicing
             .iter()
             .map(|&pitch| MelodicNote {
                 semi: (pitch - root_note as i32).clamp(-127, 127) as i8,
                 vel: 1.0,
                 slide: false,
-                len: bar as f32, // sustain the chord across its bar
+                len: slot as f32, // sustain the chord until the next one
                 prob: 1.0,
                 ratchet: 1,
                 micro: 0,
                 cond: TrigCond::Always,
             })
             .collect();
-        steps[at] = MelodicStep(notes);
+        steps[start] = MelodicStep(notes);
     }
 
     let label: String = chords
@@ -334,24 +347,24 @@ mod tests {
     }
 
     #[test]
-    fn builds_one_sustained_chord_per_bar() {
-        // Root 48 (J-6 C3), 16 steps/bar, 4 chords → 64 steps, chords at 0/16/32/48.
+    fn fits_progression_into_existing_loop_length_without_resizing() {
+        // A 16-step loop with 4 chords → one chord every 4 steps, each sustained
+        // 4 steps. The loop length is preserved (NOT expanded to 64).
         let pat = build_progression_pattern("Dm7 G7 Cmaj7 A7", 16, 48).unwrap();
-        assert_eq!(pat.length, 64);
+        assert_eq!(pat.length, 16, "the existing loop length is kept");
         let PatternData::Melodic(steps) = &pat.data else {
             panic!("melodic")
         };
         for (i, s) in steps.iter().enumerate() {
-            if i % 16 == 0 {
+            if i % 4 == 0 {
                 assert!(
-                    s.len() >= 3,
+                    (3..=4).contains(&s.len()),
                     "step {i} should hold a chord, got {}",
                     s.len()
                 );
-                assert!(s.len() <= 4, "step {i} exceeds four voices");
                 assert!(
-                    s.iter().all(|n| (n.len - 16.0).abs() < 1e-6),
-                    "chord should sustain a full bar"
+                    s.iter().all(|n| (n.len - 4.0).abs() < 1e-6),
+                    "chord should sustain its 4-step slot"
                 );
             } else {
                 assert!(s.is_empty(), "step {i} should rest between chords");
@@ -360,18 +373,52 @@ mod tests {
     }
 
     #[test]
-    fn long_progression_stays_within_64_steps() {
-        // 6 chords × 16 = 96 > 64 → bar length shrinks so all fit.
-        let pat = build_progression_pattern("C Dm Em F G Am", 16, 48).unwrap();
-        assert!(
-            pat.length <= 64,
-            "length {} must be capped at 64",
-            pat.length
-        );
+    fn three_chords_land_on_the_beat_not_off_grid() {
+        // 3 chords in a 16-step (4-beat) loop must sit on beats 1·2·3 = steps
+        // 0·4·8 — NOT the off-beat 0/5/10 an even 16/3 split would produce.
+        let pat = build_progression_pattern("Dm7 G7 Cmaj7", 16, 48).unwrap();
+        assert_eq!(pat.length, 16);
         let PatternData::Melodic(steps) = &pat.data else {
             panic!("melodic")
         };
-        let chord_steps = steps.iter().filter(|s| !s.is_empty()).count();
-        assert_eq!(chord_steps, 6, "all six chords must be placed");
+        let starts: Vec<usize> = steps
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| !s.is_empty())
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(starts, vec![0, 4, 8], "chords must land on the beat");
+        assert!(
+            starts.iter().all(|s| s % 4 == 0),
+            "every start is on a beat"
+        );
+    }
+
+    #[test]
+    fn respects_a_longer_loop_and_never_grows_it() {
+        // A 64-step loop with 4 chords → chords at 0/16/32/48; length unchanged.
+        let pat = build_progression_pattern("Dm7 G7 Cmaj7 A7", 64, 48).unwrap();
+        assert_eq!(pat.length, 64);
+        let PatternData::Melodic(steps) = &pat.data else {
+            panic!("melodic")
+        };
+        let chord_steps: Vec<usize> = steps
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| !s.is_empty())
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(chord_steps, vec![0, 16, 32, 48]);
+    }
+
+    #[test]
+    fn more_chords_than_steps_places_one_per_step_without_growing() {
+        // 6 chords into a 4-step loop → only the first four fit, one per step.
+        let pat = build_progression_pattern("C Dm Em F G Am", 4, 48).unwrap();
+        assert_eq!(pat.length, 4, "loop length is never grown to fit extras");
+        let PatternData::Melodic(steps) = &pat.data else {
+            panic!("melodic")
+        };
+        assert_eq!(steps.iter().filter(|s| !s.is_empty()).count(), 4);
     }
 }

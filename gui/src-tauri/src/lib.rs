@@ -174,8 +174,9 @@ impl Core {
             return Some("no such lane".to_string());
         }
         let root = self.app.set.lanes[lane].effective_root();
-        let spb = self.app.set.steps_per_bar;
-        match midip::music::chord_name::build_progression_pattern(&text, spb, root) {
+        // Fit the progression into the lane's CURRENT loop length — never resize it.
+        let length = self.app.set.lanes[lane].pattern.length;
+        match midip::music::chord_name::build_progression_pattern(&text, length, root) {
             Ok(pat) => {
                 let cmds = self.app.set_lane_pattern(lane, pat);
                 self.forward(cmds);

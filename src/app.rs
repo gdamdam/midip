@@ -4996,33 +4996,47 @@ impl App {
 
     /// Move the cursor note's pitch by one scale degree (non-Chromatic) or one semitone
     /// (Chromatic). Clamps result to ±48 semitones.
+    /// Move the selected step's pitch by one scale degree (or semitone in
+    /// Chromatic). Applies to EVERY note in the step, so a chord transposes as a
+    /// unit rather than only its first voice.
     fn adjust_semi_by_degree(&mut self, dir: i32) {
         let col = self.cur_col;
         let scale = self.set.lanes[self.focus].scale;
         if let PatternData::Melodic(steps) = &mut self.set.lanes[self.focus].pattern.data {
-            if let Some(n) = steps.get_mut(col).and_then(|s| s.first_mut()) {
-                let new_semi = step_by_degree(n.semi as i32, dir, scale);
-                n.semi = new_semi.clamp(-48, 48) as i8;
+            if let Some(step) = steps.get_mut(col) {
+                for n in step.iter_mut() {
+                    n.semi = step_by_degree(n.semi as i32, dir, scale).clamp(-48, 48) as i8;
+                }
             }
         }
     }
 
+    /// Adjust the selected step's note length. Applies the same delta to EVERY
+    /// note in the step so a whole chord lengthens/shortens together (and stays
+    /// uniform, which the inspector reads back).
     fn adjust_len(&mut self, d: i8) {
         let col = self.cur_col;
         let lane = &mut self.set.lanes[self.focus];
         if let PatternData::Melodic(steps) = &mut lane.pattern.data {
-            if let Some(n) = steps.get_mut(col).and_then(|s| s.first_mut()) {
-                n.len = (n.len + d as f32 * 0.25).clamp(0.25, 64.0);
+            if let Some(step) = steps.get_mut(col) {
+                for n in step.iter_mut() {
+                    n.len = (n.len + d as f32 * 0.25).clamp(0.25, 64.0);
+                }
             }
         }
     }
 
+    /// Toggle slide for the selected step. Sets every note in the step to the same
+    /// new state (based on the first) so a chord slides as one.
     fn toggle_slide(&mut self) {
         let col = self.cur_col;
         let lane = &mut self.set.lanes[self.focus];
         if let PatternData::Melodic(steps) = &mut lane.pattern.data {
-            if let Some(n) = steps.get_mut(col).and_then(|s| s.first_mut()) {
-                n.slide = !n.slide;
+            if let Some(step) = steps.get_mut(col) {
+                let on = step.first().map(|n| !n.slide).unwrap_or(false);
+                for n in step.iter_mut() {
+                    n.slide = on;
+                }
             }
         }
     }
