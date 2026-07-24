@@ -210,6 +210,7 @@ struct RawMelodicNote {
 ///   - `null`                    → rest (handled by the surrounding `Option`)
 ///   - `{semi,vel,slide?,len?}`  → one note (legacy mono shape)
 ///   - `[ {..}, {..}, ... ]`     → simultaneous notes (a chord)
+///
 /// Untagged: `Many` (array) is listed before `One` so `[..]` is never misread as
 /// a single struct note.
 #[derive(Deserialize)]
